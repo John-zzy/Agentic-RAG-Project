@@ -1,0 +1,28 @@
+{
+  "models": {
+    "simple": {
+      "provider": "dashscope",
+      "model_name": "qwen-turbo",
+      "api_base": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      "task_types": ["greeting", "sentiment", "faq"],
+      "supports_streaming": true,
+      "fallback": "moderate"
+    },
+    "moderate": {
+      "provider": "dashscope",
+      "model_name": "qwen-plus",
+      "api_base": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      "task_types": ["retrieval", "order_lookup", "product_recommendation"],
+      "supports_streaming": true,
+      "fallback": "complex"
+    },
+    "complex": {
+      "provider": "dashscope",
+      "model_name": "qwen-max",
+      "api_base": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      "task_types": ["multi_agent_reasoning", "escalation", "policy_decision"],
+      "supports_streaming": true,
+      "fallback": null
+    }
+  }
+}

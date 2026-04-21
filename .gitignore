@@ -1,0 +1,10 @@
+/openspec/
+/.codex/
+/.claude/
+/backend/.env
+/backend/.venv/
+.idea
+.pytest_cache
+
+## custom data
+/backend/data/
