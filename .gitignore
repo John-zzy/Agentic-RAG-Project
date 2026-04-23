@@ -5,6 +5,10 @@
 /backend/.venv/
 .idea
 .pytest_cache
+/backend/tests/.pytest_cache/
+/backend/tests/.pytest_tmp/
+/backend/tests/artifacts/
+/backend/data/.chroma/
 
 ## custom data
 /backend/data/
