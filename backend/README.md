@@ -1,6 +1,6 @@
 # AI RAG Project Backend
 
-基于 LangGraph 的电商多 Agent 智能客服后端 MVP，面向导购、订单查询、售后处理三类核心客服场景。当前阶段已完成基础项目初始化与模拟数据准备，后续将逐步补齐知识库、MCP 工具层、会话记忆、模型路由、监控与 API。最终实现智能客服自主迭代能力。
+基于 LangGraph 的电商多 Agent 智能客服后端 MVP，面向导购、订单查询、售后处理三类核心客服场景。当前阶段已完成基础项目初始化、模拟数据准备、知识库模块，以及基线对话 API（用户输入 -> 检索 -> Prompt 上下文 -> 回答）。后续将逐步补齐 MCP 工具层、多 Agent 协同、监控与完整生产化能力。
 
 ## 项目目标
 
@@ -14,13 +14,13 @@
 ```text
 backend/
 ├── agents/         # 多 Agent 实现（待补充）
-├── api/            # FastAPI 应用入口与路由（待补充）
+├── api/            # FastAPI 应用入口、路由与聊天编排
 ├── config/         # 统一配置管理
 ├── data/           # 模拟商品、订单、评价数据
 ├── knowledge/      # 知识库与向量检索模块（已支持 Chroma + Elasticsearch）
 ├── mcp/            # MCP 工具层与服务端（待补充）
-├── memory/         # 会话存储与记忆管理（待补充）
-├── models/         # 模型路由配置（待补充）
+├── memory/         # 会话存储与 Prompt 上下文管理
+├── models/         # 模型路由与调用客户端
 ├── monitoring/     # Prometheus 指标与监控（待补充）
 ├── tests/          # 测试包、pytest 配置与测试辅助文件
 ├── config/settings.py
@@ -91,6 +91,32 @@ backend/
 - `knowledge/loader.py` 通过工厂完成 `products.json` 与 `reviews.json` 的预加载
 - 本地哈希 embedding，用于开发阶段验证向量存储与检索流程
 
+与 OpenSpec `ecommerce-customer-service-agent` 的 3.x 任务对齐关系如下：
+
+- 3.1：`knowledge/store.py` 已实现 Chroma 初始化、collection 管理、文档 upsert 与语义检索
+- 3.2：`knowledge/extractor.py` 已实现商品与评价 JSON 的标准化字段提取与结构化文档构建
+- 3.3：`knowledge/loader.py` 已实现 `products.json` 与 `reviews.json` 的预加载向量化脚本入口 `preload_knowledge_base`
+- 3.4：`knowledge/service.py` 已实现商品/评价数据的增量 upsert 接口（`upsert_products`、`upsert_reviews`）
+
+### 4. 基线对话 API（Chat RAG Baseline）
+
+当前已实现最小可交付对话闭环：
+
+- `POST /chat`：接收用户问题，执行知识库检索，构建 Prompt 上下文并生成回答
+- `GET /health`：健康检查
+- 会话持久化：按 `session_id` 保存每轮 `user_message/assistant_answer/retrieval_snippets/timestamp`
+- Prompt 组装：合并历史窗口、本轮输入和检索片段，支持窗口裁剪
+- LangChain RAG 编排：通过 `BaseRetriever + create_retrieval_chain` 组合执行检索增强回答
+- LangChain 模型执行：通过 `PromptTemplate + ChatOpenAI + StrOutputParser` 执行链完成同步调用
+- 默认同步调用：`POST /chat` 当前默认非流式返回，`stream=true` 会返回未启用提示
+
+关键实现文件：
+
+- `api/app.py`、`api/routes.py`、`api/chat_service.py`、`api/schemas.py`、`api/prompts.py`
+- `knowledge/retriever.py`（`KnowledgeBaseRetriever`）
+- `memory/session_store.py`、`memory/prompt_context.py`
+- `models/client.py`（LangChain 模型调用客户端）
+
 ## 环境准备
 
 ### Python 解析器
@@ -130,10 +156,10 @@ python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 ```
 
-### 运行知识库测试
+### 运行测试
 
 ```bash
-python -m pytest backend/tests -q -c backend/tests/pytest.ini
+python -m pytest backend/tests -q -c backend/tests/pytest.ini -p no:tmpdir --ignore backend/tests/.pytest_tmp_local
 ```
 
 ### 配置环境变量
@@ -161,6 +187,7 @@ AI_RAG_VECTOR_STORE__ELASTICSEARCH__URL=http://localhost:9200
 ## 当前依赖
 
 - `langchain`
+- `langchain-openai`
 - `langgraph`
 - `chromadb`
 - `elasticsearch`
@@ -170,7 +197,6 @@ AI_RAG_VECTOR_STORE__ELASTICSEARCH__URL=http://localhost:9200
 - `pydantic-settings`
 - `python-dotenv`
 - `prometheus-client`
-- `openai`
 - `dashscope`
 
 ## 配置说明
@@ -186,6 +212,7 @@ AI_RAG_VECTOR_STORE__ELASTICSEARCH__URL=http://localhost:9200
 - SQLite 会话存储路径
 - 会话超时与窗口大小
 - 简单 / 中等 / 复杂任务的模型路由占位配置（当前默认使用 DashScope 的 `qwen-turbo`、`qwen-plus`、`qwen-max`）
+- 模型调用执行方式：LangChain（非直接 OpenAI SDK 调用）
 
 ### 知识库存储抽象
 
@@ -210,21 +237,59 @@ AI_RAG_VECTOR_STORE__ELASTICSEARCH__URL=http://localhost:9200
 
 1. 继续完善知识库迁移能力（例如 Chroma -> Elasticsearch 的离线迁移脚本）
 2. 实现 MCP 工具层，先打通商品查询、库存查询、订单状态查询
-3. 补充 FastAPI 应用入口与聊天接口
-4. 最后接入监控与测试
-5. 接入 Hermes 类似的流程，实现智能客服自主迭代
+3. 引入多 Agent 路由与 Agent 间上下文交接
+4. 接入监控指标（`/metrics`）与成本统计
+5. 接入 Hermes 类似流程，实现智能客服自主迭代
 
-## API 规划
+## API 基线说明
 
-当前仓库尚未完成 API 层实现，规划中的接口包括：
+当前已实现的基线接口：
 
 - `POST /chat`：多轮对话主入口
 - `GET /health`：健康检查
-- `GET /metrics`：Prometheus 指标
-- 会话管理接口：创建、查询、清理会话
+
+`POST /chat` 请求示例：
+
+```json
+{
+  "message": "推荐一款续航好的安卓手机",
+  "session_id": "optional-session-id",
+  "stream": false
+}
+```
+
+`POST /chat` 响应示例：
+
+```json
+{
+  "session_id": "6b4d3d6d5e3947d49e3d5e2ed5b1b0f1",
+  "request_id": "4b2b8b471a9f4f0ea1f6fe8b74a9194a",
+  "answer": "推荐 P001，续航表现较好。",
+  "knowledge_used": true,
+  "citations": [
+    {
+      "citation_id": "P001",
+      "namespace": "products",
+      "snippet": "P001 手机，续航强，电池 5000mAh。",
+      "score": 0.92
+    }
+  ]
+}
+```
+
+调试与人工复核建议：
+
+- `knowledge_used=true` 表示本轮回答已使用检索知识；`false` 表示走无命中降级回答
+- `citations` 用于查看回答引用来源（商品/评价）与片段内容，便于人工核验
+
+当前基线明确不包含：
+
+- 多 Agent 路由与 Agent 交接
+- MCP 工具调用
+- 监控大盘与复杂成本统计
 
 ## 说明
 
 - 当前数据均为本地模拟数据，仅用于开发与演示
-- 当前 README 反映的是 MVP 初始阶段状态，后续随着知识库、MCP、API 与测试模块落地，需要继续同步更新
-- 当前尚未提供一键启动入口，待 `run.py` 与 API 层完成后补齐
+- 当前 README 反映的是基线 API 阶段状态，后续随着多 Agent、MCP、监控模块落地，需要继续同步更新
+- 当前尚未提供统一 `run.py` 一键启动入口，可先使用 `uvicorn backend.api.app:app --reload` 启动 API

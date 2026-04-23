@@ -1,0 +1,87 @@
+from __future__ import annotations
+
+from typing import Any
+
+from langchain_core.documents import Document
+from langchain_core.retrievers import BaseRetriever
+from pydantic import ConfigDict, Field
+
+from backend.knowledge.store import VectorSearchResult
+
+
+class KnowledgeBaseRetriever(BaseRetriever):
+    knowledge_service: Any = Field(exclude=True)
+    default_top_k: int = 5
+    minimum_relevance: float = 0.18
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    def _get_relevant_documents(self, query: str, *, run_manager: Any = None) -> list[Document]:
+        return self.search(query=query, top_k=self.default_top_k)
+
+    def search(self, query: str, top_k: int | None = None) -> list[Document]:
+        requested_top_k = top_k or self.default_top_k
+
+        product_results = self.knowledge_service.search_products(query=query, top_k=requested_top_k)
+        review_results = self.knowledge_service.search_reviews(query=query, top_k=requested_top_k)
+
+        combined = self._to_documents("products", product_results) + self._to_documents("reviews", review_results)
+        combined.sort(key=self._doc_score, reverse=True)
+
+        deduped: list[Document] = []
+        seen: set[tuple[str, str]] = set()
+        for doc in combined:
+            namespace = str(doc.metadata.get("namespace", "knowledge"))
+            citation_id = str(doc.metadata.get("citation_id", "unknown"))
+            key = (namespace, citation_id)
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(doc)
+            if len(deduped) >= requested_top_k:
+                break
+
+        return deduped
+
+    def _to_documents(self, namespace: str, results: list[VectorSearchResult]) -> list[Document]:
+        documents: list[Document] = []
+        for result in results:
+            score = float(result.score) if result.score is not None else None
+            if score is not None and score < self.minimum_relevance:
+                continue
+
+            metadata = result.document.metadata
+            citation_id = str(
+                metadata.get("review_id")
+                or metadata.get("product_id")
+                or metadata.get("id")
+                or result.document.id
+            )
+            snippet = self._truncate(result.document.content)
+            if not snippet:
+                continue
+
+            documents.append(
+                Document(
+                    page_content=snippet,
+                    metadata={
+                        "namespace": namespace,
+                        "citation_id": citation_id,
+                        "score": score,
+                    },
+                )
+            )
+        return documents
+
+    def _doc_score(self, doc: Document) -> float:
+        score = doc.metadata.get("score")
+        if isinstance(score, int | float):
+            return float(score)
+        return -1.0
+
+    def _truncate(self, text: str) -> str:
+        normalized = text.replace("\n", " ").strip()
+        max_length = 220
+        if len(normalized) <= max_length:
+            return normalized
+        return f"{normalized[:max_length]}..."
