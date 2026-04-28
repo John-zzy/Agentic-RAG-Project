@@ -1,3 +1,6 @@
+import sqlite3
+
+import backend.memory.session_store as session_store_module
 from backend.memory.session_store import SQLiteSessionStore
 from backend.tests.test_support import make_test_runtime_dir
 
@@ -61,3 +64,29 @@ def test_session_store_respects_recent_limit() -> None:
 
     turns = store.get_recent_turns("session-window", limit=2)
     assert [turn.request_id for turn in turns] == ["req-3", "req-4"]
+
+
+def test_session_store_migrates_legacy_database_to_data_dir(monkeypatch) -> None:
+    runtime_dir = make_test_runtime_dir("session-store-migrate")
+    legacy_path = runtime_dir / "memory" / "sessions.db"
+    target_path = runtime_dir / "data" / "sessions.db"
+
+    legacy_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(legacy_path))
+    try:
+        conn.execute("CREATE TABLE legacy_turns (id INTEGER PRIMARY KEY)")
+        conn.execute("INSERT INTO legacy_turns DEFAULT VALUES")
+        conn.commit()
+    finally:
+        conn.close()
+
+    monkeypatch.setattr(session_store_module, "LEGACY_SQLITE_PATH", legacy_path)
+    monkeypatch.setattr(session_store_module, "SQLITE_PATH", target_path)
+    monkeypatch.setattr(session_store_module.settings.session, "sqlite_path", target_path)
+
+    store = SQLiteSessionStore()
+
+    assert store._sqlite_path == target_path
+    assert target_path.exists()
+    assert not legacy_path.exists()
+    assert store.count_turns("missing-session") == 0

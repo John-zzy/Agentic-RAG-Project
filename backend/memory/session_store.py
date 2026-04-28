@@ -4,10 +4,11 @@ import json
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
+from shutil import move
 from threading import Lock
 from typing import Any
 
-from backend.config.settings import AppSettings, settings
+from backend.config.settings import AppSettings, LEGACY_SQLITE_PATH, SQLITE_PATH, settings
 
 
 @dataclass(frozen=True)
@@ -30,6 +31,7 @@ class SQLiteSessionStore:
         resolved_settings = app_settings or settings
         self._sqlite_path = sqlite_path or resolved_settings.session.sqlite_path
         self._sqlite_path.parent.mkdir(parents=True, exist_ok=True)
+        self._migrate_legacy_sqlite_files(sqlite_path)
         self._lock = Lock()
         self._ensure_schema()
 
@@ -193,6 +195,19 @@ class SQLiteSessionStore:
                 """
             )
             conn.commit()
+
+    def _migrate_legacy_sqlite_files(self, explicit_sqlite_path: Path | None) -> None:
+        """Move the legacy session database into backend/data on first startup."""
+        if explicit_sqlite_path is not None or self._sqlite_path != SQLITE_PATH:
+            return
+        if self._sqlite_path.exists() or not LEGACY_SQLITE_PATH.exists():
+            return
+
+        for suffix in ("", "-wal", "-shm", "-journal"):
+            legacy_path = Path(f"{LEGACY_SQLITE_PATH}{suffix}")
+            target_path = Path(f"{self._sqlite_path}{suffix}")
+            if legacy_path.exists() and not target_path.exists():
+                move(str(legacy_path), str(target_path))
 
     def _connect(self) -> sqlite3.Connection:
         """创建 SQLite 连接并应用基础 PRAGMA。"""

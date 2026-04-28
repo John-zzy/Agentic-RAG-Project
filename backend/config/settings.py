@@ -11,7 +11,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = BASE_DIR / "data"
 CHROMA_DIR = DATA_DIR / ".chroma"
-SQLITE_PATH = BASE_DIR / "memory" / "sessions.db"
+LEGACY_SQLITE_PATH = BASE_DIR / "memory" / "sessions.db"
+SQLITE_PATH = DATA_DIR / "sessions.db"
 ENV_FILE = BASE_DIR / ".env"
 MODEL_ROUTING_FILE = BASE_DIR / "config" / "model_routing.json"
 
