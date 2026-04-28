@@ -24,6 +24,7 @@ class RoutedModel:
         complexity: TaskComplexity,
         config: ModelEndpointConfig,
     ) -> "RoutedModel":
+        """将配置对象转换为可直接路由的模型描述。"""
         return cls(
             complexity=complexity,
             provider=config.provider,
@@ -39,13 +40,16 @@ class RoutedModel:
 
 class ModelRouter:
     def __init__(self) -> None:
+        """加载全局模型路由配置。"""
         self._config = settings.models
 
     def select(self, complexity: TaskComplexity) -> RoutedModel:
+        """按复杂度选择模型配置。"""
         config = getattr(self._config, complexity)
         return RoutedModel.from_config(complexity, config)
 
     def route_by_complexity(self, complexity: TaskComplexity) -> RoutedModel:
+        """复杂度路由别名方法。"""
         return self.select(complexity)
 
 
@@ -53,4 +57,5 @@ router = ModelRouter()
 
 
 def get_model_for_task(complexity: TaskComplexity) -> RoutedModel:
+    """对外暴露的模型路由入口。"""
     return router.select(complexity)

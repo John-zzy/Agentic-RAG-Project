@@ -43,9 +43,11 @@ class VectorStoreHealth(BaseModel):
 
 class LocalHashingEmbedder:
     def __init__(self, dimensions: int = 256) -> None:
+        """初始化本地哈希向量器的维度。"""
         self.dimensions = dimensions
 
     def embed(self, text: str) -> list[float]:
+        """将文本编码为归一化稀疏向量。"""
         normalized = text.strip().lower()
         vector = [0.0] * self.dimensions
         tokens = self._tokenize(normalized)
@@ -66,6 +68,7 @@ class LocalHashingEmbedder:
         return [value / magnitude for value in vector]
 
     def _tokenize(self, text: str) -> list[str]:
+        """将文本切分为英文 token、中文单字与 n-gram。"""
         ascii_tokens = re.findall(r"[a-z0-9]+", text)
         cjk_sequences = re.findall(r"[\u4e00-\u9fff]+", text)
         cjk_chars = [char for sequence in cjk_sequences for char in sequence]
@@ -85,17 +88,18 @@ class LocalHashingEmbedder:
 
 class VectorStore(ABC):
     def __init__(self, app_settings: AppSettings) -> None:
+        """初始化向量库基类配置与内置嵌入器。"""
         self.settings = app_settings
         self.config = app_settings.vector_store
         self._embedder = LocalHashingEmbedder()
 
     @abstractmethod
     def ensure_collections(self) -> None:
-        """Create or validate provider-specific namespaces."""
+        """创建或校验后端所需命名空间。"""
 
     @abstractmethod
     def upsert_documents(self, namespace: str, documents: list[VectorStoreDocument]) -> None:
-        """Insert or update documents in a namespace."""
+        """在指定命名空间写入或更新文档。"""
 
     @abstractmethod
     def search(
@@ -105,17 +109,18 @@ class VectorStore(ABC):
         top_k: int | None = None,
         filters: VectorMetadata | None = None,
     ) -> list[VectorSearchResult]:
-        """Run semantic search on a namespace."""
+        """在指定命名空间执行语义检索。"""
 
     @abstractmethod
     def delete_documents(self, namespace: str, ids: list[str]) -> None:
-        """Delete documents from a namespace."""
+        """按文档 ID 删除指定命名空间下的数据。"""
 
     @abstractmethod
     def healthcheck(self) -> VectorStoreHealth:
-        """Return backend connectivity and readiness."""
+        """返回向量后端可用性与连通性信息。"""
 
     def resolve_namespace_config(self, namespace: str) -> VectorNamespaceConfig:
+        """解析命名空间对应的配置对象。"""
         if namespace not in SUPPORTED_NAMESPACES:
             raise ValueError(
                 f"Unsupported namespace '{namespace}'. Expected one of: {', '.join(SUPPORTED_NAMESPACES)}."
@@ -124,9 +129,11 @@ class VectorStore(ABC):
         return cast(VectorNamespaceConfig, getattr(self.config, namespace))
 
     def build_embedding(self, text: str) -> list[float]:
+        """构建文本向量。"""
         return self._embedder.embed(text)
 
     def normalize_metadata(self, metadata: VectorMetadata) -> dict[str, MetadataValue]:
+        """将 metadata 规范化为后端可序列化的标量字典。"""
         normalized: dict[str, MetadataValue] = {}
         for key, value in metadata.items():
             if isinstance(value, bool | str | int | float):
@@ -141,6 +148,7 @@ VectorStoreType = TypeVar("VectorStoreType", bound=VectorStore)
 
 class ChromaVectorStore(VectorStore):
     def __init__(self, app_settings: AppSettings) -> None:
+        """初始化 Chroma 客户端与集合缓存。"""
         super().__init__(app_settings)
         persist_directory = self.config.chroma.persist_directory
         persist_directory.mkdir(parents=True, exist_ok=True)
@@ -148,6 +156,7 @@ class ChromaVectorStore(VectorStore):
         self._collections: dict[str, Collection] = {}
 
     def ensure_collections(self) -> None:
+        """确保 Chroma 中存在 products/reviews 集合。"""
         for namespace in SUPPORTED_NAMESPACES:
             namespace_config = self.resolve_namespace_config(namespace)
             self._collections[namespace] = self._client.get_or_create_collection(
@@ -155,6 +164,7 @@ class ChromaVectorStore(VectorStore):
             )
 
     def upsert_documents(self, namespace: str, documents: list[VectorStoreDocument]) -> None:
+        """批量 upsert 文档到 Chroma 集合。"""
         collection = self._get_collection(namespace)
         if not documents:
             return
@@ -181,6 +191,7 @@ class ChromaVectorStore(VectorStore):
         top_k: int | None = None,
         filters: VectorMetadata | None = None,
     ) -> list[VectorSearchResult]:
+        """在 Chroma 中执行向量检索并转换统一结果格式。"""
         collection = self._get_collection(namespace)
         query_embedding = self.build_embedding(query)
         query_result = collection.query(
@@ -213,12 +224,14 @@ class ChromaVectorStore(VectorStore):
         return results
 
     def delete_documents(self, namespace: str, ids: list[str]) -> None:
+        """从 Chroma 集合删除给定文档 ID。"""
         if not ids:
             return
         collection = self._get_collection(namespace)
         collection.delete(ids=ids)
 
     def healthcheck(self) -> VectorStoreHealth:
+        """检查 Chroma 客户端可用性。"""
         try:
             self._client.list_collections()
         except Exception as exc:
@@ -227,6 +240,7 @@ class ChromaVectorStore(VectorStore):
         return VectorStoreHealth(provider="chroma", available=True)
 
     def _get_collection(self, namespace: str) -> Collection:
+        """获取集合实例，不存在时自动初始化。"""
         if namespace not in self._collections:
             self.ensure_collections()
         return self._collections[namespace]
@@ -234,14 +248,17 @@ class ChromaVectorStore(VectorStore):
 
 class ElasticsearchVectorStore(VectorStore):
     def __init__(self, app_settings: AppSettings, client: Any | None = None) -> None:
+        """初始化 Elasticsearch 客户端。"""
         super().__init__(app_settings)
         self._client = client or self._build_client()
 
     def ensure_collections(self) -> None:
+        """确保 Elasticsearch 中目标索引存在。"""
         for namespace in SUPPORTED_NAMESPACES:
             self._ensure_index(namespace)
 
     def upsert_documents(self, namespace: str, documents: list[VectorStoreDocument]) -> None:
+        """通过 bulk API 批量写入文档。"""
         if not documents:
             return
 
@@ -277,6 +294,7 @@ class ElasticsearchVectorStore(VectorStore):
         top_k: int | None = None,
         filters: VectorMetadata | None = None,
     ) -> list[VectorSearchResult]:
+        """执行基于 cosineSimilarity 的向量检索。"""
         index_name = self._ensure_index(namespace)
         response = self._client.search(
             index=index_name,
@@ -311,6 +329,7 @@ class ElasticsearchVectorStore(VectorStore):
         return results
 
     def delete_documents(self, namespace: str, ids: list[str]) -> None:
+        """通过 bulk delete 删除索引中的文档。"""
         if not ids:
             return
 
@@ -318,13 +337,21 @@ class ElasticsearchVectorStore(VectorStore):
         if not self._client.indices.exists(index=index_name):
             return
 
-        for document_id in ids:
-            try:
-                self._client.delete(index=index_name, id=document_id, refresh=True)
-            except Exception:
-                continue
+        operations = [
+            {"delete": {"_index": index_name, "_id": doc_id}}
+            for doc_id in ids
+        ]
+        response = self._client.bulk(operations=operations, refresh=True)
+        if response.get("errors"):
+            failed = [
+                item.get("delete", {}).get("_id", "unknown")
+                for item in response.get("items", [])
+                if "error" in item.get("delete", {})
+            ]
+            raise RuntimeError(f"Elasticsearch delete failed for IDs: {failed}")
 
     def healthcheck(self) -> VectorStoreHealth:
+        """通过 ping 检查 Elasticsearch 可用性。"""
         try:
             available = bool(self._client.ping())
         except Exception as exc:
@@ -334,6 +361,7 @@ class ElasticsearchVectorStore(VectorStore):
         return VectorStoreHealth(provider="elasticsearch", available=available, detail=detail)
 
     def resolve_index_name(self, namespace: str) -> str:
+        """根据命名空间配置与前缀规则计算索引名。"""
         namespace_config = self.resolve_namespace_config(namespace)
         configured_name = namespace_config.index_name.strip()
         prefix = self.config.elasticsearch.index_prefix.strip("-")
@@ -344,6 +372,7 @@ class ElasticsearchVectorStore(VectorStore):
         return configured_name
 
     def _ensure_index(self, namespace: str) -> str:
+        """确保索引存在，不存在则按映射创建。"""
         index_name = self.resolve_index_name(namespace)
         if self._client.indices.exists(index=index_name):
             return index_name
@@ -372,6 +401,7 @@ class ElasticsearchVectorStore(VectorStore):
         return index_name
 
     def _build_client(self) -> Any:
+        """按配置构造 Elasticsearch 客户端实例。"""
         if Elasticsearch is None:
             raise ModuleNotFoundError(
                 "The 'elasticsearch' package is not installed. Install backend/requirements.txt "
@@ -396,6 +426,7 @@ class ElasticsearchVectorStore(VectorStore):
         return Elasticsearch(**client_kwargs)
 
     def _build_filter_query(self, filters: VectorMetadata | None) -> dict[str, Any]:
+        """将 metadata 过滤条件转换为 Elasticsearch bool 过滤语句。"""
         normalized_filters = self.normalize_metadata(filters or {})
         if not normalized_filters:
             return {"match_all": {}}
@@ -415,10 +446,12 @@ class VectorStoreFactory:
 
     @classmethod
     def register(cls, provider: str, store_cls: type[VectorStoreType]) -> None:
+        """注册向量后端实现。"""
         cls._registry[provider] = store_cls
 
     @classmethod
     def create(cls, app_settings: AppSettings | None = None) -> VectorStore:
+        """按配置创建对应的向量后端实例。"""
         resolved_settings = app_settings or settings
         provider = resolved_settings.vector_store.provider
         store_cls = cls._registry.get(provider)

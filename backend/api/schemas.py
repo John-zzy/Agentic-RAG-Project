@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 from pydantic import BaseModel, Field
 
 
@@ -24,3 +26,25 @@ class ChatResponse(BaseModel):
     knowledge_used: bool
     citations: list[Citation] = Field(default_factory=list)
 
+
+class SessionCreateResponse(BaseModel):
+    session_id: str
+
+
+class SessionTurnResponse(BaseModel):
+    request_id: str
+    user_message: str
+    assistant_answer: str
+    retrieval_snippets: list[dict[str, Any]] = Field(default_factory=list)
+    timestamp: str
+
+
+class SessionDetailResponse(BaseModel):
+    session_id: str
+    total_turns: int
+    turns: list[SessionTurnResponse] = Field(default_factory=list)
+
+
+class SessionDeleteResponse(BaseModel):
+    session_id: str
+    deleted_turns: int

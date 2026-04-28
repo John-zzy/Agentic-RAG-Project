@@ -34,6 +34,7 @@ DASHSCOPE_API_BASE = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 
 
 def get_env_value(key: str) -> str | None:
+    """优先从系统环境变量读取配置，缺失时回退到 .env。"""
     value = os.getenv(key)
     if value is not None:
         return value
@@ -41,6 +42,7 @@ def get_env_value(key: str) -> str | None:
 
 
 def load_model_routing_config() -> dict[str, dict[str, dict[str, object]]]:
+    """加载模型路由配置；若缺失则使用内置默认值。"""
     if not MODEL_ROUTING_FILE.exists():
         return {
             "models": {
@@ -67,6 +69,7 @@ def load_model_routing_config() -> dict[str, dict[str, dict[str, object]]]:
 
 
 def load_api_keys() -> dict[str, str | None]:
+    """读取三档模型（simple/moderate/complex）的 API Key。"""
     return {
         "simple": get_env_value("AI_RAG_MODELS__SIMPLE__API_KEY"),
         "moderate": get_env_value("AI_RAG_MODELS__MODERATE__API_KEY"),
@@ -75,11 +78,13 @@ def load_api_keys() -> dict[str, str | None]:
 
 
 def parse_env_int(key: str, default: int) -> int:
+    """将环境变量解析为整数，缺失时返回默认值。"""
     value = get_env_value(key)
     return int(value) if value else default
 
 
 def parse_env_bool(key: str, default: bool) -> bool:
+    """将环境变量解析为布尔值，支持常见 truthy 文本。"""
     value = get_env_value(key)
     if value is None:
         return default
@@ -87,6 +92,7 @@ def parse_env_bool(key: str, default: bool) -> bool:
 
 
 def load_vector_store_config() -> dict[str, object]:
+    """汇总向量库相关配置（provider、命名空间、后端参数）。"""
     chroma_directory = get_env_value("AI_RAG_VECTOR_STORE__CHROMA__PERSIST_DIRECTORY")
 
     return {

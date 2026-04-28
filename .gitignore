@@ -1,10 +1,11 @@
 /openspec/
 /.codex/
 /.claude/
-/backend/.env
-/backend/.venv/
+__pycache__/
 .idea
 .pytest_cache
+/backend/.env
+/backend/.venv/
 /backend/tests/.pytest_cache/
 /backend/tests/.pytest_tmp/
 /backend/tests/artifacts/
@@ -12,3 +13,4 @@
 
 ## custom data
 /backend/data/
+/backend/memory/sessions.db

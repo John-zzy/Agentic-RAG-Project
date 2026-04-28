@@ -127,3 +127,38 @@ def test_chat_api_no_hit_fallback_sets_knowledge_used_false() -> None:
     assert payload["citations"] == []
     assert "暂时没有检索到足够相关的商品知识" in payload["answer"]
     assert model.chat_model_calls == []
+
+
+def test_session_management_endpoints() -> None:
+    service = _build_chat_service("chat-api-session-endpoints", FakeKnowledgeService(), FakeModel())
+    app = create_app(chat_service=service)
+
+    with TestClient(app) as client:
+        create_response = client.post("/sessions")
+        assert create_response.status_code == 200
+        session_id = create_response.json()["session_id"]
+        assert session_id
+
+        empty_session_response = client.get(f"/sessions/{session_id}")
+        assert empty_session_response.status_code == 200
+        assert empty_session_response.json()["total_turns"] == 0
+        assert empty_session_response.json()["turns"] == []
+
+        chat_response = client.post("/chat", json={"message": "你好", "session_id": session_id})
+        assert chat_response.status_code == 200
+
+        populated_session_response = client.get(f"/sessions/{session_id}")
+        assert populated_session_response.status_code == 200
+        payload = populated_session_response.json()
+        assert payload["session_id"] == session_id
+        assert payload["total_turns"] == 1
+        assert len(payload["turns"]) == 1
+        assert payload["turns"][0]["user_message"] == "你好"
+
+        delete_response = client.delete(f"/sessions/{session_id}")
+        assert delete_response.status_code == 200
+        assert delete_response.json()["deleted_turns"] == 1
+
+        after_delete_response = client.get(f"/sessions/{session_id}")
+        assert after_delete_response.status_code == 200
+        assert after_delete_response.json()["total_turns"] == 0

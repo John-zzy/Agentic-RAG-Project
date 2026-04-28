@@ -1,0 +1,304 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AI RAG API Tester</title>
+  <style>
+    :root {
+      --bg: #f4f6f8;
+      --card: #ffffff;
+      --text: #1f2937;
+      --muted: #6b7280;
+      --border: #d1d5db;
+      --brand: #0f766e;
+      --danger: #b91c1c;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+    }
+    .wrap {
+      max-width: 980px;
+      margin: 24px auto 48px;
+      padding: 0 16px;
+    }
+    h1 { margin: 0 0 12px; font-size: 28px; }
+    .hint { margin: 0 0 18px; color: var(--muted); }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 16px;
+      margin-bottom: 14px;
+    }
+    .row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
+      margin-bottom: 10px;
+    }
+    label { min-width: 86px; font-weight: 600; }
+    input, textarea {
+      width: 100%;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 8px 10px;
+      font-size: 14px;
+    }
+    textarea {
+      min-height: 92px;
+      resize: vertical;
+      font-family: Consolas, "Courier New", monospace;
+    }
+    .field { flex: 1; min-width: 240px; }
+    button {
+      border: 1px solid var(--brand);
+      background: var(--brand);
+      color: #fff;
+      border-radius: 6px;
+      padding: 8px 14px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    button.secondary {
+      background: #fff;
+      color: var(--brand);
+    }
+    button.danger {
+      border-color: var(--danger);
+      background: var(--danger);
+    }
+    .output {
+      background: #111827;
+      color: #d1fae5;
+      border-radius: 8px;
+      padding: 12px;
+      overflow: auto;
+      min-height: 180px;
+      white-space: pre-wrap;
+      word-break: break-word;
+      font-size: 13px;
+      line-height: 1.45;
+      font-family: Consolas, "Courier New", monospace;
+    }
+    .small { color: var(--muted); font-size: 12px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>AI RAG API 测试页</h1>
+    <p class="hint">
+      先启动后端：<code>python backend/run.py</code>，然后访问：
+      <code>/frontend/api-tester.html</code>
+    </p>
+
+    <div class="card">
+      <div class="row">
+        <label for="baseUrl">Base URL</label>
+        <div class="field">
+          <input id="baseUrl" type="text" value="" />
+        </div>
+        <button class="secondary" id="useCurrentOrigin">使用当前域名</button>
+      </div>
+      <div class="small">默认会填充当前页面域名（例如 http://127.0.0.1:8000）</div>
+    </div>
+
+    <div class="card">
+      <h3>/health</h3>
+      <div class="row">
+        <button id="btnHealth">GET /health</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>/sessions</h3>
+      <div class="row">
+        <button id="btnCreateSession">POST /sessions</button>
+      </div>
+      <div class="row">
+        <label for="sessionId">session_id</label>
+        <div class="field">
+          <input id="sessionId" type="text" placeholder="点击创建会话后会自动填充" />
+        </div>
+      </div>
+      <div class="row">
+        <label for="limit">limit</label>
+        <div class="field">
+          <input id="limit" type="number" min="1" max="100" value="20" />
+        </div>
+      </div>
+      <div class="row">
+        <button id="btnGetSession" class="secondary">GET /sessions/{session_id}</button>
+        <button id="btnDeleteSession" class="danger">DELETE /sessions/{session_id}</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>/chat</h3>
+      <div class="row">
+        <label for="message">message</label>
+        <div class="field">
+          <textarea id="message" placeholder="输入你要测试的问题">hello</textarea>
+        </div>
+      </div>
+      <div class="row">
+        <label for="topK">top_k</label>
+        <div class="field">
+          <input id="topK" type="number" min="1" max="20" placeholder="可选，1~20" />
+        </div>
+      </div>
+      <div class="row">
+        <button id="btnChat">POST /chat</button>
+      </div>
+      <div class="small">会自动带上当前 session_id（如果有）。</div>
+    </div>
+
+    <div class="card">
+      <h3>响应输出</h3>
+      <div class="row">
+        <button class="secondary" id="btnClear">清空输出</button>
+      </div>
+      <div id="output" class="output"></div>
+    </div>
+  </div>
+
+  <script>
+    const outputEl = document.getElementById("output");
+    const baseUrlEl = document.getElementById("baseUrl");
+    const sessionIdEl = document.getElementById("sessionId");
+    const limitEl = document.getElementById("limit");
+    const messageEl = document.getElementById("message");
+    const topKEl = document.getElementById("topK");
+
+    function now() {
+      return new Date().toLocaleString();
+    }
+
+    function log(title, data) {
+      const block = "[" + now() + "] " + title + "\n" + data + "\n\n";
+      outputEl.textContent = block + outputEl.textContent;
+    }
+
+    function getBaseUrl() {
+      const val = baseUrlEl.value.trim();
+      return val.replace(/\/+$/, "");
+    }
+
+    async function apiCall(path, options) {
+      const url = getBaseUrl() + path;
+      const req = options || {};
+      req.headers = Object.assign({ "Content-Type": "application/json" }, req.headers || {});
+
+      try {
+        const response = await fetch(url, req);
+        const text = await response.text();
+        let jsonData = null;
+        try {
+          jsonData = text ? JSON.parse(text) : null;
+        } catch (_) {
+          jsonData = text;
+        }
+
+        const result = {
+          request: {
+            url: url,
+            method: req.method || "GET",
+            body: req.body ? JSON.parse(req.body) : null
+          },
+          response: {
+            ok: response.ok,
+            status: response.status,
+            statusText: response.statusText,
+            data: jsonData
+          }
+        };
+
+        log(path, JSON.stringify(result, null, 2));
+        return result;
+      } catch (error) {
+        log(path + " (NETWORK ERROR)", String(error));
+        return null;
+      }
+    }
+
+    async function doHealth() {
+      await apiCall("/health");
+    }
+
+    async function doCreateSession() {
+      const res = await apiCall("/sessions", { method: "POST", body: JSON.stringify({}) });
+      if (res && res.response && res.response.data && res.response.data.session_id) {
+        sessionIdEl.value = res.response.data.session_id;
+      }
+    }
+
+    async function doGetSession() {
+      const sessionId = sessionIdEl.value.trim();
+      if (!sessionId) {
+        alert("请先填写 session_id");
+        return;
+      }
+      const limit = Number(limitEl.value || 20);
+      await apiCall("/sessions/" + encodeURIComponent(sessionId) + "?limit=" + limit);
+    }
+
+    async function doDeleteSession() {
+      const sessionId = sessionIdEl.value.trim();
+      if (!sessionId) {
+        alert("请先填写 session_id");
+        return;
+      }
+      await apiCall("/sessions/" + encodeURIComponent(sessionId), { method: "DELETE" });
+    }
+
+    async function doChat() {
+      const message = messageEl.value.trim();
+      if (!message) {
+        alert("message 不能为空");
+        return;
+      }
+
+      const payload = {
+        message: message,
+        session_id: sessionIdEl.value.trim() || null,
+        stream: false
+      };
+
+      const topK = topKEl.value.trim();
+      if (topK) payload.top_k = Number(topK);
+
+      const res = await apiCall("/chat", {
+        method: "POST",
+        body: JSON.stringify(payload)
+      });
+
+      if (res && res.response && res.response.data && res.response.data.session_id) {
+        sessionIdEl.value = res.response.data.session_id;
+      }
+    }
+
+    function init() {
+      baseUrlEl.value = window.location.origin;
+
+      document.getElementById("useCurrentOrigin").addEventListener("click", function () {
+        baseUrlEl.value = window.location.origin;
+      });
+      document.getElementById("btnHealth").addEventListener("click", doHealth);
+      document.getElementById("btnCreateSession").addEventListener("click", doCreateSession);
+      document.getElementById("btnGetSession").addEventListener("click", doGetSession);
+      document.getElementById("btnDeleteSession").addEventListener("click", doDeleteSession);
+      document.getElementById("btnChat").addEventListener("click", doChat);
+      document.getElementById("btnClear").addEventListener("click", function () {
+        outputEl.textContent = "";
+      });
+    }
+
+    init();
+  </script>
+</body>
+</html>

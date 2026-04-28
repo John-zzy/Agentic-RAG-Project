@@ -40,13 +40,33 @@ class FakeElasticsearchClient:
 
     def bulk(self, operations: list[dict[str, Any]], refresh: bool = True) -> dict[str, Any]:
         assert refresh is True
-        for index in range(0, len(operations), 2):
-            action = operations[index]["index"]
-            source = operations[index + 1]
-            index_name = action["_index"]
-            document_id = action["_id"]
-            self.documents.setdefault(index_name, {})[document_id] = source
-        return {"errors": False}
+        items: list[dict[str, Any]] = []
+        has_errors = False
+        idx = 0
+        while idx < len(operations):
+            op = operations[idx]
+            if "index" in op:
+                action = op["index"]
+                source = operations[idx + 1] if idx + 1 < len(operations) else {}
+                idx += 2
+                index_name = action["_index"]
+                document_id = action["_id"]
+                self.documents.setdefault(index_name, {})[document_id] = source
+                items.append({"index": {"_id": document_id, "status": 201}})
+            elif "delete" in op:
+                action = op["delete"]
+                idx += 1
+                index_name = action["_index"]
+                document_id = action["_id"]
+                if index_name in self.documents and document_id in self.documents[index_name]:
+                    del self.documents[index_name][document_id]
+                    items.append({"delete": {"_id": document_id, "status": 200}})
+                else:
+                    items.append({"delete": {"_id": document_id, "status": 404, "error": "not_found"}})
+                    has_errors = True
+            else:
+                idx += 1
+        return {"errors": has_errors, "items": items}
 
     def search(
         self,

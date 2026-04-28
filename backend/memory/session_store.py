@@ -26,6 +26,7 @@ class SQLiteSessionStore:
         app_settings: AppSettings | None = None,
         sqlite_path: Path | None = None,
     ) -> None:
+        """初始化 SQLite 会话存储并确保表结构存在。"""
         resolved_settings = app_settings or settings
         self._sqlite_path = sqlite_path or resolved_settings.session.sqlite_path
         self._sqlite_path.parent.mkdir(parents=True, exist_ok=True)
@@ -41,6 +42,7 @@ class SQLiteSessionStore:
         retrieval_snippets: list[dict[str, Any]],
         timestamp: str,
     ) -> None:
+        """写入一轮对话记录。"""
         payload = json.dumps(retrieval_snippets, ensure_ascii=False)
         with self._lock, self._connect() as conn:
             conn.execute(
@@ -66,6 +68,7 @@ class SQLiteSessionStore:
             conn.commit()
 
     def get_recent_turns(self, session_id: str, limit: int) -> list[SessionTurn]:
+        """读取指定会话最近 N 轮对话（按时间正序返回）。"""
         with self._connect() as conn:
             rows = conn.execute(
                 """
@@ -97,7 +100,78 @@ class SQLiteSessionStore:
             for row in ordered_rows
         ]
 
+    def count_turns(self, session_id: str) -> int:
+        """统计会话累计轮次。"""
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT COUNT(*) AS turn_count
+                FROM chat_turns
+                WHERE session_id = ?
+                """,
+                (session_id,),
+            ).fetchone()
+        if row is None:
+            return 0
+        return int(row["turn_count"])
+
+    def get_session_detail(
+        self, session_id: str, limit: int
+    ) -> tuple[list[SessionTurn], int]:
+        """获取会话详情：最近轮次列表及总轮次。"""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) AS cnt FROM chat_turns WHERE session_id = ?",
+                (session_id,),
+            ).fetchone()
+            total_turns = int(row["cnt"]) if row else 0
+
+            rows = conn.execute(
+                """
+                SELECT
+                    session_id,
+                    request_id,
+                    user_message,
+                    assistant_answer,
+                    retrieval_snippets,
+                    created_at
+                FROM chat_turns
+                WHERE session_id = ?
+                ORDER BY id DESC
+                LIMIT ?
+                """,
+                (session_id, limit),
+            ).fetchall()
+
+        ordered_rows = list(reversed(rows))
+        turns = [
+            SessionTurn(
+                session_id=str(r["session_id"]),
+                request_id=str(r["request_id"]),
+                user_message=str(r["user_message"]),
+                assistant_answer=str(r["assistant_answer"]),
+                retrieval_snippets=self._parse_retrieval_snippets(r["retrieval_snippets"]),
+                timestamp=str(r["created_at"]),
+            )
+            for r in ordered_rows
+        ]
+        return turns, total_turns
+
+    def delete_session(self, session_id: str) -> int:
+        """删除会话全部记录并返回删除条数。"""
+        with self._lock, self._connect() as conn:
+            cursor = conn.execute(
+                """
+                DELETE FROM chat_turns
+                WHERE session_id = ?
+                """,
+                (session_id,),
+            )
+            conn.commit()
+        return max(int(cursor.rowcount), 0)
+
     def _ensure_schema(self) -> None:
+        """创建会话表和索引（若不存在）。"""
         with self._connect() as conn:
             conn.execute(
                 """
@@ -121,11 +195,18 @@ class SQLiteSessionStore:
             conn.commit()
 
     def _connect(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(str(self._sqlite_path))
+        """创建 SQLite 连接并应用基础 PRAGMA。"""
+        connection = sqlite3.connect(
+            str(self._sqlite_path),
+            check_same_thread=False,
+        )
         connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA journal_mode=WAL")
+        connection.execute("PRAGMA foreign_keys=ON")
         return connection
 
     def _parse_retrieval_snippets(self, payload: Any) -> list[dict[str, Any]]:
+        """将 JSON 字符串解析为检索片段列表。"""
         if not isinstance(payload, str) or not payload:
             return []
         try:
@@ -133,4 +214,3 @@ class SQLiteSessionStore:
         except json.JSONDecodeError:
             return []
         return value if isinstance(value, list) else []
-

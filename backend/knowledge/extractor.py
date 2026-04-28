@@ -7,6 +7,7 @@ from backend.knowledge.store import VectorStoreDocument
 
 
 def build_product_document(product: dict[str, Any]) -> VectorStoreDocument:
+    """将商品结构化数据转换为向量库商品文档。"""
     product_id = str(product["product_id"])
     specs = product.get("specs", {})
     inventory = product.get("inventory", {})
@@ -40,11 +41,10 @@ def build_product_document(product: dict[str, Any]) -> VectorStoreDocument:
 
 
 def build_review_document(review: dict[str, Any]) -> VectorStoreDocument:
+    """将评论结构化数据转换为向量库评论文档。"""
     review_id = str(review["review_id"])
     product_id = str(review["product_id"])
     content = (
-        f"{review['title']}。"
-        f"{review['content']}。"
         f"{review['title']}。"
         f"{review['content']}。"
         f"商品 {product_id}，评分 {review['rating']} 星。"

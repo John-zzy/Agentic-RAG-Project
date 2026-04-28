@@ -17,6 +17,7 @@ class KnowledgeLoadSummary(BaseModel):
 
 
 def load_json_records(path: Path) -> list[dict[str, Any]]:
+    """读取 JSON 文件并返回记录列表。"""
     with path.open("r", encoding="utf-8") as file:
         return json.load(file)
 
@@ -25,6 +26,7 @@ def preload_knowledge_base(
     app_settings: AppSettings | None = None,
     store: VectorStore | None = None,
 ) -> KnowledgeLoadSummary:
+    """将商品与评论数据预加载到向量库。"""
     resolved_settings = app_settings or settings
     resolved_store = store or VectorStoreFactory.create(resolved_settings)
 
