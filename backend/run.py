@@ -12,12 +12,12 @@ if __package__ in {None, ""}:
 
 import uvicorn
 
-from backend.api.app import create_app
-from backend.api.chat_service import ChatService, create_chat_service
+from backend.api.base.app import create_app
+from backend.api.chat.service import ChatService, create_chat_service
 from backend.config.settings import AppSettings, settings
-from backend.knowledge.loader import preload_knowledge_base
-from backend.knowledge.service import create_knowledge_service
-from backend.memory.session_store import SQLiteSessionStore
+from backend.knowledge.ecommerce.loader import preload_knowledge_base
+from backend.knowledge.ecommerce.service import create_knowledge_service
+from backend.memory.base.session_store import SQLiteSessionStore
 
 
 @dataclass(frozen=True)

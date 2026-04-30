@@ -6,10 +6,12 @@ from typing import Any
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import BasePromptTemplate, PromptTemplate
 
-from backend.models.router import RoutedModel, TaskComplexity, get_model_for_task
+from backend.models.base.router import RoutedModel, TaskComplexity, get_model_for_task
 
 
 class ModelClient:
+    """封装基于路由结果的聊天模型调用与流式输出能力。"""
+
     def __init__(self, chat_model_factory: Callable[..., Any] | None = None) -> None:
         """初始化模型客户端与默认提示模板。"""
         self._chat_model_factory = chat_model_factory

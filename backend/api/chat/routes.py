@@ -4,8 +4,7 @@ from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException, Query, Request
 
-from backend.api.chat_service import ChatService, ChatServiceError
-from backend.api.schemas import (
+from backend.api.chat.schemas import (
     ChatRequest,
     ChatResponse,
     SessionCreateResponse,
@@ -13,6 +12,7 @@ from backend.api.schemas import (
     SessionDetailResponse,
     SessionTurnResponse,
 )
+from backend.api.chat.service import ChatService, ChatServiceError
 
 
 router = APIRouter()
@@ -42,9 +42,12 @@ def chat(payload: ChatRequest, request: Request) -> ChatResponse:
 
 
 @router.post("/sessions", response_model=SessionCreateResponse)
-def create_session() -> SessionCreateResponse:
+def create_session(request: Request) -> SessionCreateResponse:
     """创建新会话并返回会话 ID。"""
-    return SessionCreateResponse(session_id=uuid4().hex)
+    service = _get_chat_service(request)
+    session_id = uuid4().hex
+    service.session_store.create_session(session_id=session_id)
+    return SessionCreateResponse(session_id=session_id)
 
 
 @router.get("/sessions/{session_id}", response_model=SessionDetailResponse)

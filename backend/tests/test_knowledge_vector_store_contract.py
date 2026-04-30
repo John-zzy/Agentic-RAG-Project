@@ -5,8 +5,8 @@ from uuid import uuid4
 import pytest
 
 from backend.config.settings import AppSettings, VectorStoreConfig
-from backend.knowledge.service import KnowledgeService
-from backend.knowledge.store import ElasticsearchVectorStore
+from backend.knowledge.base.store import ElasticsearchVectorStore
+from backend.knowledge.ecommerce.service import KnowledgeService
 from backend.tests.test_support import DATA_DIR, make_test_runtime_dir
 
 

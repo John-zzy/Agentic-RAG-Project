@@ -1,9 +1,8 @@
-"""Knowledge base package."""
+"""知识库包。"""
 
-from backend.knowledge.loader import KnowledgeLoadSummary, preload_knowledge_base
-from backend.knowledge.retriever import KnowledgeBaseRetriever
-from backend.knowledge.service import KnowledgeService, KnowledgeUpsertSummary, create_knowledge_service
-from backend.knowledge.store import (
+from backend.knowledge.base import (
+    MAX_SNIPPET_LENGTH,
+    SUPPORTED_NAMESPACES,
     ChromaVectorStore,
     ElasticsearchVectorStore,
     VectorSearchResult,
@@ -11,20 +10,36 @@ from backend.knowledge.store import (
     VectorStoreDocument,
     VectorStoreFactory,
     VectorStoreHealth,
+    truncate_snippet,
+)
+from backend.knowledge.ecommerce import (
+    KnowledgeBaseRetriever,
+    KnowledgeLoadSummary,
+    KnowledgeService,
+    KnowledgeUpsertSummary,
+    build_product_document,
+    build_review_document,
+    create_knowledge_service,
+    preload_knowledge_base,
 )
 
 __all__ = [
     "ChromaVectorStore",
     "ElasticsearchVectorStore",
-    "KnowledgeLoadSummary",
     "KnowledgeBaseRetriever",
+    "KnowledgeLoadSummary",
     "KnowledgeService",
     "KnowledgeUpsertSummary",
+    "MAX_SNIPPET_LENGTH",
+    "SUPPORTED_NAMESPACES",
     "VectorSearchResult",
     "VectorStore",
     "VectorStoreDocument",
     "VectorStoreFactory",
     "VectorStoreHealth",
-    "preload_knowledge_base",
+    "build_product_document",
+    "build_review_document",
     "create_knowledge_service",
+    "preload_knowledge_base",
+    "truncate_snippet",
 ]

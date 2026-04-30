@@ -1,7 +1,7 @@
 import sqlite3
 
-import backend.memory.session_store as session_store_module
-from backend.memory.session_store import SQLiteSessionStore
+import backend.memory.base.session_store as session_store_module
+from backend.memory.base.session_store import SQLiteSessionStore
 from backend.tests.test_support import make_test_runtime_dir
 
 
@@ -25,6 +25,24 @@ def test_session_store_persists_and_reads_turns() -> None:
     assert len(turns) == 1
     assert turns[0].request_id == "req-1"
     assert turns[0].retrieval_snippets[0]["citation_id"] == "P001"
+
+
+def test_session_store_creates_and_updates_session_metadata() -> None:
+    store = _build_store("session-store-metadata")
+    created = store.create_session(
+        session_id="session-meta",
+        now="2026-04-23T00:00:00+00:00",
+    )
+    touched = store.touch_session(
+        session_id="session-meta",
+        now="2026-04-23T00:05:00+00:00",
+    )
+
+    assert created.status == "active"
+    assert created.created_at == "2026-04-23T00:00:00+00:00"
+    assert touched is not None
+    assert touched.last_active_at == "2026-04-23T00:05:00+00:00"
+    assert touched.updated_at == "2026-04-23T00:05:00+00:00"
 
 
 def test_session_store_supports_session_resume() -> None:
@@ -64,6 +82,25 @@ def test_session_store_respects_recent_limit() -> None:
 
     turns = store.get_recent_turns("session-window", limit=2)
     assert [turn.request_id for turn in turns] == ["req-3", "req-4"]
+
+
+def test_session_store_marks_inactive_sessions_as_expired() -> None:
+    store = _build_store("session-store-expire")
+    store.create_session(
+        session_id="session-expire",
+        now="2026-04-23T00:00:00+00:00",
+    )
+    expired = store.cleanup_expired_sessions(
+        now="2026-04-23T00:31:00+00:00",
+        timeout_minutes=30,
+        limit=10,
+    )
+    session = store.get_session("session-expire")
+
+    assert expired == ["session-expire"]
+    assert session is not None
+    assert session.status == "expired"
+    assert session.expired_at == "2026-04-23T00:31:00+00:00"
 
 
 def test_session_store_migrates_legacy_database_to_data_dir(monkeypatch) -> None:

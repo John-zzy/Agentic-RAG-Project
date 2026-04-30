@@ -1,6 +1,6 @@
 import pytest
 
-from backend.models.client import model_client
+from backend.models.llm.client import model_client
 
 
 @pytest.mark.integration

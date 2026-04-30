@@ -3,12 +3,12 @@ from typing import Any
 from fastapi.testclient import TestClient
 from langchain_core.runnables import RunnableLambda
 
-from backend.api.app import create_app
-from backend.api.chat_service import ChatService
+from backend.api.base.app import create_app
+from backend.api.chat.service import ChatService
 from backend.config.settings import AppSettings
-from backend.knowledge.store import VectorSearchResult, VectorStoreDocument
-from backend.memory.prompt_context import PromptContextBuilder
-from backend.memory.session_store import SQLiteSessionStore
+from backend.knowledge.base.store import VectorSearchResult, VectorStoreDocument
+from backend.memory.base.session_store import SQLiteSessionStore
+from backend.memory.chat.prompt_context import PromptContextBuilder
 from backend.tests.test_support import make_test_runtime_dir
 
 
@@ -138,6 +138,7 @@ def test_session_management_endpoints() -> None:
         assert create_response.status_code == 200
         session_id = create_response.json()["session_id"]
         assert session_id
+        assert service.session_store.get_session(session_id) is not None
 
         empty_session_response = client.get(f"/sessions/{session_id}")
         assert empty_session_response.status_code == 200
@@ -162,3 +163,24 @@ def test_session_management_endpoints() -> None:
         after_delete_response = client.get(f"/sessions/{session_id}")
         assert after_delete_response.status_code == 200
         assert after_delete_response.json()["total_turns"] == 0
+
+
+def test_chat_api_rejects_expired_session() -> None:
+    service = _build_chat_service("chat-api-expired-session", FakeKnowledgeService(), FakeModel())
+    service.session_store.create_session(
+        session_id="expired-session",
+        now="2026-04-23T00:00:00+00:00",
+    )
+    service.session_store.cleanup_expired_sessions(
+        now="2026-04-23T01:00:00+00:00",
+        timeout_minutes=30,
+        limit=10,
+    )
+    app = create_app(chat_service=service)
+
+    with TestClient(app) as client:
+        response = client.post("/chat", json={"message": "你好", "session_id": "expired-session"})
+
+    assert response.status_code == 409
+    payload = response.json()
+    assert payload["detail"]["code"] == "SESSION_EXPIRED"

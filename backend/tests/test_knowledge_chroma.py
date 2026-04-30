@@ -1,6 +1,6 @@
 from backend.config.settings import AppSettings, VectorStoreConfig
-from backend.knowledge.loader import preload_knowledge_base
-from backend.knowledge.store import ChromaVectorStore, VectorStoreDocument, VectorStoreFactory
+from backend.knowledge.base.store import ChromaVectorStore, VectorStoreDocument, VectorStoreFactory
+from backend.knowledge.ecommerce.loader import preload_knowledge_base
 from backend.tests.test_support import DATA_DIR, make_test_runtime_dir
 
 

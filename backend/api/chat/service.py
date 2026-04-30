@@ -7,28 +7,30 @@ from uuid import uuid4
 from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain_core.documents import Document
 
-from backend.api.prompts import build_rag_answer_prompt_template
-from backend.api.schemas import ChatRequest, ChatResponse, Citation
+from backend.api.chat.prompts import build_rag_answer_prompt_template
+from backend.api.chat.schemas import ChatRequest, ChatResponse, Citation
 from backend.config.settings import AppSettings, settings
-from backend.knowledge._text_utils import truncate_snippet
-from backend.knowledge.retriever import KnowledgeBaseRetriever
-from backend.knowledge.service import KnowledgeService, create_knowledge_service
-from backend.memory.prompt_context import PromptContextBuilder
-from backend.memory.session_store import SessionTurn
-from backend.memory.session_store import SQLiteSessionStore
-from backend.models.client import ModelClient, model_client
-from backend.models.router import TaskComplexity
+from backend.knowledge.base.text import truncate_snippet
+from backend.knowledge.ecommerce.retriever import KnowledgeBaseRetriever
+from backend.knowledge.ecommerce.service import KnowledgeService, create_knowledge_service
+from backend.memory.base.session_store import SQLiteSessionStore, SessionTurn
+from backend.memory.chat.prompt_context import PromptContextBuilder
+from backend.models.base.router import TaskComplexity
+from backend.models.llm.client import ModelClient, model_client
 
 
 class RetrievalChainModel(Protocol):
+    """定义 ChatService 依赖的最小模型构建协议。"""
+
     def build_chat_model_for_complexity(self, complexity: TaskComplexity) -> Any:
         """按复杂度构建可用于 RAG 链的聊天模型实例。"""
         ...
 
 
 class ChatServiceError(RuntimeError):
+    """封装可返回给 API 层的业务错误。"""
+
     def __init__(self, *, status_code: int, code: str, message: str, request_id: str) -> None:
-        """封装可返回给 API 层的业务错误。"""
         self.status_code = status_code
         self.code = code
         self.message = message
@@ -37,6 +39,8 @@ class ChatServiceError(RuntimeError):
 
 
 class ChatService:
+    """封装聊天问答的检索、生成和会话持久化主流程。"""
+
     def __init__(
         self,
         app_settings: AppSettings | None = None,
@@ -60,6 +64,7 @@ class ChatService:
         """执行一次完整对话流程：检索、生成、落库并返回响应。"""
         request_id = uuid4().hex
         session_id = payload.session_id or uuid4().hex
+        timestamp = datetime.now(UTC).isoformat()
 
         if payload.stream:
             raise ChatServiceError(
@@ -68,6 +73,20 @@ class ChatService:
                 message="Streaming mode is reserved but not enabled on this endpoint yet.",
                 request_id=request_id,
             )
+
+        self.session_store.cleanup_expired_sessions(now=timestamp)
+        session = self.session_store.get_session(session_id)
+        if session is None:
+            self.session_store.create_session(session_id=session_id, now=timestamp)
+        elif session.status == "expired":
+            raise ChatServiceError(
+                status_code=409,
+                code="SESSION_EXPIRED",
+                message="Session has expired. Please create a new session before continuing.",
+                request_id=request_id,
+            )
+        else:
+            self.session_store.touch_session(session_id=session_id, now=timestamp)
 
         top_k = payload.top_k or self.settings.vector_store.top_k
         history_turns = self.session_store.get_recent_turns(
@@ -98,7 +117,6 @@ class ChatService:
         else:
             answer = self._build_no_hit_answer(payload.message)
 
-        timestamp = datetime.now(UTC).isoformat()
         self.session_store.append_turn(
             session_id=session_id,
             request_id=request_id,

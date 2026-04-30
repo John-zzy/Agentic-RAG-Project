@@ -7,11 +7,13 @@ from typing import Any
 from pydantic import BaseModel
 
 from backend.config.settings import AppSettings, settings
-from backend.knowledge.extractor import build_product_document, build_review_document
-from backend.knowledge.store import VectorStore, VectorStoreFactory
+from backend.knowledge.base.store import VectorStore, VectorStoreFactory
+from backend.knowledge.ecommerce.extractor import build_product_document, build_review_document
 
 
 class KnowledgeLoadSummary(BaseModel):
+    """描述商品与评论预加载的数量结果。"""
+
     products_loaded: int
     reviews_loaded: int
 

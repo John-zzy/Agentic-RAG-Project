@@ -1,6 +1,12 @@
-"""Memory package."""
+"""会话记忆包。"""
 
-from backend.memory.prompt_context import PromptContextBuilder
-from backend.memory.session_store import SQLiteSessionStore, SessionTurn
+from backend.memory.base import SQLiteSessionStore, SessionRecord, SessionStatus, SessionTurn
+from backend.memory.chat import PromptContextBuilder
 
-__all__ = ["PromptContextBuilder", "SQLiteSessionStore", "SessionTurn"]
+__all__ = [
+    "PromptContextBuilder",
+    "SQLiteSessionStore",
+    "SessionRecord",
+    "SessionStatus",
+    "SessionTurn",
+]

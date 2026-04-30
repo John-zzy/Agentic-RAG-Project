@@ -6,11 +6,13 @@ from langchain_core.documents import Document
 from langchain_core.retrievers import BaseRetriever
 from pydantic import ConfigDict, Field
 
-from backend.knowledge._text_utils import truncate_snippet
-from backend.knowledge.store import VectorSearchResult
+from backend.knowledge.base.store import VectorSearchResult
+from backend.knowledge.base.text import truncate_snippet
 
 
 class KnowledgeBaseRetriever(BaseRetriever):
+    """将电商知识检索结果适配为 LangChain Retriever。"""
+
     knowledge_service: Any = Field(exclude=True)
     default_top_k: int = 5
     minimum_relevance: float = 0.18
@@ -24,7 +26,6 @@ class KnowledgeBaseRetriever(BaseRetriever):
     def search(self, query: str, top_k: int | None = None) -> list[Document]:
         """聚合商品与评论检索结果，排序去重后返回。"""
         requested_top_k = top_k or self.default_top_k
-
         product_results = self.knowledge_service.search_products(query=query, top_k=requested_top_k)
         review_results = self.knowledge_service.search_reviews(query=query, top_k=requested_top_k)
 
@@ -43,7 +44,6 @@ class KnowledgeBaseRetriever(BaseRetriever):
             deduped.append(doc)
             if len(deduped) >= requested_top_k:
                 break
-
         return deduped
 
     def _to_documents(self, namespace: str, results: list[VectorSearchResult]) -> list[Document]:
@@ -53,7 +53,6 @@ class KnowledgeBaseRetriever(BaseRetriever):
             score = float(result.score) if result.score is not None else None
             if score is not None and score < self.minimum_relevance:
                 continue
-
             metadata = result.document.metadata
             citation_id = str(
                 metadata.get("review_id")
@@ -64,15 +63,10 @@ class KnowledgeBaseRetriever(BaseRetriever):
             snippet = truncate_snippet(result.document.content)
             if not snippet:
                 continue
-
             documents.append(
                 Document(
                     page_content=snippet,
-                    metadata={
-                        "namespace": namespace,
-                        "citation_id": citation_id,
-                        "score": score,
-                    },
+                    metadata={"namespace": namespace, "citation_id": citation_id, "score": score},
                 )
             )
         return documents

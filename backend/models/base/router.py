@@ -8,6 +8,8 @@ TaskComplexity = Literal["simple", "moderate", "complex"]
 
 @dataclass(frozen=True)
 class RoutedModel:
+    """描述一次路由后的模型配置，供调用层直接消费。"""
+
     complexity: TaskComplexity
     provider: str
     model_name: str
@@ -39,6 +41,8 @@ class RoutedModel:
 
 
 class ModelRouter:
+    """维护复杂度到具体模型配置的选择逻辑。"""
+
     def __init__(self) -> None:
         """加载全局模型路由配置。"""
         self._config = settings.models
@@ -49,7 +53,7 @@ class ModelRouter:
         return RoutedModel.from_config(complexity, config)
 
     def route_by_complexity(self, complexity: TaskComplexity) -> RoutedModel:
-        """复杂度路由别名方法。"""
+        """复杂度路由的别名方法。"""
         return self.select(complexity)
 
 

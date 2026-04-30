@@ -4,7 +4,7 @@ import hashlib
 import math
 import re
 from abc import ABC, abstractmethod
-from typing import Any, cast, TypeVar
+from typing import Any, TypeVar, cast
 
 import chromadb
 from chromadb.api.models.Collection import Collection
@@ -14,7 +14,7 @@ from backend.config.settings import AppSettings, VectorNamespaceConfig, settings
 
 try:
     from elasticsearch import Elasticsearch
-except ModuleNotFoundError:  # pragma: no cover - exercised via injected fake client in tests
+except ModuleNotFoundError:  # pragma: no cover
     Elasticsearch = None  # type: ignore[assignment]
 
 
@@ -24,6 +24,8 @@ SUPPORTED_NAMESPACES = ("products", "reviews")
 
 
 class VectorStoreDocument(BaseModel):
+    """描述进入向量库的一条标准化文档。"""
+
     id: str
     content: str
     metadata: VectorMetadata = Field(default_factory=dict)
@@ -31,17 +33,23 @@ class VectorStoreDocument(BaseModel):
 
 
 class VectorSearchResult(BaseModel):
+    """描述一次向量检索命中的文档和得分。"""
+
     document: VectorStoreDocument
     score: float | None = None
 
 
 class VectorStoreHealth(BaseModel):
+    """描述向量后端可用性探活结果。"""
+
     provider: str
     available: bool
     detail: str | None = None
 
 
 class LocalHashingEmbedder:
+    """提供无外部依赖的本地哈希向量化实现。"""
+
     def __init__(self, dimensions: int = 256) -> None:
         """初始化本地哈希向量器的维度。"""
         self.dimensions = dimensions
@@ -87,6 +95,8 @@ class LocalHashingEmbedder:
 
 
 class VectorStore(ABC):
+    """统一抽象不同向量后端的能力接口。"""
+
     def __init__(self, app_settings: AppSettings) -> None:
         """初始化向量库基类配置与内置嵌入器。"""
         self.settings = app_settings
@@ -125,7 +135,6 @@ class VectorStore(ABC):
             raise ValueError(
                 f"Unsupported namespace '{namespace}'. Expected one of: {', '.join(SUPPORTED_NAMESPACES)}."
             )
-
         return cast(VectorNamespaceConfig, getattr(self.config, namespace))
 
     def build_embedding(self, text: str) -> list[float]:
@@ -147,6 +156,8 @@ VectorStoreType = TypeVar("VectorStoreType", bound=VectorStore)
 
 
 class ChromaVectorStore(VectorStore):
+    """Chroma 向量库实现。"""
+
     def __init__(self, app_settings: AppSettings) -> None:
         """初始化 Chroma 客户端与集合缓存。"""
         super().__init__(app_settings)
@@ -168,7 +179,6 @@ class ChromaVectorStore(VectorStore):
         collection = self._get_collection(namespace)
         if not documents:
             return
-
         ids = [document.id for document in documents]
         text_documents = [document.content for document in documents]
         metadatas = [self.normalize_metadata(document.metadata) for document in documents]
@@ -176,13 +186,7 @@ class ChromaVectorStore(VectorStore):
             document.embedding if document.embedding is not None else self.build_embedding(document.content)
             for document in documents
         ]
-
-        collection.upsert(
-            ids=ids,
-            documents=text_documents,
-            metadatas=metadatas,
-            embeddings=embeddings,
-        )
+        collection.upsert(ids=ids, documents=text_documents, metadatas=metadatas, embeddings=embeddings)
 
     def search(
         self,
@@ -199,7 +203,6 @@ class ChromaVectorStore(VectorStore):
             n_results=top_k or self.config.top_k,
             where=self.normalize_metadata(filters or {}) or None,
         )
-
         ids = query_result.get("ids", [[]])[0]
         documents = query_result.get("documents", [[]])[0]
         metadatas = query_result.get("metadatas", [[]])[0]
@@ -236,7 +239,6 @@ class ChromaVectorStore(VectorStore):
             self._client.list_collections()
         except Exception as exc:
             return VectorStoreHealth(provider="chroma", available=False, detail=str(exc))
-
         return VectorStoreHealth(provider="chroma", available=True)
 
     def _get_collection(self, namespace: str) -> Collection:
@@ -247,6 +249,8 @@ class ChromaVectorStore(VectorStore):
 
 
 class ElasticsearchVectorStore(VectorStore):
+    """Elasticsearch 向量库实现。"""
+
     def __init__(self, app_settings: AppSettings, client: Any | None = None) -> None:
         """初始化 Elasticsearch 客户端。"""
         super().__init__(app_settings)
@@ -261,19 +265,10 @@ class ElasticsearchVectorStore(VectorStore):
         """通过 bulk API 批量写入文档。"""
         if not documents:
             return
-
         index_name = self._ensure_index(namespace)
         operations: list[dict[str, Any]] = []
-
         for document in documents:
-            operations.append(
-                {
-                    "index": {
-                        "_index": index_name,
-                        "_id": document.id,
-                    }
-                }
-            )
+            operations.append({"index": {"_index": index_name, "_id": document.id}})
             operations.append(
                 {
                     "content": document.content,
@@ -282,7 +277,6 @@ class ElasticsearchVectorStore(VectorStore):
                     "namespace": namespace,
                 }
             )
-
         response = self._client.bulk(operations=operations, refresh=True)
         if response.get("errors"):
             raise RuntimeError(f"Elasticsearch bulk upsert failed: {response}")
@@ -303,16 +297,13 @@ class ElasticsearchVectorStore(VectorStore):
                     "query": self._build_filter_query(filters),
                     "script": {
                         "source": "cosineSimilarity(params.query_vector, 'embedding') + 1.0",
-                        "params": {
-                            "query_vector": self.build_embedding(query),
-                        },
+                        "params": {"query_vector": self.build_embedding(query)},
                     },
                 }
             },
             size=top_k or self.config.top_k,
             source=["content", "metadata", "namespace"],
         )
-
         results: list[VectorSearchResult] = []
         for hit in response.get("hits", {}).get("hits", []):
             source = hit.get("_source", {})
@@ -332,15 +323,10 @@ class ElasticsearchVectorStore(VectorStore):
         """通过 bulk delete 删除索引中的文档。"""
         if not ids:
             return
-
         index_name = self.resolve_index_name(namespace)
         if not self._client.indices.exists(index=index_name):
             return
-
-        operations = [
-            {"delete": {"_index": index_name, "_id": doc_id}}
-            for doc_id in ids
-        ]
+        operations = [{"delete": {"_index": index_name, "_id": doc_id}} for doc_id in ids]
         response = self._client.bulk(operations=operations, refresh=True)
         if response.get("errors"):
             failed = [
@@ -356,7 +342,6 @@ class ElasticsearchVectorStore(VectorStore):
             available = bool(self._client.ping())
         except Exception as exc:
             return VectorStoreHealth(provider="elasticsearch", available=False, detail=str(exc))
-
         detail = None if available else "Elasticsearch ping returned False."
         return VectorStoreHealth(provider="elasticsearch", available=available, detail=detail)
 
@@ -365,10 +350,8 @@ class ElasticsearchVectorStore(VectorStore):
         namespace_config = self.resolve_namespace_config(namespace)
         configured_name = namespace_config.index_name.strip()
         prefix = self.config.elasticsearch.index_prefix.strip("-")
-
         if prefix and configured_name in {namespace, namespace_config.collection_name}:
             return f"{prefix}-{configured_name}"
-
         return configured_name
 
     def _ensure_index(self, namespace: str) -> str:
@@ -376,27 +359,17 @@ class ElasticsearchVectorStore(VectorStore):
         index_name = self.resolve_index_name(namespace)
         if self._client.indices.exists(index=index_name):
             return index_name
-
         self._client.indices.create(
             index=index_name,
             mappings={
                 "properties": {
                     "content": {"type": "text"},
-                    "embedding": {
-                        "type": "dense_vector",
-                        "dims": self._embedder.dimensions,
-                        "index": False,
-                    },
-                    # Use flattened metadata so term filters like metadata.product_id
-                    # work reliably for arbitrary key/value pairs.
+                    "embedding": {"type": "dense_vector", "dims": self._embedder.dimensions, "index": False},
                     "metadata": {"type": "flattened"},
                     "namespace": {"type": "keyword"},
                 }
             },
-            settings={
-                "number_of_shards": 1,
-                "number_of_replicas": 0,
-            },
+            settings={"number_of_shards": 1, "number_of_replicas": 0},
         )
         return index_name
 
@@ -407,14 +380,12 @@ class ElasticsearchVectorStore(VectorStore):
                 "The 'elasticsearch' package is not installed. Install backend/requirements.txt "
                 "or inject a client when constructing ElasticsearchVectorStore."
             )
-
         elasticsearch_config = self.config.elasticsearch
         client_kwargs: dict[str, Any] = {
             "hosts": [elasticsearch_config.url],
             "verify_certs": elasticsearch_config.verify_certs,
             "request_timeout": elasticsearch_config.request_timeout_seconds,
         }
-
         if elasticsearch_config.api_key:
             client_kwargs["api_key"] = elasticsearch_config.api_key
         elif elasticsearch_config.username:
@@ -422,7 +393,6 @@ class ElasticsearchVectorStore(VectorStore):
                 elasticsearch_config.username,
                 elasticsearch_config.password or "",
             )
-
         return Elasticsearch(**client_kwargs)
 
     def _build_filter_query(self, filters: VectorMetadata | None) -> dict[str, Any]:
@@ -430,18 +400,12 @@ class ElasticsearchVectorStore(VectorStore):
         normalized_filters = self.normalize_metadata(filters or {})
         if not normalized_filters:
             return {"match_all": {}}
-
-        return {
-            "bool": {
-                "filter": [
-                    {"term": {f"metadata.{key}": value}}
-                    for key, value in normalized_filters.items()
-                ]
-            }
-        }
+        return {"bool": {"filter": [{"term": {f"metadata.{key}": value}} for key, value in normalized_filters.items()]}}
 
 
 class VectorStoreFactory:
+    """维护 provider 到具体向量库实现的注册关系。"""
+
     _registry: dict[str, type[VectorStore]] = {}
 
     @classmethod
@@ -455,13 +419,11 @@ class VectorStoreFactory:
         resolved_settings = app_settings or settings
         provider = resolved_settings.vector_store.provider
         store_cls = cls._registry.get(provider)
-
         if store_cls is None:
             raise NotImplementedError(
                 f"Vector store provider '{provider}' is not registered yet. "
                 "Implement the provider and register it with VectorStoreFactory.register()."
             )
-
         return store_cls(resolved_settings)
 
 

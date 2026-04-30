@@ -5,22 +5,26 @@ from typing import Any
 from pydantic import BaseModel
 
 from backend.config.settings import AppSettings, settings
-from backend.knowledge.extractor import build_product_document, build_review_document
-from backend.knowledge.store import (
+from backend.knowledge.base.store import (
     SUPPORTED_NAMESPACES,
     VectorSearchResult,
     VectorStore,
     VectorStoreDocument,
     VectorStoreFactory,
 )
+from backend.knowledge.ecommerce.extractor import build_product_document, build_review_document
 
 
 class KnowledgeUpsertSummary(BaseModel):
+    """描述单个命名空间的数据写入结果。"""
+
     namespace: str
     upserted: int
 
 
 class KnowledgeService:
+    """封装电商商品与评论知识库的业务入口。"""
+
     def __init__(
         self,
         app_settings: AppSettings | None = None,
@@ -29,7 +33,6 @@ class KnowledgeService:
         """初始化知识服务并确保向量库命名空间可用。"""
         self.settings = app_settings or settings
         self.store = store or VectorStoreFactory.create(self.settings)
-        # 统一在服务初始化时准备命名空间，避免调用方关心底层 collection/index 生命周期。
         self.store.ensure_collections()
 
     def search(
@@ -62,12 +65,12 @@ class KnowledgeService:
         return self.search(namespace="reviews", query=query, top_k=top_k, filters=filters)
 
     def upsert_products(self, products: list[dict[str, Any]]) -> KnowledgeUpsertSummary:
-        """批量写入/更新商品数据。"""
+        """批量写入或更新商品数据。"""
         documents = [build_product_document(product) for product in products]
         return self._upsert_documents("products", documents)
 
     def upsert_reviews(self, reviews: list[dict[str, Any]]) -> KnowledgeUpsertSummary:
-        """批量写入/更新评论数据。"""
+        """批量写入或更新评论数据。"""
         documents = [build_review_document(review) for review in reviews]
         return self._upsert_documents("reviews", documents)
 
@@ -83,7 +86,6 @@ class KnowledgeService:
     ) -> KnowledgeUpsertSummary:
         """执行统一的 upsert 流程并返回写入数量。"""
         self._validate_namespace(namespace)
-        # 增量更新对上层暴露统一语义，具体写入细节由不同后端实现自行处理。
         self.store.upsert_documents(namespace=namespace, documents=documents)
         return KnowledgeUpsertSummary(namespace=namespace, upserted=len(documents))
 

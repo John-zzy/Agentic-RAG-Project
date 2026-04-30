@@ -7,10 +7,10 @@ from uuid import uuid4
 import pytest
 
 from backend.config.settings import AppSettings, VectorStoreConfig
-from backend.knowledge.loader import preload_knowledge_base
-from backend.knowledge.store import ElasticsearchVectorStore, VectorStoreDocument, VectorStoreFactory
+from backend.knowledge.base.store import ElasticsearchVectorStore, VectorStoreDocument, VectorStoreFactory
+from backend.knowledge.ecommerce.loader import preload_knowledge_base
 from backend.tests.test_support import DATA_DIR
-import backend.knowledge.store as store_module
+import backend.knowledge.base.store as store_module
 
 
 class FakeElasticsearchIndicesClient:
