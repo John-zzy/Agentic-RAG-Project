@@ -1,6 +1,8 @@
 /openspec/
 /.codex/
 /.claude/
+AGENTS.md
+CLAUDE.md
 __pycache__/
 .idea
 .pytest_cache
