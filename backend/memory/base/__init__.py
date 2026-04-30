@@ -1,3 +1,4 @@
+from backend.memory.base.chat_history import SQLiteChatMessageHistory
 from backend.memory.base.session_store import (
     SQLiteSessionStore,
     SessionRecord,
@@ -6,6 +7,7 @@ from backend.memory.base.session_store import (
 )
 
 __all__ = [
+    "SQLiteChatMessageHistory",
     "SQLiteSessionStore",
     "SessionRecord",
     "SessionStatus",

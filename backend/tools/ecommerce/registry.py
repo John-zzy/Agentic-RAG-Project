@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from langchain_core.tools import BaseTool
+
 from backend.config.settings import AppSettings
-from backend.tools.base import AgentTool
 from backend.tools.ecommerce.commerce import build_commerce_tools
 from backend.tools.ecommerce.retrieval import build_retrieval_tools
 
@@ -12,7 +13,7 @@ from backend.tools.ecommerce.retrieval import build_retrieval_tools
 class ToolRegistration:
     """描述一个工具在注册表中的分组、白名单和暴露方式。"""
 
-    tool: AgentTool
+    tool: BaseTool
     group: str
     allowed_agents: tuple[str, ...]
     expose_via_mcp: bool = False
@@ -28,7 +29,7 @@ class ToolRegistry:
         """注册一个工具；同名工具会被后续注册覆盖。"""
         self._registrations[registration.tool.name] = registration
 
-    def get_tool(self, name: str) -> AgentTool:
+    def get_tool(self, name: str) -> BaseTool:
         """按工具名获取具体工具实例。"""
         return self._registrations[name].tool
 
@@ -73,7 +74,7 @@ def build_default_tool_registry(app_settings: AppSettings | None = None) -> Tool
     return registry
 
 
-def _build_commerce_registration(tool: AgentTool) -> ToolRegistration:
+def _build_commerce_registration(tool: BaseTool) -> ToolRegistration:
     """根据 commerce 工具名称生成默认分组和 Agent 白名单配置。"""
     if tool.name == "order_status_lookup":
         return ToolRegistration(

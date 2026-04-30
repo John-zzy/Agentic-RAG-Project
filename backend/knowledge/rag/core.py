@@ -1,21 +1,16 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any, Literal, Sequence
+from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from langchain_core.callbacks.manager import CallbackManagerForRetrieverRun
+from langchain_core.documents import Document
+from langchain_core.retrievers import BaseRetriever
+from langchain_core.runnables import RunnableConfig, RunnableSerializable
+from pydantic import BaseModel, ConfigDict, Field
 
 
 RetrievalNextAction = Literal["finish", "rewrite", "switch_tool", "ask_user"]
-
-
-class RetrievalRecord(BaseModel):
-    """描述一次检索命中的标准化记录，供不同检索工具统一返回。"""
-
-    record_id: str
-    content: str
-    score: float | None = None
-    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class RetrievalCitation(BaseModel):
@@ -28,16 +23,18 @@ class RetrievalCitation(BaseModel):
 
 
 class RetrievalResult(BaseModel):
-    """统一描述一次检索工具执行结果，屏蔽底层检索源实现差异。"""
+    """统一描述一次检索工具执行结果，兼容 LangChain Document 输出。"""
 
     tool_name: str
     query: str
-    success: bool
-    records: list[RetrievalRecord] = Field(default_factory=list)
+    documents: list[Document] = Field(default_factory=list)
     citations: list[RetrievalCitation] = Field(default_factory=list)
+    success: bool
     confidence: float | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
     error: str | None = None
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
 
     @classmethod
     def ok(
@@ -45,8 +42,8 @@ class RetrievalResult(BaseModel):
         *,
         tool_name: str,
         query: str,
-        records: Sequence[RetrievalRecord] | None = None,
-        citations: Sequence[RetrievalCitation] | None = None,
+        documents: list[Document] | None = None,
+        citations: list[RetrievalCitation] | None = None,
         confidence: float | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> "RetrievalResult":
@@ -54,9 +51,9 @@ class RetrievalResult(BaseModel):
         return cls(
             tool_name=tool_name,
             query=query,
-            success=True,
-            records=list(records or []),
+            documents=list(documents or []),
             citations=list(citations or []),
+            success=True,
             confidence=confidence,
             metadata=metadata or {},
         )
@@ -81,7 +78,7 @@ class RetrievalResult(BaseModel):
 
 
 class RetrievalPlan(BaseModel):
-    """描述一轮 Agentic Retrieval 的输入、状态和可选工具集合。"""
+    """描述当前检索轮次的输入、状态和可选工具集合。"""
 
     user_query: str
     active_query: str
@@ -101,7 +98,7 @@ class RetrievalPlan(BaseModel):
         selected_tool: str | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> "RetrievalPlan":
-        """基于当前计划生成下一轮检索计划，供编排器有界重试时复用。"""
+        """基于当前计划生成下一轮检索计划，供有界重试时复用。"""
         merged_metadata = dict(self.metadata)
         if metadata:
             merged_metadata.update(metadata)
@@ -137,44 +134,75 @@ class QueryRewrite(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
-class RetrievalTool(ABC):
-    """定义通用检索工具契约，使不同检索源可接入统一编排流程。"""
+class RetrievalContext(BaseModel):
+    """描述 Agentic Retrieval 当前状态，作为 LangChain runnable 的统一输入。"""
+
+    plan: RetrievalPlan
+    results: list[RetrievalResult] = Field(default_factory=list)
+    documents: list[Document] = Field(default_factory=list)
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+
+class RetrievalTool(BaseRetriever, ABC):
+    """定义 LangChain 风格的检索工具契约。"""
 
     name: str
     description: str
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
 
     def definition(self) -> dict[str, Any]:
         """返回工具元数据，便于注册表或编排器读取。"""
         return {"name": self.name, "description": self.description}
 
+    def _get_relevant_documents(
+        self,
+        query: str,
+        *,
+        run_manager: CallbackManagerForRetrieverRun,
+    ) -> list[Document]:
+        """适配 LangChain retriever 协议，直接返回 Document 列表。"""
+        return self.retrieve(query=query, run_manager=run_manager).documents
+
     @abstractmethod
-    def retrieve(self, plan: RetrievalPlan) -> RetrievalResult:
+    def retrieve(
+        self,
+        query: str,
+        *,
+        run_manager: CallbackManagerForRetrieverRun | None = None,
+    ) -> RetrievalResult:
         """执行具体检索逻辑，并返回标准化检索结果。"""
         raise NotImplementedError
 
 
-class SufficiencyJudge(ABC):
-    """定义证据充分性判断契约，隔离领域策略与编排流程。"""
+class SufficiencyJudge(RunnableSerializable[RetrievalContext, SufficiencyDecision], ABC):
+    """定义证据充分性判断契约，兼容 LangChain Runnable 调用约定。"""
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
 
     @abstractmethod
-    def judge(
+    def invoke(
         self,
-        plan: RetrievalPlan,
-        results: Sequence[RetrievalResult],
+        input: RetrievalContext,
+        config: RunnableConfig | None = None,
+        **kwargs: Any,
     ) -> SufficiencyDecision:
         """根据当前计划与累计结果判断是否继续检索。"""
         raise NotImplementedError
 
 
-class QueryRewriter(ABC):
-    """定义查询改写契约，用于证据不足时生成下一轮检索查询。"""
+class QueryRewriter(RunnableSerializable[RetrievalContext, QueryRewrite], ABC):
+    """定义查询改写契约，兼容 LangChain Runnable 调用约定。"""
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
 
     @abstractmethod
-    def rewrite(
+    def invoke(
         self,
-        plan: RetrievalPlan,
-        results: Sequence[RetrievalResult],
-        decision: SufficiencyDecision | None = None,
+        input: RetrievalContext,
+        config: RunnableConfig | None = None,
+        **kwargs: Any,
     ) -> QueryRewrite:
-        """根据当前计划、已有结果和判断结论生成改写查询。"""
+        """根据当前状态生成下一轮检索查询。"""
         raise NotImplementedError

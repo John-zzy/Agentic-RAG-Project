@@ -7,10 +7,11 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from langchain_core.tools import BaseTool
 from pydantic import BaseModel, Field
 
 from backend.config.settings import AppSettings, settings
-from backend.tools.base import AgentTool, ToolContext, ToolResult
+from backend.tools.base import ToolResult, build_structured_tool
 
 
 ORDERS_FILE_NAME = "orders.json"
@@ -114,173 +115,149 @@ class CommerceDataStore:
         )
 
 
-class OrderStatusLookupTool(AgentTool):
-    """查询订单当前状态和履约信息的基础工具。"""
+def _build_order_status_lookup_tool(store: CommerceDataStore) -> BaseTool:
+    """构建订单状态查询工具，供 LangChain Agent 直接调用。"""
 
-    name = "order_status_lookup"
-    description = "Look up the current status and fulfillment details for an order."
-    capability_type = "action"
-    input_model = OrderStatusLookupInput
-
-    def __init__(self, store: CommerceDataStore) -> None:
-        self.store = store
-
-    def invoke(
-        self,
-        tool_input: BaseModel | dict[str, Any],
-        context: ToolContext | None = None,
-    ) -> ToolResult:
+    def order_status_lookup(order_id: str) -> ToolResult:
         """根据订单号返回订单详情；未命中时返回标准失败结果。"""
-        payload = self.parse_input(tool_input)
-        order = self.store.find_order(payload.order_id)
+        order = store.find_order(order_id)
         if order is None:
             return ToolResult.fail(
-                tool_name=self.name,
-                error=f"Order '{payload.order_id}' was not found.",
+                tool_name="order_status_lookup",
+                error=f"Order '{order_id}' was not found.",
             )
         return ToolResult.ok(
-            tool_name=self.name,
+            tool_name="order_status_lookup",
             records=[order],
             confidence=1.0,
-            metadata={"agent_name": context.agent_name if context else None},
         )
+    return build_structured_tool(
+        name="order_status_lookup",
+        description="Look up the current status and fulfillment details for an order.",
+        capability_type="action",
+        args_schema=OrderStatusLookupInput,
+        func=order_status_lookup,
+    )
 
 
-class OrderAddressUpdateTool(AgentTool):
-    """修改订单收货地址的基础工具。"""
+def _build_order_address_update_tool(store: CommerceDataStore) -> BaseTool:
+    """构建订单地址修改工具，供 LangChain Agent 直接调用。"""
 
-    name = "order_address_update"
-    description = "Update the shipping address saved on an existing order."
-    capability_type = "action"
-    input_model = OrderAddressUpdateInput
-
-    def __init__(self, store: CommerceDataStore) -> None:
-        self.store = store
-
-    def invoke(
-        self,
-        tool_input: BaseModel | dict[str, Any],
-        context: ToolContext | None = None,
-    ) -> ToolResult:
+    def order_address_update(order_id: str, new_address: str) -> ToolResult:
         """更新指定订单的收货地址，并返回更新后的订单信息。"""
-        payload = self.parse_input(tool_input)
-        order = self.store.update_order_address(payload.order_id, payload.new_address)
+        order = store.update_order_address(order_id, new_address)
         if order is None:
             return ToolResult.fail(
-                tool_name=self.name,
-                error=f"Order '{payload.order_id}' was not found.",
+                tool_name="order_address_update",
+                error=f"Order '{order_id}' was not found.",
             )
         return ToolResult.ok(
-            tool_name=self.name,
+            tool_name="order_address_update",
             records=[order],
             confidence=0.95,
-            metadata={"updated_by_agent": context.agent_name if context else None},
         )
+    return build_structured_tool(
+        name="order_address_update",
+        description="Update the shipping address saved on an existing order.",
+        capability_type="action",
+        args_schema=OrderAddressUpdateInput,
+        func=order_address_update,
+    )
 
 
-class ReturnTicketCreateTool(AgentTool):
-    """创建退换货工单的基础工具。"""
+def _build_return_ticket_create_tool(store: CommerceDataStore) -> BaseTool:
+    """构建退换货工单工具，供 LangChain Agent 直接调用。"""
 
-    name = "return_ticket_create"
-    description = "Create a return or exchange service ticket for an order."
-    capability_type = "action"
-    input_model = ReturnTicketCreateInput
-
-    def __init__(self, store: CommerceDataStore) -> None:
-        self.store = store
-
-    def invoke(
-        self,
-        tool_input: BaseModel | dict[str, Any],
-        context: ToolContext | None = None,
-    ) -> ToolResult:
+    def return_ticket_create(order_id: str, reason: str, items: list[str]) -> ToolResult:
         """为指定订单创建退货工单，并附带关联订单状态。"""
-        payload = self.parse_input(tool_input)
-        order = self.store.find_order(payload.order_id)
+        order = store.find_order(order_id)
         if order is None:
             return ToolResult.fail(
-                tool_name=self.name,
-                error=f"Order '{payload.order_id}' was not found.",
+                tool_name="return_ticket_create",
+                error=f"Order '{order_id}' was not found.",
             )
 
-        ticket = self.store.create_service_ticket(
+        ticket = store.create_service_ticket(
             {
                 "ticket_id": f"RET-{uuid4().hex[:10]}",
                 "ticket_type": "return",
-                "order_id": payload.order_id,
-                "reason": payload.reason,
-                "items": payload.items,
+                "order_id": order_id,
+                "reason": reason,
+                "items": items,
                 "status": "open",
                 "created_at": _utc_now(),
-                "created_by_agent": context.agent_name if context else None,
             }
         )
         return ToolResult.ok(
-            tool_name=self.name,
+            tool_name="return_ticket_create",
             records=[ticket],
             confidence=0.9,
             metadata={"linked_order_status": order.get("status")},
         )
+    return build_structured_tool(
+        name="return_ticket_create",
+        description="Create a return or exchange service ticket for an order.",
+        capability_type="action",
+        args_schema=ReturnTicketCreateInput,
+        func=return_ticket_create,
+    )
 
 
-class ComplaintTicketCreateTool(AgentTool):
-    """创建投诉工单的基础工具。"""
+def _build_complaint_ticket_create_tool(store: CommerceDataStore) -> BaseTool:
+    """构建投诉工单工具，供 LangChain Agent 直接调用。"""
 
-    name = "complaint_ticket_create"
-    description = "Create a customer complaint ticket for order-related problems."
-    capability_type = "action"
-    input_model = ComplaintTicketCreateInput
-
-    def __init__(self, store: CommerceDataStore) -> None:
-        self.store = store
-
-    def invoke(
-        self,
-        tool_input: BaseModel | dict[str, Any],
-        context: ToolContext | None = None,
+    def complaint_ticket_create(
+        order_id: str,
+        message: str,
+        contact: str | None = None,
     ) -> ToolResult:
         """为指定订单创建投诉工单，并保留联系信息。"""
-        payload = self.parse_input(tool_input)
-        order = self.store.find_order(payload.order_id)
+        order = store.find_order(order_id)
         if order is None:
             return ToolResult.fail(
-                tool_name=self.name,
-                error=f"Order '{payload.order_id}' was not found.",
+                tool_name="complaint_ticket_create",
+                error=f"Order '{order_id}' was not found.",
             )
 
-        ticket = self.store.create_service_ticket(
+        ticket = store.create_service_ticket(
             {
                 "ticket_id": f"COM-{uuid4().hex[:10]}",
                 "ticket_type": "complaint",
-                "order_id": payload.order_id,
-                "message": payload.message,
-                "contact": payload.contact,
+                "order_id": order_id,
+                "message": message,
+                "contact": contact,
                 "status": "open",
                 "created_at": _utc_now(),
-                "created_by_agent": context.agent_name if context else None,
             }
         )
         return ToolResult.ok(
-            tool_name=self.name,
+            tool_name="complaint_ticket_create",
             records=[ticket],
             confidence=0.9,
             metadata={"linked_order_status": order.get("status")},
         )
+    return build_structured_tool(
+        name="complaint_ticket_create",
+        description="Create a customer complaint ticket for order-related problems.",
+        capability_type="action",
+        args_schema=ComplaintTicketCreateInput,
+        func=complaint_ticket_create,
+    )
 
 
 def build_commerce_tools(
     app_settings: AppSettings | None = None,
     *,
     store: CommerceDataStore | None = None,
-) -> tuple[AgentTool, ...]:
+) -> tuple[BaseTool, ...]:
     """按统一顺序构建订单与售后工具集合。"""
     current_settings = app_settings or settings
     data_store = store or CommerceDataStore(data_dir=current_settings.data_dir)
     return (
-        OrderStatusLookupTool(data_store),
-        OrderAddressUpdateTool(data_store),
-        ReturnTicketCreateTool(data_store),
-        ComplaintTicketCreateTool(data_store),
+        _build_order_status_lookup_tool(data_store),
+        _build_order_address_update_tool(data_store),
+        _build_return_ticket_create_tool(data_store),
+        _build_complaint_ticket_create_tool(data_store),
     )
 
 

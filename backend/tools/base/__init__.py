@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from abc import ABC, abstractmethod
 from typing import Any, Literal
 
+from langchain_core.tools import BaseTool, StructuredTool
 from pydantic import BaseModel, Field
 
 
@@ -66,37 +66,35 @@ class ToolResult(BaseModel):
             metadata=metadata or {},
         )
 
+def build_structured_tool(
+    *,
+    name: str,
+    description: str,
+    capability_type: ToolCapabilityType,
+    args_schema: type[BaseModel],
+    func: Any,
+) -> BaseTool:
+    """构建可被 LangChain 或 LangGraph 直接消费的 StructuredTool。"""
+    return StructuredTool.from_function(
+        func=func,
+        name=name,
+        description=description,
+        args_schema=args_schema,
+        metadata={"capability_type": capability_type},
+    )
 
-class AgentTool(ABC):
-    """所有 Agent 可调用工具的抽象基类，统一输入校验与元数据输出。"""
 
-    name: str
-    description: str
-    capability_type: ToolCapabilityType
-    input_model: type[BaseModel]
-
-    def parse_input(self, tool_input: BaseModel | dict[str, Any]) -> BaseModel:
-        """将原始输入标准化为工具声明的输入模型实例。"""
-        if isinstance(tool_input, self.input_model):
-            return tool_input
-        if isinstance(tool_input, BaseModel):
-            return self.input_model.model_validate(tool_input.model_dump())
-        return self.input_model.model_validate(tool_input)
-
-    def definition(self) -> dict[str, Any]:
-        """返回工具的注册定义，供注册表或协议适配层读取。"""
-        return {
-            "name": self.name,
-            "description": self.description,
-            "capability_type": self.capability_type,
-            "input_schema": self.input_model.model_json_schema(),
-        }
-
-    @abstractmethod
-    def invoke(
-        self,
-        tool_input: BaseModel | dict[str, Any],
-        context: ToolContext | None = None,
-    ) -> ToolResult:
-        """执行具体工具逻辑并返回统一的 ToolResult。"""
-        raise NotImplementedError
+def get_tool_definition(tool: BaseTool) -> dict[str, Any]:
+    """读取 LangChain tool 的注册信息，兼容现有注册表和协议适配层。"""
+    args_schema = getattr(tool, "args_schema", None)
+    input_schema = (
+        args_schema.model_json_schema()
+        if isinstance(args_schema, type) and issubclass(args_schema, BaseModel)
+        else None
+    )
+    return {
+        "name": tool.name,
+        "description": tool.description,
+        "capability_type": (tool.metadata or {}).get("capability_type"),
+        "input_schema": input_schema,
+    }

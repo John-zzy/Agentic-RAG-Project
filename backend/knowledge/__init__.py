@@ -23,18 +23,23 @@ from backend.knowledge.ecommerce import (
     preload_knowledge_base,
 )
 from backend.knowledge.rag import (
+    AgenticRetrievalOutcome,
+    AgenticRetriever,
     QueryRewrite,
     QueryRewriter,
+    RetrievalContext,
     RetrievalCitation,
     RetrievalPlan,
-    RetrievalRecord,
     RetrievalResult,
+    RetrievalRound,
     RetrievalTool,
     SufficiencyDecision,
     SufficiencyJudge,
 )
 
 __all__ = [
+    "AgenticRetrievalOutcome",
+    "AgenticRetriever",
     "ChromaVectorStore",
     "ElasticsearchVectorStore",
     "KnowledgeBaseRetriever",
@@ -44,10 +49,11 @@ __all__ = [
     "MAX_SNIPPET_LENGTH",
     "QueryRewrite",
     "QueryRewriter",
+    "RetrievalContext",
     "RetrievalCitation",
     "RetrievalPlan",
-    "RetrievalRecord",
     "RetrievalResult",
+    "RetrievalRound",
     "RetrievalTool",
     "SUPPORTED_NAMESPACES",
     "SufficiencyDecision",

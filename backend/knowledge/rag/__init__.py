@@ -1,11 +1,12 @@
 """Agentic Retrieval 通用抽象。"""
 
+from backend.knowledge.rag.agentic import AgenticRetrievalOutcome, AgenticRetriever, RetrievalRound
 from backend.knowledge.rag.core import (
     QueryRewrite,
     QueryRewriter,
+    RetrievalContext,
     RetrievalCitation,
     RetrievalPlan,
-    RetrievalRecord,
     RetrievalResult,
     RetrievalTool,
     SufficiencyDecision,
@@ -13,12 +14,15 @@ from backend.knowledge.rag.core import (
 )
 
 __all__ = [
+    "AgenticRetrievalOutcome",
+    "AgenticRetriever",
     "QueryRewrite",
     "QueryRewriter",
+    "RetrievalContext",
     "RetrievalCitation",
     "RetrievalPlan",
-    "RetrievalRecord",
     "RetrievalResult",
+    "RetrievalRound",
     "RetrievalTool",
     "SufficiencyDecision",
     "SufficiencyJudge",
