@@ -22,6 +22,17 @@ from backend.knowledge.ecommerce import (
     create_knowledge_service,
     preload_knowledge_base,
 )
+from backend.knowledge.rag import (
+    QueryRewrite,
+    QueryRewriter,
+    RetrievalCitation,
+    RetrievalPlan,
+    RetrievalRecord,
+    RetrievalResult,
+    RetrievalTool,
+    SufficiencyDecision,
+    SufficiencyJudge,
+)
 
 __all__ = [
     "ChromaVectorStore",
@@ -31,7 +42,16 @@ __all__ = [
     "KnowledgeService",
     "KnowledgeUpsertSummary",
     "MAX_SNIPPET_LENGTH",
+    "QueryRewrite",
+    "QueryRewriter",
+    "RetrievalCitation",
+    "RetrievalPlan",
+    "RetrievalRecord",
+    "RetrievalResult",
+    "RetrievalTool",
     "SUPPORTED_NAMESPACES",
+    "SufficiencyDecision",
+    "SufficiencyJudge",
     "VectorSearchResult",
     "VectorStore",
     "VectorStoreDocument",
