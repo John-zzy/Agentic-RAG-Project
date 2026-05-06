@@ -158,6 +158,10 @@ class VectorStore(ABC):
     def deactivate_document_chunks(self, document_id: str, document_version: int | None = None) -> None:
         """按文档 ID 停用分块，可限定具体版本。"""
 
+    @abstractmethod
+    def activate_document_chunks(self, document_id: str, document_version: int) -> None:
+        """按文档 ID 和版本恢复分块为活跃状态。"""
+
     def delete_document_chunks(self, chunk_ids: list[str]) -> None:
         """按分块 ID 删除新写入但未发布的文档分块。"""
         return None
@@ -300,6 +304,10 @@ class ChromaVectorStore(VectorStore):
 
     def deactivate_document_chunks(self, document_id: str, document_version: int | None = None) -> None:
         """Chroma MVP 暂不支持停用文档管理分块。"""
+        raise NotImplementedError("Chroma document management chunks are not implemented.")
+
+    def activate_document_chunks(self, document_id: str, document_version: int) -> None:
+        """Chroma MVP 暂不支持恢复文档管理分块。"""
         raise NotImplementedError("Chroma document management chunks are not implemented.")
 
     def delete_document_chunks(self, chunk_ids: list[str]) -> None:
@@ -518,6 +526,25 @@ class ElasticsearchVectorStore(VectorStore):
         )
         if response.get("failures"):
             raise RuntimeError(f"Elasticsearch deactivate chunks failed: {response}")
+
+    def activate_document_chunks(self, document_id: str, document_version: int) -> None:
+        """通过 update_by_query 恢复指定文档版本的分块活跃状态。"""
+        self.ensure_document_indexes()
+        response = self._client.update_by_query(
+            index=self.resolve_document_index_name("chunks"),
+            query={
+                "bool": {
+                    "filter": [
+                        {"term": {"document_id": document_id}},
+                        {"term": {"metadata.document_version": document_version}},
+                    ]
+                }
+            },
+            script={"source": "ctx._source.is_active = true; ctx._source.metadata.is_active = true"},
+            refresh=True,
+        )
+        if response.get("failures"):
+            raise RuntimeError(f"Elasticsearch activate chunks failed: {response}")
 
     def delete_document_chunks(self, chunk_ids: list[str]) -> None:
         """删除未发布成功的新分块，用于失败回滚清理。"""

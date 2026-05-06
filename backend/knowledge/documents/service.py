@@ -209,6 +209,7 @@ class KnowledgeDocumentService:
         except Exception as exc:
             if current_record is not None:
                 self._restore_current_record(current_record)
+                self._restore_current_chunks(current_record)
             else:
                 failed_record = self._mark_failed(record, document_version, str(exc))
                 try:
@@ -356,6 +357,18 @@ class KnowledgeDocumentService:
         """发布后失败时尽力恢复旧主记录，保持 active_version 与旧分块一致。"""
         try:
             self._call_store("restore document record", self.store.upsert_document_record, current_record)
+        except KnowledgeDocumentStoreError:
+            return None
+
+    def _restore_current_chunks(self, current_record: dict[str, object]) -> None:
+        """停用旧分块失败时尽力恢复旧版本分块活跃状态。"""
+        try:
+            self._call_store(
+                "restore document chunks",
+                self.store.activate_document_chunks,
+                str(current_record["document_id"]),
+                int(current_record["active_version"]),
+            )
         except KnowledgeDocumentStoreError:
             return None
 

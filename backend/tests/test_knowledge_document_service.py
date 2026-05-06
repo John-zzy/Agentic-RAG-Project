@@ -90,6 +90,14 @@ class InMemoryDocumentStore(VectorStore):
                 continue
             chunk["is_active"] = False
 
+    def activate_document_chunks(self, document_id: str, document_version: int) -> None:
+        for chunk in self.chunks.values():
+            if chunk.get("document_id") != document_id:
+                continue
+            if chunk.get("document_version") != document_version:
+                continue
+            chunk["is_active"] = True
+
     def delete_document_record(self, document_id: str) -> None:
         if document_id in self.documents:
             self.documents[document_id]["status"] = "deleted"
@@ -162,6 +170,7 @@ class FailsOnceOnDeactivateStore(InMemoryDocumentStore):
     def deactivate_document_chunks(self, document_id: str, document_version: int | None = None) -> None:
         if self.fail_next_deactivate:
             self.fail_next_deactivate = False
+            super().deactivate_document_chunks(document_id, document_version)
             raise RuntimeError("deactivate failed")
         super().deactivate_document_chunks(document_id, document_version)
 

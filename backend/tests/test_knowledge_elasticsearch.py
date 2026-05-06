@@ -120,11 +120,11 @@ class FakeElasticsearchClient:
         refresh: bool = True,
     ) -> dict[str, Any]:
         assert refresh is True
-        del script
+        active_value = "true" in script.get("source", "").lower()
         updated = 0
         for _, document in self._filter_documents(index, query):
-            document["is_active"] = False
-            document.setdefault("metadata", {})["is_active"] = False
+            document["is_active"] = active_value
+            document.setdefault("metadata", {})["is_active"] = active_value
             updated += 1
         return {"updated": updated, "failures": []}
 
@@ -314,6 +314,9 @@ def test_elasticsearch_store_supports_document_management_operations() -> None:
     store.deactivate_document_chunks("doc-1", document_version=1)
     chunks_index = store.resolve_document_index_name("chunks")
     assert fake_client.documents[chunks_index]["chunk-1"]["is_active"] is False
+
+    store.activate_document_chunks("doc-1", document_version=1)
+    assert fake_client.documents[chunks_index]["chunk-1"]["is_active"] is True
 
     store.delete_document_record("doc-1")
     assert store.get_document_record("doc-1") is None
