@@ -3,299 +3,1474 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>AI RAG API Tester</title>
+  <title>AI RAG Retrieval Lab</title>
   <style>
     :root {
-      --bg: #f4f6f8;
-      --card: #ffffff;
-      --text: #1f2937;
-      --muted: #6b7280;
-      --border: #d1d5db;
-      --brand: #0f766e;
-      --danger: #b91c1c;
+      --bg: #f5efe4;
+      --bg-accent: #efe2c8;
+      --panel: rgba(255, 251, 244, 0.88);
+      --panel-strong: #fffaf1;
+      --text: #1d1a16;
+      --muted: #6c6255;
+      --line: rgba(53, 39, 20, 0.14);
+      --line-strong: rgba(53, 39, 20, 0.28);
+      --brand: #0e7c66;
+      --brand-deep: #0a5f4f;
+      --accent: #d97706;
+      --danger: #b42318;
+      --shadow: 0 24px 60px rgba(63, 39, 10, 0.12);
+      --radius-xl: 28px;
+      --radius-lg: 20px;
+      --radius-md: 14px;
+      --radius-sm: 10px;
+      --mono: "Cascadia Code", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+      --body: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      --display: "Georgia", "Times New Roman", "Songti SC", serif;
     }
-    * { box-sizing: border-box; }
+
+    * {
+      box-sizing: border-box;
+    }
+
     body {
       margin: 0;
-      font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
-      background: var(--bg);
+      font-family: var(--body);
       color: var(--text);
+      background:
+        radial-gradient(circle at top left, rgba(14, 124, 102, 0.16), transparent 30%),
+        radial-gradient(circle at top right, rgba(217, 119, 6, 0.18), transparent 24%),
+        linear-gradient(180deg, var(--bg) 0%, #f7f2e8 48%, #f1e8d7 100%);
+      min-height: 100vh;
     }
-    .wrap {
-      max-width: 980px;
-      margin: 24px auto 48px;
-      padding: 0 16px;
+
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      opacity: 0.38;
+      background-image:
+        linear-gradient(rgba(29, 26, 22, 0.025) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(29, 26, 22, 0.025) 1px, transparent 1px);
+      background-size: 26px 26px;
+      mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.7), transparent 92%);
     }
-    h1 { margin: 0 0 12px; font-size: 28px; }
-    .hint { margin: 0 0 18px; color: var(--muted); }
-    .card {
-      background: var(--card);
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      padding: 16px;
+
+    .shell {
+      max-width: 1480px;
+      margin: 0 auto;
+      padding: 28px 20px 40px;
+    }
+
+    .hero {
+      position: relative;
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: 32px;
+      background:
+        linear-gradient(135deg, rgba(255, 250, 241, 0.96), rgba(247, 239, 225, 0.88)),
+        var(--panel);
+      box-shadow: var(--shadow);
+      padding: 28px;
+      margin-bottom: 18px;
+    }
+
+    .hero::after {
+      content: "";
+      position: absolute;
+      right: -32px;
+      top: -32px;
+      width: 180px;
+      height: 180px;
+      border-radius: 50%;
+      background: radial-gradient(circle, rgba(14, 124, 102, 0.18), transparent 70%);
+      pointer-events: none;
+    }
+
+    .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
       margin-bottom: 14px;
+      padding: 7px 12px;
+      border: 1px solid rgba(14, 124, 102, 0.18);
+      border-radius: 999px;
+      background: rgba(14, 124, 102, 0.08);
+      color: var(--brand-deep);
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
     }
+
+    .hero-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.4fr) minmax(320px, 0.95fr);
+      gap: 22px;
+      align-items: end;
+    }
+
+    h1 {
+      margin: 0 0 12px;
+      font-family: var(--display);
+      font-size: clamp(34px, 5vw, 56px);
+      line-height: 0.95;
+      letter-spacing: -0.04em;
+    }
+
+    .hero p {
+      margin: 0;
+      max-width: 760px;
+      color: var(--muted);
+      line-height: 1.65;
+      font-size: 15px;
+    }
+
+    .hero-stats {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .stat {
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      padding: 16px;
+      background: rgba(255, 255, 255, 0.6);
+      backdrop-filter: blur(12px);
+    }
+
+    .stat-label {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+      margin-bottom: 6px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+
+    .stat-value {
+      font-size: 22px;
+      font-weight: 700;
+      word-break: break-word;
+    }
+
+    .stat-note {
+      margin-top: 6px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.5;
+    }
+
+    .layout {
+      display: grid;
+      grid-template-columns: minmax(360px, 470px) minmax(0, 1fr);
+      gap: 18px;
+      align-items: start;
+    }
+
+    .stack {
+      display: grid;
+      gap: 18px;
+    }
+
+    .panel {
+      border: 1px solid var(--line);
+      border-radius: var(--radius-xl);
+      background: var(--panel);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(20px);
+      overflow: hidden;
+    }
+
+    .panel-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 14px;
+      padding: 18px 20px 0;
+    }
+
+    .panel-title {
+      margin: 0;
+      font-size: 19px;
+      font-family: var(--display);
+      letter-spacing: -0.02em;
+    }
+
+    .panel-subtitle {
+      margin: 6px 0 0;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.55;
+    }
+
+    .panel-body {
+      padding: 18px 20px 20px;
+    }
+
+    .grid-2 {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+    }
+
     .row {
       display: flex;
       flex-wrap: wrap;
       gap: 10px;
       align-items: center;
-      margin-bottom: 10px;
     }
-    label { min-width: 86px; font-weight: 600; }
-    input, textarea {
+
+    .field {
+      display: grid;
+      gap: 8px;
+      margin-bottom: 14px;
+    }
+
+    .field.inline-grow {
+      margin-bottom: 0;
+      flex: 1;
+      min-width: 210px;
+    }
+
+    .field-label {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    .field-note {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 500;
+    }
+
+    input,
+    textarea {
       width: 100%;
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      padding: 8px 10px;
+      border: 1px solid rgba(53, 39, 20, 0.16);
+      border-radius: 14px;
+      padding: 12px 14px;
+      background: rgba(255, 255, 255, 0.85);
+      color: var(--text);
+      font-size: 14px;
+      transition: border-color 140ms ease, box-shadow 140ms ease, transform 140ms ease;
+    }
+
+    input:focus,
+    textarea:focus {
+      outline: none;
+      border-color: rgba(14, 124, 102, 0.44);
+      box-shadow: 0 0 0 4px rgba(14, 124, 102, 0.1);
+      transform: translateY(-1px);
+    }
+
+    textarea {
+      min-height: 132px;
+      resize: vertical;
+      font-family: var(--mono);
+      line-height: 1.6;
+    }
+
+    button {
+      appearance: none;
+      border: 0;
+      border-radius: 999px;
+      padding: 12px 16px;
+      font-size: 13px;
+      font-weight: 700;
+      cursor: pointer;
+      color: #fff;
+      background: linear-gradient(135deg, var(--brand), var(--brand-deep));
+      box-shadow: 0 14px 32px rgba(14, 124, 102, 0.18);
+      transition: transform 140ms ease, box-shadow 140ms ease, opacity 140ms ease;
+    }
+
+    button:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 18px 38px rgba(14, 124, 102, 0.24);
+    }
+
+    button:active {
+      transform: translateY(0);
+    }
+
+    button.secondary {
+      color: var(--brand-deep);
+      background: rgba(14, 124, 102, 0.08);
+      box-shadow: none;
+      border: 1px solid rgba(14, 124, 102, 0.18);
+    }
+
+    button.secondary:hover {
+      box-shadow: none;
+      background: rgba(14, 124, 102, 0.14);
+    }
+
+    button.accent {
+      background: linear-gradient(135deg, #e08b14, #c16807);
+      box-shadow: 0 14px 32px rgba(217, 119, 6, 0.22);
+    }
+
+    button.danger {
+      background: linear-gradient(135deg, #cf3d2f, var(--danger));
+      box-shadow: 0 14px 32px rgba(180, 35, 24, 0.18);
+    }
+
+    .chip-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+
+    .scenario-button,
+    .followup-button {
+      width: 100%;
+      text-align: left;
+      border-radius: 18px;
+      padding: 14px 15px;
+      background: rgba(255, 255, 255, 0.72);
+      border: 1px solid var(--line);
+      box-shadow: none;
+      color: var(--text);
+    }
+
+    .scenario-button:hover,
+    .followup-button:hover {
+      box-shadow: none;
+      background: rgba(255, 255, 255, 0.96);
+    }
+
+    .scenario-button strong,
+    .followup-button strong {
+      display: block;
+      margin-bottom: 4px;
       font-size: 14px;
     }
-    textarea {
-      min-height: 92px;
-      resize: vertical;
-      font-family: Consolas, "Courier New", monospace;
+
+    .scenario-button span,
+    .followup-button span {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.5;
+      font-weight: 500;
     }
-    .field { flex: 1; min-width: 240px; }
-    button {
-      border: 1px solid var(--brand);
-      background: var(--brand);
-      color: #fff;
-      border-radius: 6px;
-      padding: 8px 14px;
-      font-weight: 600;
-      cursor: pointer;
+
+    .followup-grid {
+      display: grid;
+      gap: 10px;
+      margin-top: 14px;
     }
-    button.secondary {
-      background: #fff;
-      color: var(--brand);
+
+    .token-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-bottom: 14px;
     }
-    button.danger {
-      border-color: var(--danger);
-      background: var(--danger);
+
+    .token {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      min-height: 38px;
+      padding: 8px 12px;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.76);
+      border: 1px solid var(--line);
+      font-size: 12px;
+      line-height: 1.5;
     }
-    .output {
-      background: #111827;
-      color: #d1fae5;
-      border-radius: 8px;
+
+    .token b {
+      font-weight: 800;
+      color: var(--brand-deep);
+    }
+
+    .token code {
+      font-family: var(--mono);
+      color: var(--text);
+      font-size: 12px;
+    }
+
+    .status-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 7px 11px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+
+    .status-ok {
+      color: #0a604e;
+      background: rgba(14, 124, 102, 0.14);
+    }
+
+    .status-bad {
+      color: #8e2115;
+      background: rgba(180, 35, 24, 0.12);
+    }
+
+    .status-warn {
+      color: #8f5301;
+      background: rgba(217, 119, 6, 0.14);
+    }
+
+    .answer-box {
+      position: relative;
+      border: 1px solid rgba(14, 124, 102, 0.18);
+      border-radius: 22px;
+      padding: 18px;
+      background:
+        linear-gradient(180deg, rgba(14, 124, 102, 0.08), rgba(255, 255, 255, 0.84)),
+        var(--panel-strong);
+      min-height: 184px;
+    }
+
+    .answer-label,
+    .section-label {
+      display: inline-flex;
+      margin-bottom: 10px;
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+
+    .answer-text {
+      margin: 0;
+      font-size: 15px;
+      line-height: 1.78;
+      white-space: pre-wrap;
+    }
+
+    .placeholder {
+      color: var(--muted);
+      font-style: italic;
+    }
+
+    .metadata-grid,
+    .citations-grid,
+    .timeline {
+      display: grid;
+      gap: 12px;
+    }
+
+    .metadata-grid {
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      margin-top: 16px;
+    }
+
+    .meta-card {
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      padding: 14px;
+      background: rgba(255, 255, 255, 0.72);
+    }
+
+    .meta-card .label {
+      display: block;
+      margin-bottom: 8px;
+      color: var(--muted);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+
+    .meta-card .value {
+      display: block;
+      font-weight: 700;
+      font-size: 14px;
+      line-height: 1.55;
+      word-break: break-word;
+    }
+
+    .citations-grid {
+      margin-top: 14px;
+    }
+
+    .citation-card,
+    .turn-card,
+    .log-card {
+      border: 1px solid var(--line);
+      border-radius: 20px;
+      padding: 16px;
+      background: rgba(255, 255, 255, 0.74);
+    }
+
+    .citation-meta,
+    .turn-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+
+    .mini-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 10px;
+      border-radius: 999px;
+      background: rgba(14, 124, 102, 0.08);
+      color: var(--brand-deep);
+      font-size: 11px;
+      font-weight: 700;
+    }
+
+    .snippet {
+      margin: 0;
+      color: var(--text);
+      line-height: 1.7;
+      white-space: pre-wrap;
+    }
+
+    .timeline {
+      margin-top: 14px;
+    }
+
+    .turn-card {
+      position: relative;
+      overflow: hidden;
+    }
+
+    .turn-card::before {
+      content: "";
+      position: absolute;
+      inset: 0 auto 0 0;
+      width: 5px;
+      background: linear-gradient(180deg, rgba(14, 124, 102, 0.6), rgba(217, 119, 6, 0.4));
+    }
+
+    .turn-role {
+      margin: 0 0 8px;
+      font-size: 12px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--muted);
+      font-weight: 700;
+    }
+
+    .turn-text {
+      margin: 0;
+      line-height: 1.72;
+      white-space: pre-wrap;
+    }
+
+    .turn-block + .turn-block {
+      margin-top: 14px;
+      padding-top: 14px;
+      border-top: 1px dashed rgba(53, 39, 20, 0.14);
+    }
+
+    .snippet-list {
+      display: grid;
+      gap: 10px;
+      margin-top: 12px;
+    }
+
+    .snippet-item {
+      border: 1px dashed rgba(53, 39, 20, 0.18);
+      border-radius: 14px;
       padding: 12px;
-      overflow: auto;
-      min-height: 180px;
+      background: rgba(255, 250, 244, 0.84);
+    }
+
+    .snippet-item pre,
+    .log-body {
+      margin: 0;
       white-space: pre-wrap;
       word-break: break-word;
-      font-size: 13px;
-      line-height: 1.45;
-      font-family: Consolas, "Courier New", monospace;
+      font-family: var(--mono);
+      line-height: 1.7;
+      font-size: 12px;
     }
-    .small { color: var(--muted); font-size: 12px; }
+
+    .log-card {
+      background: #1b1712;
+      border-color: rgba(255, 255, 255, 0.06);
+      color: #f6e6c4;
+    }
+
+    .log-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 10px;
+      color: #cdb78a;
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+
+    .empty-state {
+      border: 1px dashed rgba(53, 39, 20, 0.2);
+      border-radius: 18px;
+      padding: 18px;
+      color: var(--muted);
+      background: rgba(255, 255, 255, 0.48);
+      line-height: 1.7;
+    }
+
+    .footer-note {
+      margin-top: 12px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.6;
+    }
+
+    .session-actions,
+    .request-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+
+    .mono {
+      font-family: var(--mono);
+    }
+
+    @media (max-width: 1180px) {
+      .layout,
+      .hero-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .metadata-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+    }
+
+    @media (max-width: 720px) {
+      .shell {
+        padding: 18px 14px 28px;
+      }
+
+      .hero,
+      .panel-body {
+        padding-left: 16px;
+        padding-right: 16px;
+      }
+
+      .panel-head {
+        padding-left: 16px;
+        padding-right: 16px;
+      }
+
+      .grid-2,
+      .metadata-grid,
+      .hero-stats {
+        grid-template-columns: 1fr;
+      }
+
+      h1 {
+        font-size: 38px;
+      }
+    }
   </style>
 </head>
 <body>
-  <div class="wrap">
-    <h1>AI RAG API 测试页</h1>
-    <p class="hint">
-      先启动后端：<code>python backend/run.py</code>，然后访问：
-      <code>/frontend/api-tester.html</code>
-    </p>
-
-    <div class="card">
-      <div class="row">
-        <label for="baseUrl">Base URL</label>
-        <div class="field">
-          <input id="baseUrl" type="text" value="" />
+  <div class="shell">
+    <section class="hero">
+      <div class="eyebrow">Manual Retrieval Verification</div>
+      <div class="hero-grid">
+        <div>
+          <h1>AI RAG 检索实验台</h1>
+          <p>
+            这个测试页针对知识检索与 Agentic RAG 手工验证重做。左侧负责发起场景、切会话、连续追问；
+            右侧把 <span class="mono">answer / knowledge_used / citations / session_id</span> 和会话历史拆开渲染，
+            不再只看一坨 JSON。后端启动后访问 <span class="mono">/frontend/api-tester.html</span> 即可使用。
+          </p>
         </div>
-        <button class="secondary" id="useCurrentOrigin">使用当前域名</button>
-      </div>
-      <div class="small">默认会填充当前页面域名（例如 http://127.0.0.1:8000）</div>
-    </div>
-
-    <div class="card">
-      <h3>/health</h3>
-      <div class="row">
-        <button id="btnHealth">GET /health</button>
-      </div>
-    </div>
-
-    <div class="card">
-      <h3>/sessions</h3>
-      <div class="row">
-        <button id="btnCreateSession">POST /sessions</button>
-      </div>
-      <div class="row">
-        <label for="sessionId">session_id</label>
-        <div class="field">
-          <input id="sessionId" type="text" placeholder="点击创建会话后会自动填充" />
-        </div>
-      </div>
-      <div class="row">
-        <label for="limit">limit</label>
-        <div class="field">
-          <input id="limit" type="number" min="1" max="100" value="20" />
+        <div class="hero-stats">
+          <div class="stat">
+            <span class="stat-label">当前会话</span>
+            <div class="stat-value" id="heroSession">未创建</div>
+            <div class="stat-note">发送聊天后会自动接管最新 session_id。</div>
+          </div>
+          <div class="stat">
+            <span class="stat-label">最近状态</span>
+            <div class="stat-value" id="heroStatus">待调用</div>
+            <div class="stat-note" id="heroStatusNote">可先点健康检查确认 API 可用。</div>
+          </div>
+          <div class="stat">
+            <span class="stat-label">知识命中</span>
+            <div class="stat-value" id="heroKnowledge">-</div>
+            <div class="stat-note">显示最近一次 /chat 是否使用知识库结果。</div>
+          </div>
+          <div class="stat">
+            <span class="stat-label">会话轮数</span>
+            <div class="stat-value" id="heroTurns">0</div>
+            <div class="stat-note">刷新会话详情后会显示最近获取到的总轮数。</div>
+          </div>
         </div>
       </div>
-      <div class="row">
-        <button id="btnGetSession" class="secondary">GET /sessions/{session_id}</button>
-        <button id="btnDeleteSession" class="danger">DELETE /sessions/{session_id}</button>
-      </div>
-    </div>
+    </section>
 
-    <div class="card">
-      <h3>/chat</h3>
-      <div class="row">
-        <label for="message">message</label>
-        <div class="field">
-          <textarea id="message" placeholder="输入你要测试的问题">hello</textarea>
-        </div>
-      </div>
-      <div class="row">
-        <label for="topK">top_k</label>
-        <div class="field">
-          <input id="topK" type="number" min="1" max="20" placeholder="可选，1~20" />
-        </div>
-      </div>
-      <div class="row">
-        <button id="btnChat">POST /chat</button>
-      </div>
-      <div class="small">会自动带上当前 session_id（如果有）。</div>
-    </div>
+    <div class="layout">
+      <div class="stack">
+        <section class="panel">
+          <div class="panel-head">
+            <div>
+              <h2 class="panel-title">环境与入口</h2>
+              <p class="panel-subtitle">Base URL、健康检查和当前会话状态集中放在这里。</p>
+            </div>
+            <div id="healthBadge" class="status-pill status-warn">未检查</div>
+          </div>
+          <div class="panel-body">
+            <div class="field">
+              <div class="field-label">
+                <span>Base URL</span>
+                <span class="field-note">默认自动填当前页面 origin</span>
+              </div>
+              <input id="baseUrl" type="text" placeholder="例如 http://127.0.0.1:8000" />
+            </div>
+            <div class="row">
+              <button id="useCurrentOrigin" class="secondary">使用当前域名</button>
+              <button id="btnHealth">GET /health</button>
+            </div>
+            <div class="token-list">
+              <div class="token"><b>Session</b><code id="currentSessionToken">未设置</code></div>
+              <div class="token"><b>Request</b><code id="currentRequestToken">暂无</code></div>
+            </div>
+          </div>
+        </section>
 
-    <div class="card">
-      <h3>响应输出</h3>
-      <div class="row">
-        <button class="secondary" id="btnClear">清空输出</button>
+        <section class="panel">
+          <div class="panel-head">
+            <div>
+              <h2 class="panel-title">预置 RAG 场景</h2>
+              <p class="panel-subtitle">点击即填充 message 与建议的 top_k，用于快速验证不同检索路径。</p>
+            </div>
+          </div>
+          <div class="panel-body">
+            <div class="grid-2" id="scenarioGrid">
+              <button
+                type="button"
+                class="scenario-button"
+                data-message="帮我推荐一款续航比较强、适合日常通勤的手机，并说明推荐理由。"
+                data-top-k="4"
+              >
+                <strong>商品推荐</strong>
+                <span>测试综合商品召回、摘要回答和推荐理由组织。</span>
+              </button>
+              <button
+                type="button"
+                class="scenario-button"
+                data-message="有没有用户评价能证明这款手机的续航确实不错？请引用具体评价内容。"
+                data-top-k="6"
+              >
+                <strong>评价证据</strong>
+                <span>测试评论类知识命中、引用片段和 evidence-based answer。</span>
+              </button>
+              <button
+                type="button"
+                class="scenario-button"
+                data-message="帮我查一下 P001 现在还有没有库存，如果没有请告诉我可替代的商品。"
+                data-top-k="5"
+              >
+                <strong>库存查询</strong>
+                <span>测试结构化商品字段、缺货回答和替代品检索。</span>
+              </button>
+              <button
+                type="button"
+                class="scenario-button"
+                data-message="请介绍一下 P002 的核心卖点、适合人群和关键参数。"
+                data-top-k="4"
+              >
+                <strong>商品详情</strong>
+                <span>测试单商品详情召回、参数归纳和答复完整性。</span>
+              </button>
+            </div>
+
+            <div class="followup-grid">
+              <div class="section-label">连续对话快捷追问</div>
+              <button
+                type="button"
+                class="followup-button"
+                data-message="如果预算再低一点，有没有更划算的替代选择？"
+                data-top-k="4"
+              >
+                <strong>预算追问</strong>
+                <span>适合在推荐后继续测试会话延续和条件变化。</span>
+              </button>
+              <button
+                type="button"
+                class="followup-button"
+                data-message="把刚才的结论用引用证据再证明一次，并指出你引用了哪些片段。"
+                data-top-k="6"
+              >
+                <strong>证据追问</strong>
+                <span>适合验证同一 session 中二次检索和引用一致性。</span>
+              </button>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <div>
+              <h2 class="panel-title">会话与请求控制</h2>
+              <p class="panel-subtitle">把新建会话、查看历史、删除会话和发送聊天放在同一工作流里。</p>
+            </div>
+          </div>
+          <div class="panel-body">
+            <div class="grid-2">
+              <div class="field">
+                <div class="field-label">
+                  <span>session_id</span>
+                  <span class="field-note">为空时 /chat 会让后端自动生成</span>
+                </div>
+                <input id="sessionId" type="text" placeholder="例如 4d28... 或留空创建新会话" />
+              </div>
+              <div class="field">
+                <div class="field-label">
+                  <span>会话读取条数</span>
+                  <span class="field-note">GET /sessions 的 limit</span>
+                </div>
+                <input id="limit" type="number" min="1" max="100" value="20" />
+              </div>
+            </div>
+
+            <div class="session-actions">
+              <button id="btnCreateSession" class="secondary">POST /sessions</button>
+              <button id="btnGetSession" class="secondary">刷新会话历史</button>
+              <button id="btnClearSession" class="secondary">清空 session_id</button>
+              <button id="btnDeleteSession" class="danger">DELETE /sessions/{id}</button>
+            </div>
+
+            <div class="field" style="margin-top: 18px;">
+              <div class="field-label">
+                <span>message</span>
+                <span class="field-note">适合直接粘贴复杂问题、复现实验脚本或多条件追问</span>
+              </div>
+              <textarea id="message">帮我推荐一款续航比较强、适合日常通勤的手机，并说明推荐理由。</textarea>
+            </div>
+
+            <div class="grid-2">
+              <div class="field">
+                <div class="field-label">
+                  <span>top_k</span>
+                  <span class="field-note">可选，范围 1~20</span>
+                </div>
+                <input id="topK" type="number" min="1" max="20" value="4" />
+              </div>
+              <div class="field">
+                <div class="field-label">
+                  <span>当前策略</span>
+                  <span class="field-note">用于提醒当前消息会落到哪个会话</span>
+                </div>
+                <input id="messageMode" type="text" value="沿用当前 session；为空则新建" readonly />
+              </div>
+            </div>
+
+            <div class="request-actions">
+              <button id="btnChat">发送到当前会话</button>
+              <button id="btnFreshChat" class="accent">新建会话后发送</button>
+              <button id="btnClearAnswer" class="secondary">清空结果区</button>
+              <button id="btnClearLog" class="secondary">清空调试日志</button>
+            </div>
+
+            <p class="footer-note">
+              建议的完整会话测试方式：先点一个预置场景，发送首问；再点“连续对话快捷追问”之一，继续发送到同一 session；
+              右侧会同步刷新最近会话时间线，方便核对多轮上下文是否生效。
+            </p>
+          </div>
+        </section>
       </div>
-      <div id="output" class="output"></div>
+
+      <div class="stack">
+        <section class="panel">
+          <div class="panel-head">
+            <div>
+              <h2 class="panel-title">最新 Chat 响应</h2>
+              <p class="panel-subtitle">将核心回答、知识命中状态和引用片段结构化展示。</p>
+            </div>
+            <div id="chatStatusBadge" class="status-pill status-warn">等待 /chat</div>
+          </div>
+          <div class="panel-body">
+            <div class="answer-box">
+              <div class="answer-label">Answer</div>
+              <p id="answerText" class="answer-text placeholder">发送 /chat 后，这里会显示后端返回的最终 answer。</p>
+            </div>
+
+            <div class="metadata-grid" id="metadataGrid">
+              <div class="meta-card">
+                <span class="label">Session ID</span>
+                <span class="value" id="metaSession">-</span>
+              </div>
+              <div class="meta-card">
+                <span class="label">Request ID</span>
+                <span class="value" id="metaRequest">-</span>
+              </div>
+              <div class="meta-card">
+                <span class="label">Knowledge Used</span>
+                <span class="value" id="metaKnowledge">-</span>
+              </div>
+              <div class="meta-card">
+                <span class="label">Citations</span>
+                <span class="value" id="metaCitations">0</span>
+              </div>
+            </div>
+
+            <div style="margin-top: 18px;">
+              <div class="section-label">Citations</div>
+              <div id="citationsList" class="citations-grid">
+                <div class="empty-state">当前还没有引用片段。若 `knowledge_used = false`，通常意味着这次回答没有命中足够知识库内容。</div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <div>
+              <h2 class="panel-title">会话时间线</h2>
+              <p class="panel-subtitle">展示 `/sessions/{session_id}` 的 turn 列表，核对多轮上下文和 retrieval_snippets 是否写入。</p>
+            </div>
+            <div id="timelineBadge" class="status-pill status-warn">未读取</div>
+          </div>
+          <div class="panel-body">
+            <div id="timelineSummary" class="token-list">
+              <div class="token"><b>Session</b><code>暂无</code></div>
+              <div class="token"><b>Total Turns</b><code>0</code></div>
+            </div>
+            <div id="timelineList" class="timeline">
+              <div class="empty-state">当前还没有会话时间线。创建会话后发送聊天，或手动点击“刷新会话历史”。</div>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <div>
+              <h2 class="panel-title">原始请求 / 响应日志</h2>
+              <p class="panel-subtitle">保留完整 request、status 和 payload，便于排查字段缺失或错误码。</p>
+            </div>
+          </div>
+          <div class="panel-body">
+            <div class="request-actions" style="margin-bottom: 14px;">
+              <button id="btnClear" class="secondary">清空全部日志</button>
+            </div>
+            <div id="logList" class="timeline">
+              <div class="empty-state">尚无日志。任意 API 调用都会在这里追加调试记录。</div>
+            </div>
+          </div>
+        </section>
+      </div>
     </div>
   </div>
 
   <script>
-    const outputEl = document.getElementById("output");
-    const baseUrlEl = document.getElementById("baseUrl");
-    const sessionIdEl = document.getElementById("sessionId");
-    const limitEl = document.getElementById("limit");
-    const messageEl = document.getElementById("message");
-    const topKEl = document.getElementById("topK");
+    const state = {
+      logs: [],
+      lastChatResponse: null,
+      lastSessionDetail: null,
+      lastStatus: "待调用"
+    };
+
+    const outputRefs = {
+      baseUrl: document.getElementById("baseUrl"),
+      sessionId: document.getElementById("sessionId"),
+      limit: document.getElementById("limit"),
+      message: document.getElementById("message"),
+      topK: document.getElementById("topK"),
+      healthBadge: document.getElementById("healthBadge"),
+      chatStatusBadge: document.getElementById("chatStatusBadge"),
+      timelineBadge: document.getElementById("timelineBadge"),
+      answerText: document.getElementById("answerText"),
+      citationsList: document.getElementById("citationsList"),
+      logList: document.getElementById("logList"),
+      metaSession: document.getElementById("metaSession"),
+      metaRequest: document.getElementById("metaRequest"),
+      metaKnowledge: document.getElementById("metaKnowledge"),
+      metaCitations: document.getElementById("metaCitations"),
+      currentSessionToken: document.getElementById("currentSessionToken"),
+      currentRequestToken: document.getElementById("currentRequestToken"),
+      timelineSummary: document.getElementById("timelineSummary"),
+      timelineList: document.getElementById("timelineList"),
+      heroSession: document.getElementById("heroSession"),
+      heroStatus: document.getElementById("heroStatus"),
+      heroStatusNote: document.getElementById("heroStatusNote"),
+      heroKnowledge: document.getElementById("heroKnowledge"),
+      heroTurns: document.getElementById("heroTurns")
+    };
 
     function now() {
-      return new Date().toLocaleString();
+      return new Date().toLocaleString("zh-CN", { hour12: false });
     }
 
-    function log(title, data) {
-      const block = "[" + now() + "] " + title + "\n" + data + "\n\n";
-      outputEl.textContent = block + outputEl.textContent;
+    function escapeHtml(value) {
+      return String(value)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;");
+    }
+
+    function formatValue(value) {
+      if (value === null || value === undefined || value === "") {
+        return "-";
+      }
+      if (typeof value === "object") {
+        return JSON.stringify(value, null, 2);
+      }
+      return String(value);
     }
 
     function getBaseUrl() {
-      const val = baseUrlEl.value.trim();
-      return val.replace(/\/+$/, "");
+      return outputRefs.baseUrl.value.trim().replace(/\/+$/, "");
+    }
+
+    function getSessionId() {
+      return outputRefs.sessionId.value.trim();
+    }
+
+    function setBadge(el, tone, text) {
+      el.className = "status-pill " + tone;
+      el.textContent = text;
+    }
+
+    function setCurrentSession(sessionId) {
+      const text = sessionId || "未设置";
+      outputRefs.sessionId.value = sessionId || "";
+      outputRefs.currentSessionToken.textContent = text;
+      outputRefs.heroSession.textContent = text;
+    }
+
+    function pushLog(title, payload, tone) {
+      state.logs.unshift({
+        title: title,
+        payload: payload,
+        tone: tone || "status-ok",
+        timestamp: now()
+      });
+      renderLogs();
+    }
+
+    function renderLogs() {
+      if (!state.logs.length) {
+        outputRefs.logList.innerHTML = '<div class="empty-state">尚无日志。任意 API 调用都会在这里追加调试记录。</div>';
+        return;
+      }
+
+      outputRefs.logList.innerHTML = state.logs
+        .map(function (entry) {
+          return (
+            '<div class="log-card">' +
+              '<div class="log-head">' +
+                '<span>' + escapeHtml(entry.timestamp + " · " + entry.title) + '</span>' +
+                '<span class="status-pill ' + escapeHtml(entry.tone) + '">' + escapeHtml(entry.tone.replace("status-", "")) + '</span>' +
+              '</div>' +
+              '<pre class="log-body">' + escapeHtml(JSON.stringify(entry.payload, null, 2)) + '</pre>' +
+            '</div>'
+          );
+        })
+        .join("");
+    }
+
+    function renderLatestChat() {
+      const data = state.lastChatResponse;
+      if (!data) {
+        outputRefs.answerText.textContent = "发送 /chat 后，这里会显示后端返回的最终 answer。";
+        outputRefs.answerText.className = "answer-text placeholder";
+        outputRefs.metaSession.textContent = "-";
+        outputRefs.metaRequest.textContent = "-";
+        outputRefs.metaKnowledge.textContent = "-";
+        outputRefs.metaCitations.textContent = "0";
+        outputRefs.citationsList.innerHTML = '<div class="empty-state">当前还没有引用片段。若 `knowledge_used = false`，通常意味着这次回答没有命中足够知识库内容。</div>';
+        setBadge(outputRefs.chatStatusBadge, "status-warn", "等待 /chat");
+        outputRefs.currentRequestToken.textContent = "暂无";
+        outputRefs.heroKnowledge.textContent = "-";
+        return;
+      }
+
+      const ok = Boolean(data.__http && data.__http.ok);
+      const badgeText = data.__http
+        ? "HTTP " + data.__http.status + (ok ? " / chat 成功" : " / chat 失败")
+        : "已收到响应";
+      setBadge(outputRefs.chatStatusBadge, ok ? "status-ok" : "status-bad", badgeText);
+
+      if (data.answer) {
+        outputRefs.answerText.textContent = data.answer;
+        outputRefs.answerText.className = "answer-text";
+      } else {
+        outputRefs.answerText.textContent = "这次响应没有返回 answer，请查看下方原始日志。";
+        outputRefs.answerText.className = "answer-text placeholder";
+      }
+
+      outputRefs.metaSession.textContent = formatValue(data.session_id);
+      outputRefs.metaRequest.textContent = formatValue(data.request_id);
+      outputRefs.metaKnowledge.textContent = data.knowledge_used === true ? "true" : data.knowledge_used === false ? "false" : "-";
+      outputRefs.metaCitations.textContent = String(Array.isArray(data.citations) ? data.citations.length : 0);
+      outputRefs.currentRequestToken.textContent = data.request_id || "暂无";
+      outputRefs.heroKnowledge.textContent = data.knowledge_used === true ? "命中" : data.knowledge_used === false ? "未命中" : "-";
+
+      const citations = Array.isArray(data.citations) ? data.citations : [];
+      if (!citations.length) {
+        outputRefs.citationsList.innerHTML = '<div class="empty-state">这次响应没有 citations。若回答本应带证据，请结合知识命中状态和原始 payload 检查后端行为。</div>';
+        return;
+      }
+
+      outputRefs.citationsList.innerHTML = citations
+        .map(function (citation, index) {
+          return (
+            '<article class="citation-card">' +
+              '<div class="citation-meta">' +
+                '<span class="mini-pill">#' + (index + 1) + '</span>' +
+                '<span class="mini-pill">' + escapeHtml(formatValue(citation.namespace)) + '</span>' +
+                '<span class="mini-pill">' + escapeHtml(formatValue(citation.citation_id)) + '</span>' +
+                '<span class="mini-pill">score ' + escapeHtml(formatValue(citation.score)) + '</span>' +
+              '</div>' +
+              '<p class="snippet">' + escapeHtml(formatValue(citation.snippet)) + '</p>' +
+            '</article>'
+          );
+        })
+        .join("");
+    }
+
+    function renderTimeline() {
+      const detail = state.lastSessionDetail;
+      if (!detail) {
+        outputRefs.timelineSummary.innerHTML = '<div class="token"><b>Session</b><code>暂无</code></div><div class="token"><b>Total Turns</b><code>0</code></div>';
+        outputRefs.timelineList.innerHTML = '<div class="empty-state">当前还没有会话时间线。创建会话后发送聊天，或手动点击“刷新会话历史”。</div>';
+        setBadge(outputRefs.timelineBadge, "status-warn", "未读取");
+        outputRefs.heroTurns.textContent = "0";
+        return;
+      }
+
+      const turns = Array.isArray(detail.turns) ? detail.turns : [];
+      outputRefs.timelineSummary.innerHTML =
+        '<div class="token"><b>Session</b><code>' + escapeHtml(formatValue(detail.session_id)) + '</code></div>' +
+        '<div class="token"><b>Total Turns</b><code>' + escapeHtml(formatValue(detail.total_turns)) + '</code></div>' +
+        '<div class="token"><b>Loaded</b><code>' + escapeHtml(String(turns.length)) + '</code></div>';
+
+      outputRefs.heroTurns.textContent = formatValue(detail.total_turns);
+      setBadge(outputRefs.timelineBadge, "status-ok", "已读取 " + turns.length + " 轮");
+
+      if (!turns.length) {
+        outputRefs.timelineList.innerHTML = '<div class="empty-state">当前会话还没有任何轮次记录。</div>';
+        return;
+      }
+
+      outputRefs.timelineList.innerHTML = turns
+        .map(function (turn, index) {
+          const snippets = Array.isArray(turn.retrieval_snippets) ? turn.retrieval_snippets : [];
+          const snippetMarkup = snippets.length
+            ? (
+                '<div class="snippet-list">' +
+                  snippets.map(function (snippet) {
+                    return '<div class="snippet-item"><pre>' + escapeHtml(JSON.stringify(snippet, null, 2)) + '</pre></div>';
+                  }).join("") +
+                '</div>'
+              )
+            : '<div class="empty-state" style="padding: 12px 14px;">这一轮没有写入 retrieval_snippets。</div>';
+
+          return (
+            '<article class="turn-card">' +
+              '<div class="turn-meta">' +
+                '<span class="mini-pill">Turn ' + (index + 1) + '</span>' +
+                '<span class="mini-pill">' + escapeHtml(formatValue(turn.timestamp)) + '</span>' +
+                '<span class="mini-pill">' + escapeHtml(formatValue(turn.request_id)) + '</span>' +
+              '</div>' +
+              '<div class="turn-block">' +
+                '<p class="turn-role">User</p>' +
+                '<p class="turn-text">' + escapeHtml(formatValue(turn.user_message)) + '</p>' +
+              '</div>' +
+              '<div class="turn-block">' +
+                '<p class="turn-role">Assistant</p>' +
+                '<p class="turn-text">' + escapeHtml(formatValue(turn.assistant_answer)) + '</p>' +
+              '</div>' +
+              '<div class="turn-block">' +
+                '<p class="turn-role">Retrieval Snippets</p>' +
+                snippetMarkup +
+              '</div>' +
+            '</article>'
+          );
+        })
+        .join("");
+    }
+
+    function clearLatestPanels() {
+      state.lastChatResponse = null;
+      state.lastSessionDetail = null;
+      renderLatestChat();
+      renderTimeline();
+      updateHero("结果区已清空", "手动清空了 chat 与 session 展示面板。");
+    }
+
+    function updateHero(status, note) {
+      state.lastStatus = status;
+      outputRefs.heroStatus.textContent = status;
+      outputRefs.heroStatusNote.textContent = note;
     }
 
     async function apiCall(path, options) {
       const url = getBaseUrl() + path;
-      const req = options || {};
-      req.headers = Object.assign({ "Content-Type": "application/json" }, req.headers || {});
+      const request = options || {};
+      request.headers = Object.assign({ "Content-Type": "application/json" }, request.headers || {});
+
+      const reqBody = request.body ? JSON.parse(request.body) : null;
 
       try {
-        const response = await fetch(url, req);
+        const response = await fetch(url, request);
         const text = await response.text();
-        let jsonData = null;
+        let data = null;
         try {
-          jsonData = text ? JSON.parse(text) : null;
+          data = text ? JSON.parse(text) : null;
         } catch (_) {
-          jsonData = text;
+          data = text;
         }
 
         const result = {
           request: {
             url: url,
-            method: req.method || "GET",
-            body: req.body ? JSON.parse(req.body) : null
+            method: request.method || "GET",
+            body: reqBody
           },
           response: {
             ok: response.ok,
             status: response.status,
             statusText: response.statusText,
-            data: jsonData
+            data: data
           }
         };
 
-        log(path, JSON.stringify(result, null, 2));
+        pushLog(path, result, response.ok ? "status-ok" : "status-bad");
         return result;
       } catch (error) {
-        log(path + " (NETWORK ERROR)", String(error));
+        const payload = {
+          request: {
+            url: url,
+            method: request.method || "GET",
+            body: reqBody
+          },
+          error: String(error)
+        };
+        pushLog(path + " / NETWORK ERROR", payload, "status-bad");
+        updateHero("网络错误", "请求未到达服务端，请确认 Base URL 与后端进程。");
         return null;
       }
     }
 
+    async function refreshSessionDetail(sessionId) {
+      const targetSessionId = sessionId || getSessionId();
+      if (!targetSessionId) {
+        alert("请先提供 session_id，或先发起一次聊天让后端生成会话。");
+        return null;
+      }
+
+      const limit = Number(outputRefs.limit.value || 20);
+      const res = await apiCall("/sessions/" + encodeURIComponent(targetSessionId) + "?limit=" + limit);
+      if (!res) {
+        setBadge(outputRefs.timelineBadge, "status-bad", "读取失败");
+        return null;
+      }
+
+      if (!res.response.ok) {
+        state.lastSessionDetail = {
+          session_id: targetSessionId,
+          total_turns: 0,
+          turns: []
+        };
+        renderTimeline();
+        setBadge(outputRefs.timelineBadge, "status-bad", "HTTP " + res.response.status);
+        updateHero("会话读取失败", "请查看原始日志里的错误详情。");
+        return null;
+      }
+
+      state.lastSessionDetail = res.response.data;
+      renderTimeline();
+      updateHero("会话已刷新", "已拉取最近会话历史，可直接核对多轮上下文。");
+      return res.response.data;
+    }
+
     async function doHealth() {
-      await apiCall("/health");
+      const res = await apiCall("/health");
+      if (res && res.response.ok) {
+        setBadge(outputRefs.healthBadge, "status-ok", "服务正常");
+        updateHero("健康检查通过", "后端 API 可访问，可以开始验证 RAG 场景。");
+      } else {
+        setBadge(outputRefs.healthBadge, "status-bad", "健康检查失败");
+        updateHero("健康检查失败", "请查看日志并确认后端是否已启动。");
+      }
     }
 
     async function doCreateSession() {
       const res = await apiCall("/sessions", { method: "POST", body: JSON.stringify({}) });
-      if (res && res.response && res.response.data && res.response.data.session_id) {
-        sessionIdEl.value = res.response.data.session_id;
+      if (res && res.response.ok && res.response.data && res.response.data.session_id) {
+        const sessionId = res.response.data.session_id;
+        setCurrentSession(sessionId);
+        state.lastSessionDetail = {
+          session_id: sessionId,
+          total_turns: 0,
+          turns: []
+        };
+        renderTimeline();
+        updateHero("会话已创建", "可以直接在这个 session 上做多轮 Agentic RAG 测试。");
       }
-    }
-
-    async function doGetSession() {
-      const sessionId = sessionIdEl.value.trim();
-      if (!sessionId) {
-        alert("请先填写 session_id");
-        return;
-      }
-      const limit = Number(limitEl.value || 20);
-      await apiCall("/sessions/" + encodeURIComponent(sessionId) + "?limit=" + limit);
     }
 
     async function doDeleteSession() {
-      const sessionId = sessionIdEl.value.trim();
+      const sessionId = getSessionId();
       if (!sessionId) {
-        alert("请先填写 session_id");
+        alert("请先填写 session_id。");
         return;
       }
-      await apiCall("/sessions/" + encodeURIComponent(sessionId), { method: "DELETE" });
+
+      const res = await apiCall("/sessions/" + encodeURIComponent(sessionId), { method: "DELETE" });
+      if (res && res.response.ok) {
+        setCurrentSession("");
+        state.lastSessionDetail = {
+          session_id: sessionId,
+          total_turns: 0,
+          turns: []
+        };
+        state.lastChatResponse = null;
+        renderLatestChat();
+        renderTimeline();
+        setBadge(outputRefs.timelineBadge, "status-warn", "已删除");
+        updateHero("会话已删除", "历史 turn 已从后端会话存储中清空。");
+      }
     }
 
-    async function doChat() {
-      const message = messageEl.value.trim();
+    async function sendChat(forceFreshSession) {
+      const message = outputRefs.message.value.trim();
       if (!message) {
-        alert("message 不能为空");
+        alert("message 不能为空。");
         return;
+      }
+
+      let sessionId = getSessionId();
+      if (forceFreshSession) {
+        const created = await apiCall("/sessions", { method: "POST", body: JSON.stringify({}) });
+        if (!created || !created.response.ok || !created.response.data || !created.response.data.session_id) {
+          updateHero("创建会话失败", "未能为这次请求创建新 session。");
+          return;
+        }
+        sessionId = created.response.data.session_id;
+        setCurrentSession(sessionId);
       }
 
       const payload = {
         message: message,
-        session_id: sessionIdEl.value.trim() || null,
+        session_id: sessionId || null,
         stream: false
       };
 
-      const topK = topKEl.value.trim();
-      if (topK) payload.top_k = Number(topK);
+      const topK = outputRefs.topK.value.trim();
+      if (topK) {
+        payload.top_k = Number(topK);
+      }
 
       const res = await apiCall("/chat", {
         method: "POST",
         body: JSON.stringify(payload)
       });
 
-      if (res && res.response && res.response.data && res.response.data.session_id) {
-        sessionIdEl.value = res.response.data.session_id;
+      if (!res) {
+        setBadge(outputRefs.chatStatusBadge, "status-bad", "网络错误");
+        return;
+      }
+
+      const responseData = res.response.data && typeof res.response.data === "object" ? res.response.data : {};
+      state.lastChatResponse = Object.assign({}, responseData, {
+        __http: {
+          ok: res.response.ok,
+          status: res.response.status,
+          statusText: res.response.statusText
+        }
+      });
+      renderLatestChat();
+
+      if (!res.response.ok) {
+        updateHero("聊天请求失败", "后端返回了错误码，请查看日志中的 detail。");
+        return;
+      }
+
+      if (responseData.session_id) {
+        setCurrentSession(responseData.session_id);
+      }
+
+      updateHero(
+        responseData.knowledge_used ? "检索命中并完成回答" : "已回答，但未使用知识库",
+        responseData.knowledge_used
+          ? "建议继续看 citations 和会话时间线，确认引用内容是否合理。"
+          : "可以改写问题或调大 top_k，再观察是否能命中知识库。"
+      );
+
+      if (responseData.session_id) {
+        await refreshSessionDetail(responseData.session_id);
       }
     }
 
+    function applyScenario(button) {
+      outputRefs.message.value = button.dataset.message || "";
+      outputRefs.topK.value = button.dataset.topK || "";
+      updateHero("场景已填充", "可以直接发送，或先调整 top_k 和 session 策略。");
+    }
+
+    function initScenarioButtons() {
+      document.querySelectorAll(".scenario-button, .followup-button").forEach(function (button) {
+        button.addEventListener("click", function () {
+          applyScenario(button);
+        });
+      });
+    }
+
     function init() {
-      baseUrlEl.value = window.location.origin;
+      outputRefs.baseUrl.value = window.location.origin;
+      setCurrentSession("");
+      renderLatestChat();
+      renderTimeline();
+      renderLogs();
 
       document.getElementById("useCurrentOrigin").addEventListener("click", function () {
-        baseUrlEl.value = window.location.origin;
+        outputRefs.baseUrl.value = window.location.origin;
+        updateHero("已切回当前域名", "Base URL 已重置为当前页面 origin。");
       });
+
       document.getElementById("btnHealth").addEventListener("click", doHealth);
       document.getElementById("btnCreateSession").addEventListener("click", doCreateSession);
-      document.getElementById("btnGetSession").addEventListener("click", doGetSession);
-      document.getElementById("btnDeleteSession").addEventListener("click", doDeleteSession);
-      document.getElementById("btnChat").addEventListener("click", doChat);
-      document.getElementById("btnClear").addEventListener("click", function () {
-        outputEl.textContent = "";
+      document.getElementById("btnGetSession").addEventListener("click", function () {
+        refreshSessionDetail();
       });
+      document.getElementById("btnDeleteSession").addEventListener("click", doDeleteSession);
+      document.getElementById("btnClearSession").addEventListener("click", function () {
+        setCurrentSession("");
+        updateHero("session_id 已清空", "下一次 /chat 如果留空，将由后端生成新会话。");
+      });
+      document.getElementById("btnChat").addEventListener("click", function () {
+        sendChat(false);
+      });
+      document.getElementById("btnFreshChat").addEventListener("click", function () {
+        sendChat(true);
+      });
+      document.getElementById("btnClearAnswer").addEventListener("click", clearLatestPanels);
+      document.getElementById("btnClearLog").addEventListener("click", function () {
+        state.logs = [];
+        renderLogs();
+        updateHero("调试日志已清空", "后续新的 API 调用会继续追加日志。");
+      });
+      document.getElementById("btnClear").addEventListener("click", function () {
+        state.logs = [];
+        renderLogs();
+        updateHero("日志已清空", "可以重新执行一轮场景测试并观察新的请求记录。");
+      });
+
+      initScenarioButtons();
     }
 
     init();

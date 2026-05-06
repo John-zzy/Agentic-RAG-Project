@@ -11,6 +11,7 @@ from backend.knowledge.rag.core import (
     QueryRewrite,
     QueryRewriter,
     RetrievalContext,
+    RetrievalDecisionLogEntry,
     RetrievalPlan,
     RetrievalResult,
     RetrievalTool,
@@ -20,7 +21,7 @@ from backend.knowledge.rag.core import (
 
 
 class RetrievalRound(RetrievalContext):
-    """描述单轮检索执行轨迹，供编排器输出过程结果与调试信息。"""
+    """描述单轮检索执行轨迹，便于编排器输出过程结果与调试信息。"""
 
     result: RetrievalResult
     decision: SufficiencyDecision
@@ -32,6 +33,7 @@ class AgenticRetrievalOutcome(RetrievalContext):
 
     success: bool
     rounds: list[RetrievalRound] = Field(default_factory=list)
+    decision_log: list[RetrievalDecisionLogEntry] = Field(default_factory=list)
     final_plan: RetrievalPlan
     final_decision: SufficiencyDecision
     exit_reason: str
@@ -80,6 +82,7 @@ class AgenticRetriever(BaseRetriever):
             filters=filters or {},
         )
         rounds: list[RetrievalRound] = []
+        decision_log: list[RetrievalDecisionLogEntry] = []
         results: list[RetrievalResult] = []
         documents: list[Document] = []
 
@@ -101,12 +104,20 @@ class AgenticRetriever(BaseRetriever):
             if decision.is_sufficient or decision.next_action == "finish":
                 rounds.append(round_trace)
                 exit_reason = "sufficient" if decision.is_sufficient else "finished_by_judge"
+                decision_log.append(
+                    self._build_decision_log_entry(
+                        round_trace,
+                        rewritten_query=None,
+                        exit_reason=exit_reason,
+                    )
+                )
                 return AgenticRetrievalOutcome(
                     plan=current_plan,
                     results=results,
                     documents=self._finalize_documents(documents, rounds, exit_reason),
                     success=decision.is_sufficient and result.success,
                     rounds=rounds,
+                    decision_log=decision_log,
                     final_plan=current_plan,
                     final_decision=decision,
                     exit_reason=exit_reason,
@@ -124,13 +135,19 @@ class AgenticRetriever(BaseRetriever):
                         ),
                     }
                 )
-                rounds.append(
-                    RetrievalRound(
-                        plan=current_plan,
-                        results=list(results),
-                        documents=list(documents),
-                        result=result,
-                        decision=bounded_decision,
+                bounded_round = RetrievalRound(
+                    plan=current_plan,
+                    results=list(results),
+                    documents=list(documents),
+                    result=result,
+                    decision=bounded_decision,
+                )
+                rounds.append(bounded_round)
+                decision_log.append(
+                    self._build_decision_log_entry(
+                        bounded_round,
+                        rewritten_query=None,
+                        exit_reason="max_rounds_reached",
                     )
                 )
                 return AgenticRetrievalOutcome(
@@ -139,6 +156,7 @@ class AgenticRetriever(BaseRetriever):
                     documents=self._finalize_documents(documents, rounds, "max_rounds_reached"),
                     success=False,
                     rounds=rounds,
+                    decision_log=decision_log,
                     final_plan=current_plan,
                     final_decision=bounded_decision,
                     exit_reason="max_rounds_reached",
@@ -147,12 +165,20 @@ class AgenticRetriever(BaseRetriever):
 
             if decision.next_action == "ask_user":
                 rounds.append(round_trace)
+                decision_log.append(
+                    self._build_decision_log_entry(
+                        round_trace,
+                        rewritten_query=None,
+                        exit_reason="ask_user",
+                    )
+                )
                 return AgenticRetrievalOutcome(
                     plan=current_plan,
                     results=results,
                     documents=self._finalize_documents(documents, rounds, "ask_user"),
                     success=False,
                     rounds=rounds,
+                    decision_log=decision_log,
                     final_plan=current_plan,
                     final_decision=decision,
                     exit_reason="ask_user",
@@ -162,6 +188,13 @@ class AgenticRetriever(BaseRetriever):
             if decision.next_action == "rewrite":
                 rewrite = self._rewrite_query(context, run_manager)
                 round_trace.rewrite = rewrite
+                decision_log.append(
+                    self._build_decision_log_entry(
+                        round_trace,
+                        rewritten_query=rewrite.query,
+                        exit_reason="continue",
+                    )
+                )
                 next_plan = current_plan.create_followup(
                     active_query=rewrite.query,
                     metadata={
@@ -170,8 +203,19 @@ class AgenticRetriever(BaseRetriever):
                     },
                 )
             elif decision.next_action == "switch_tool":
+                next_tool = self._resolve_next_tool(current_plan, decision)
+                resolved_query = str(decision.metadata.get("resolved_query") or current_plan.active_query)
+                decision_log.append(
+                    self._build_decision_log_entry(
+                        round_trace,
+                        rewritten_query=None,
+                        exit_reason="continue",
+                        extra_metadata={"next_tool": next_tool},
+                    )
+                )
                 next_plan = current_plan.create_followup(
-                    selected_tool=self._resolve_next_tool(current_plan, decision)
+                    active_query=resolved_query,
+                    selected_tool=next_tool,
                 )
             else:
                 raise ValueError(f"Unsupported retrieval next action: {decision.next_action}")
@@ -217,7 +261,7 @@ class AgenticRetriever(BaseRetriever):
         )
 
     def _resolve_next_tool(self, plan: RetrievalPlan, decision: SufficiencyDecision) -> str:
-        """解析下一轮工具；优先使用 judge 建议，其次选择尚未尝试的候选工具。"""
+        """解析下一轮工具，优先使用 judge 建议，否则选择尚未尝试的候选工具。"""
         if decision.suggested_tool:
             self._get_tool(decision.suggested_tool)
             return decision.suggested_tool
@@ -275,8 +319,11 @@ class AgenticRetriever(BaseRetriever):
                 "round_index": round_trace.plan.round_index,
                 "tool_name": round_trace.result.tool_name,
                 "query": round_trace.result.query,
+                "rewritten_query": round_trace.rewrite.query if round_trace.rewrite else None,
                 "decision": round_trace.decision.next_action,
                 "reason": round_trace.decision.reason,
+                "result_success": round_trace.result.success,
+                "result_count": len(round_trace.result.records),
             }
             for round_trace in rounds
         ]
@@ -311,3 +358,32 @@ class AgenticRetriever(BaseRetriever):
         citation_id = str(document.metadata.get("citation_id") or document.id or document.page_content)
         source = str(document.metadata.get("namespace") or document.metadata.get("source") or "knowledge")
         return source, citation_id
+
+    def _build_decision_log_entry(
+        self,
+        round_trace: RetrievalRound,
+        *,
+        rewritten_query: str | None,
+        exit_reason: str,
+        extra_metadata: dict[str, Any] | None = None,
+    ) -> RetrievalDecisionLogEntry:
+        """将单轮执行轨迹转换为稳定的决策日志记录。"""
+        metadata = dict(round_trace.decision.metadata)
+        metadata["exit_reason"] = exit_reason
+        if extra_metadata:
+            metadata.update(extra_metadata)
+        return RetrievalDecisionLogEntry(
+            round_index=round_trace.plan.round_index,
+            tool_name=round_trace.result.tool_name,
+            query=round_trace.result.query,
+            rewritten_query=rewritten_query,
+            result_count=len(round_trace.result.records),
+            result_success=round_trace.result.success,
+            result_confidence=round_trace.result.confidence,
+            decision=round_trace.decision.next_action,
+            is_sufficient=round_trace.decision.is_sufficient,
+            reason=round_trace.decision.reason,
+            suggested_tool=round_trace.decision.suggested_tool,
+            follow_up_question=round_trace.decision.follow_up_question,
+            metadata=metadata,
+        )

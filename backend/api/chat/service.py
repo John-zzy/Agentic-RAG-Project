@@ -11,7 +11,7 @@ from backend.api.chat.prompts import build_rag_answer_prompt_template
 from backend.api.chat.schemas import ChatRequest, ChatResponse, Citation
 from backend.config.settings import AppSettings, settings
 from backend.knowledge.base.text import truncate_snippet
-from backend.knowledge.ecommerce.retriever import KnowledgeBaseRetriever
+from backend.knowledge.ecommerce.retriever import create_agentic_knowledge_retriever
 from backend.knowledge.ecommerce.service import KnowledgeService, create_knowledge_service
 from backend.memory.base.session_store import SQLiteSessionStore, SessionTurn
 from backend.memory.chat.prompt_context import PromptContextBuilder
@@ -57,7 +57,6 @@ class ChatService:
             window_size=self.settings.session.window_size
         )
         self.model = model or model_client
-        self.minimum_relevance = 0.18
         self._rag_answer_template = build_rag_answer_prompt_template()
 
     def chat(self, payload: ChatRequest) -> ChatResponse:
@@ -88,26 +87,23 @@ class ChatService:
         else:
             self.session_store.touch_session(session_id=session_id, now=timestamp)
 
-        top_k = payload.top_k or self.settings.vector_store.top_k
         history_turns = self.session_store.get_recent_turns(
             session_id=session_id,
             limit=self.settings.session.window_size,
         )
         history_text = self._format_history(history_turns)
 
-        retriever = KnowledgeBaseRetriever(
+        retrieval_outcome = create_agentic_knowledge_retriever(
+            self.settings,
             knowledge_service=self.knowledge_service,
-            default_top_k=top_k,
-            minimum_relevance=self.minimum_relevance,
-        )
-        preloaded_docs = retriever.search(query=payload.message, top_k=top_k)
-        citations = self._citations_from_documents(preloaded_docs)
+        ).retrieve_with_trace(payload.message)
+        citations = self._citations_from_documents(retrieval_outcome.documents)
         knowledge_used = len(citations) > 0
 
         if knowledge_used:
             complexity = self._infer_complexity(payload.message)
             answer, citations = self._invoke_chain_with_docs(
-                documents=preloaded_docs,
+                documents=retrieval_outcome.documents,
                 user_message=payload.message,
                 history_text=history_text,
                 complexity=complexity,

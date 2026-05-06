@@ -366,7 +366,7 @@ class SQLiteSessionStore:
     def delete_session(self, session_id: str) -> int:
         """删除会话全部记录并返回删除条数。"""
         with self._lock, self._connect() as conn:
-            message_cursor = conn.execute(
+            conn.execute(
                 """
                 DELETE FROM chat_messages
                 WHERE session_id = ?
@@ -388,7 +388,7 @@ class SQLiteSessionStore:
                 (session_id,),
             )
             conn.commit()
-        return max(int(turn_cursor.rowcount), int(message_cursor.rowcount), 0)
+        return max(int(turn_cursor.rowcount), 0)
 
     def _ensure_schema(self) -> None:
         """创建会话、轮次与消息历史表。"""

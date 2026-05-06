@@ -27,6 +27,7 @@ class RetrievalResult(BaseModel):
 
     tool_name: str
     query: str
+    records: list[dict[str, Any]] = Field(default_factory=list)
     documents: list[Document] = Field(default_factory=list)
     citations: list[RetrievalCitation] = Field(default_factory=list)
     success: bool
@@ -42,6 +43,7 @@ class RetrievalResult(BaseModel):
         *,
         tool_name: str,
         query: str,
+        records: list[dict[str, Any]] | None = None,
         documents: list[Document] | None = None,
         citations: list[RetrievalCitation] | None = None,
         confidence: float | None = None,
@@ -51,6 +53,7 @@ class RetrievalResult(BaseModel):
         return cls(
             tool_name=tool_name,
             query=query,
+            records=list(records or []),
             documents=list(documents or []),
             citations=list(citations or []),
             success=True,
@@ -142,6 +145,24 @@ class RetrievalContext(BaseModel):
     documents: list[Document] = Field(default_factory=list)
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
+
+
+class RetrievalDecisionLogEntry(BaseModel):
+    """缁熶竴璁板綍 Agentic Retrieval 姣忚疆鍐崇瓥锛屼究浜庤皟璇曞拰鍚庣画鍥炴斁銆?"""
+
+    round_index: int
+    tool_name: str
+    query: str
+    rewritten_query: str | None = None
+    result_count: int = 0
+    result_success: bool
+    result_confidence: float | None = None
+    decision: RetrievalNextAction
+    is_sufficient: bool
+    reason: str
+    suggested_tool: str | None = None
+    follow_up_question: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class RetrievalTool(BaseRetriever, ABC):

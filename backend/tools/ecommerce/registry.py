@@ -55,20 +55,21 @@ class ToolRegistry:
 
 
 def build_default_tool_registry(app_settings: AppSettings | None = None) -> ToolRegistry:
-    """构建默认工具注册表，集中注入检索与 commerce 两类工具。"""
+    """构建默认工具注册表，集中注入 retrieval 与 commerce 两类工具。"""
+    current_settings = app_settings or AppSettings()
     registry = ToolRegistry()
 
-    for tool in build_retrieval_tools():
+    for tool in build_retrieval_tools(current_settings):
         registry.register(
             ToolRegistration(
                 tool=tool,
                 group="retrieval",
                 allowed_agents=("shopping_agent",),
-                expose_via_mcp=False,
+                expose_via_mcp=tool.name == "inventory_lookup",
             )
         )
 
-    for tool in build_commerce_tools(app_settings):
+    for tool in build_commerce_tools(current_settings):
         registry.register(_build_commerce_registration(tool))
 
     return registry
