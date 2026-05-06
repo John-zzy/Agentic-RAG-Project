@@ -1,6 +1,7 @@
 /openspec/
 /.codex/
 /.claude/
+/.worktrees/
 AGENTS.md
 CLAUDE.md
 __pycache__/
