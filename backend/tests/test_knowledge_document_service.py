@@ -1,9 +1,17 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import pytest
 
+from backend.config.settings import AppSettings, VectorStoreConfig
+from backend.knowledge.base.store import VectorStore, VectorStoreDocument, VectorStoreHealth
+from backend.knowledge.documents.service import (
+    KnowledgeDocumentNotFoundError,
+    KnowledgeDocumentService,
+    KnowledgeDocumentStoreError,
+)
 from backend.tests.test_support import tmp_path
 from backend.knowledge.documents import (
     build_document_chunks,
@@ -14,6 +22,119 @@ from backend.knowledge.documents import (
     validate_namespace,
     validate_source_path,
 )
+
+
+class InMemoryDocumentStore(VectorStore):
+    def __init__(self, app_settings: AppSettings, *, fail_on_chunks: bool = False) -> None:
+        super().__init__(app_settings)
+        self.documents: dict[str, dict[str, Any]] = {}
+        self.chunks: dict[str, dict[str, Any]] = {}
+        self.fail_on_chunks = fail_on_chunks
+
+    def ensure_collections(self) -> None:
+        return None
+
+    def upsert_documents(self, namespace: str, documents: list[VectorStoreDocument]) -> None:
+        return None
+
+    def search(
+        self,
+        namespace: str,
+        query: str,
+        top_k: int | None = None,
+        filters: dict[str, Any] | None = None,
+    ) -> list[Any]:
+        return []
+
+    def delete_documents(self, namespace: str, ids: list[str]) -> None:
+        return None
+
+    def healthcheck(self) -> VectorStoreHealth:
+        return VectorStoreHealth(provider="memory", available=True)
+
+    def ensure_document_indexes(self) -> None:
+        return None
+
+    def upsert_document_record(self, record: dict[str, Any]) -> None:
+        self.documents[record["document_id"]] = dict(record)
+
+    def get_document_record(self, document_id: str) -> dict[str, Any] | None:
+        record = self.documents.get(document_id)
+        if record is None or record.get("status") == "deleted":
+            return None
+        return dict(record)
+
+    def list_document_records(self, namespace: str | None = None) -> list[dict[str, Any]]:
+        records = [
+            dict(record)
+            for record in self.documents.values()
+            if record.get("status") != "deleted" and (namespace is None or record.get("namespace") == namespace)
+        ]
+        return sorted(records, key=lambda record: record["source_path"])
+
+    def upsert_document_chunks(self, chunks: list[VectorStoreDocument]) -> None:
+        if self.fail_on_chunks:
+            raise RuntimeError("chunk write failed")
+        for chunk in chunks:
+            self.chunks[chunk.id] = {
+                "content": chunk.content,
+                "embedding": chunk.embedding or self.build_embedding(chunk.content),
+                **chunk.metadata,
+            }
+
+    def deactivate_document_chunks(self, document_id: str, document_version: int | None = None) -> None:
+        for chunk in self.chunks.values():
+            if chunk.get("document_id") != document_id:
+                continue
+            if document_version is not None and chunk.get("document_version") != document_version:
+                continue
+            chunk["is_active"] = False
+
+    def delete_document_record(self, document_id: str) -> None:
+        if document_id in self.documents:
+            self.documents[document_id]["status"] = "deleted"
+
+
+@pytest.fixture
+def document_app_settings(tmp_path: Path) -> AppSettings:
+    return AppSettings(
+        data_dir=tmp_path,
+        vector_store=VectorStoreConfig(provider="chroma"),
+    )
+
+
+@pytest.fixture
+def files_root(document_app_settings: AppSettings) -> Path:
+    root = document_app_settings.data_dir / "files"
+    (root / "faq").mkdir(parents=True, exist_ok=True)
+    (root / "faq" / "returns.json").write_text(
+        '[{"id":"r1","title":"退货政策","content":"7天无理由退货，保持包装完整。"}]',
+        encoding="utf-8",
+    )
+    (root / "products").mkdir(parents=True, exist_ok=True)
+    (root / "products" / "laptop.json").write_text(
+        '[{"id":"p1","title":"轻薄本","description":"适合办公和会议。"}]',
+        encoding="utf-8",
+    )
+    return root
+
+
+@pytest.fixture
+def store(document_app_settings: AppSettings) -> InMemoryDocumentStore:
+    return InMemoryDocumentStore(document_app_settings)
+
+
+@pytest.fixture
+def service(
+    document_app_settings: AppSettings,
+    files_root: Path,
+    store: InMemoryDocumentStore,
+) -> KnowledgeDocumentService:
+    return KnowledgeDocumentService(
+        app_settings=document_app_settings,
+        store=store,
+        files_root=files_root,
+    )
 
 
 def test_load_document_records_builds_stable_record_ids(tmp_path: Path) -> None:
@@ -125,3 +246,138 @@ def test_build_document_chunks_adds_trace_metadata_and_stable_chunk_ids(tmp_path
         "chunk_index": 0,
         "updated_at": "2026-05-06T12:00:00Z",
     }
+
+
+def test_register_document_persists_document_record_and_chunks(
+    service: KnowledgeDocumentService,
+    store: InMemoryDocumentStore,
+) -> None:
+    result = service.register_document(
+        namespace="faq",
+        source_path="faq/returns.json",
+        chunk_size=12,
+        chunk_overlap=2,
+        keep_version=False,
+    )
+
+    assert result.document_id
+    assert result.document_version == 1
+    assert result.active_version == 1
+    assert result.status == "active"
+    assert result.chunk_count > 0
+    assert len([chunk for chunk in store.chunks.values() if chunk["is_active"]]) == result.chunk_count
+
+    detail = service.get_document(result.document_id)
+    assert detail.active_version == 1
+    assert detail.source_path == "faq/returns.json"
+    assert detail.chunk_size == 12
+    assert detail.chunk_overlap == 2
+
+
+def test_repeated_register_reuses_document_id_and_overwrites_active_version_by_default(
+    service: KnowledgeDocumentService,
+    store: InMemoryDocumentStore,
+) -> None:
+    first = service.register_document("faq", "faq/returns.json", 12, 2, False)
+    second = service.register_document("faq", "faq/returns.json", 8, 1, False)
+
+    assert second.document_id == first.document_id
+    assert second.document_version == 2
+    assert second.active_version == 2
+    assert [version.document_version for version in second.versions] == [2]
+    assert all(
+        chunk["document_version"] != 1 or chunk["is_active"] is False
+        for chunk in store.chunks.values()
+        if chunk["document_id"] == first.document_id
+    )
+
+
+def test_rechunk_document_keeps_previous_version_when_requested(
+    service: KnowledgeDocumentService,
+    store: InMemoryDocumentStore,
+) -> None:
+    first = service.register_document("faq", "faq/returns.json", 12, 2, False)
+    second = service.rechunk_document(first.document_id, chunk_size=8, chunk_overlap=1, keep_version=True)
+
+    assert second.document_version == 2
+    assert second.active_version == 2
+    assert second.chunk_size == 8
+    assert second.chunk_overlap == 1
+    assert any(version.document_version == 1 for version in second.versions)
+    assert any(
+        chunk["document_version"] == 1 and chunk["is_active"] is False
+        for chunk in store.chunks.values()
+        if chunk["document_id"] == first.document_id
+    )
+
+
+def test_list_documents_filters_namespace_and_excludes_deleted(
+    service: KnowledgeDocumentService,
+) -> None:
+    faq = service.register_document("faq", "faq/returns.json", 12, 2, False)
+    product = service.register_document("products", "products/laptop.json", 12, 2, False)
+
+    service.delete_document(faq.document_id)
+
+    all_documents = service.list_documents()
+    product_documents = service.list_documents(namespace="products")
+
+    assert [document.document_id for document in all_documents] == [product.document_id]
+    assert [document.namespace for document in product_documents] == ["products"]
+
+
+def test_get_document_missing_raises_service_error(service: KnowledgeDocumentService) -> None:
+    with pytest.raises(KnowledgeDocumentNotFoundError, match="missing"):
+        service.get_document("missing")
+
+
+def test_delete_keeps_source_file_and_removes_document_from_default_paths(
+    service: KnowledgeDocumentService,
+    files_root: Path,
+    store: InMemoryDocumentStore,
+) -> None:
+    result = service.register_document("faq", "faq/returns.json", 12, 2, False)
+
+    service.delete_document(result.document_id)
+
+    assert (files_root / "faq" / "returns.json").exists()
+    assert service.list_documents() == []
+    with pytest.raises(KnowledgeDocumentNotFoundError):
+        service.get_document(result.document_id)
+    assert all(
+        chunk["is_active"] is False
+        for chunk in store.chunks.values()
+        if chunk["document_id"] == result.document_id
+    )
+
+
+def test_rechunk_document_overwrites_old_active_version_by_default(
+    service: KnowledgeDocumentService,
+) -> None:
+    first = service.register_document("faq", "faq/returns.json", 20, 0, False)
+
+    result = service.rechunk_document(first.document_id, chunk_size=8, chunk_overlap=1)
+
+    assert result.document_version == 2
+    assert result.active_version == 2
+    assert result.chunk_count != first.chunk_count
+    assert [version.document_version for version in result.versions] == [2]
+
+
+def test_register_document_records_failure_status_and_raises_clear_error(
+    document_app_settings: AppSettings,
+    files_root: Path,
+) -> None:
+    failing_store = InMemoryDocumentStore(document_app_settings, fail_on_chunks=True)
+    service = KnowledgeDocumentService(
+        app_settings=document_app_settings,
+        store=failing_store,
+        files_root=files_root,
+    )
+
+    with pytest.raises(KnowledgeDocumentStoreError, match="chunk write failed"):
+        service.register_document("faq", "faq/returns.json", 12, 2, False)
+
+    record = next(iter(failing_store.documents.values()))
+    assert record["status"] == "failed"
+    assert record["last_error"] == "chunk write failed"

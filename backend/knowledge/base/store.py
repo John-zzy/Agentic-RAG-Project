@@ -130,6 +130,34 @@ class VectorStore(ABC):
     def healthcheck(self) -> VectorStoreHealth:
         """返回向量后端可用性与连通性信息。"""
 
+    @abstractmethod
+    def ensure_document_indexes(self) -> None:
+        """确保文档管理所需的文档与分块存储已准备好。"""
+
+    @abstractmethod
+    def upsert_document_record(self, record: dict[str, Any]) -> None:
+        """写入或更新文档主记录。"""
+
+    @abstractmethod
+    def get_document_record(self, document_id: str) -> dict[str, Any] | None:
+        """按文档 ID 读取未删除的文档主记录。"""
+
+    @abstractmethod
+    def list_document_records(self, namespace: str | None = None) -> list[dict[str, Any]]:
+        """列出未删除的文档主记录，可按命名空间过滤。"""
+
+    @abstractmethod
+    def delete_document_record(self, document_id: str) -> None:
+        """将文档主记录标记为删除。"""
+
+    @abstractmethod
+    def upsert_document_chunks(self, chunks: list[VectorStoreDocument]) -> None:
+        """批量写入文档分块及向量。"""
+
+    @abstractmethod
+    def deactivate_document_chunks(self, document_id: str, document_version: int | None = None) -> None:
+        """按文档 ID 停用分块，可限定具体版本。"""
+
     def resolve_namespace_config(self, namespace: str) -> VectorNamespaceConfig:
         """解析命名空间对应的配置对象。"""
         if namespace not in SUPPORTED_NAMESPACES:
@@ -242,6 +270,34 @@ class ChromaVectorStore(VectorStore):
             return VectorStoreHealth(provider="chroma", available=False, detail=str(exc))
         return VectorStoreHealth(provider="chroma", available=True)
 
+    def ensure_document_indexes(self) -> None:
+        """Chroma 后端当前不承担文档管理索引初始化。"""
+        return None
+
+    def upsert_document_record(self, record: dict[str, Any]) -> None:
+        """Chroma MVP 暂不持久化文档管理记录。"""
+        raise NotImplementedError("Chroma document management records are not implemented.")
+
+    def get_document_record(self, document_id: str) -> dict[str, Any] | None:
+        """Chroma MVP 暂不支持读取文档管理记录。"""
+        raise NotImplementedError("Chroma document management records are not implemented.")
+
+    def list_document_records(self, namespace: str | None = None) -> list[dict[str, Any]]:
+        """Chroma MVP 暂不支持列出文档管理记录。"""
+        raise NotImplementedError("Chroma document management records are not implemented.")
+
+    def delete_document_record(self, document_id: str) -> None:
+        """Chroma MVP 暂不支持删除文档管理记录。"""
+        raise NotImplementedError("Chroma document management records are not implemented.")
+
+    def upsert_document_chunks(self, chunks: list[VectorStoreDocument]) -> None:
+        """Chroma MVP 暂不支持写入文档管理分块。"""
+        raise NotImplementedError("Chroma document management chunks are not implemented.")
+
+    def deactivate_document_chunks(self, document_id: str, document_version: int | None = None) -> None:
+        """Chroma MVP 暂不支持停用文档管理分块。"""
+        raise NotImplementedError("Chroma document management chunks are not implemented.")
+
     def _get_collection(self, namespace: str) -> Collection:
         """获取集合实例，不存在时自动初始化。"""
         if namespace not in self._collections:
@@ -350,6 +406,110 @@ class ElasticsearchVectorStore(VectorStore):
         """确保文档管理所需的 documents/chunks 索引存在。"""
         self._ensure_named_index(self.resolve_document_index_name("documents"), self._document_index_mappings())
         self._ensure_named_index(self.resolve_document_index_name("chunks"), self._chunk_index_mappings())
+
+    def upsert_document_record(self, record: dict[str, Any]) -> None:
+        """写入文档管理主记录，供列表、详情和版本生命周期使用。"""
+        self.ensure_document_indexes()
+        index_name = self.resolve_document_index_name("documents")
+        document_id = str(record["document_id"])
+        response = self._client.bulk(
+            operations=[
+                {"index": {"_index": index_name, "_id": document_id}},
+                record,
+            ],
+            refresh=True,
+        )
+        if response.get("errors"):
+            raise RuntimeError(f"Elasticsearch document record upsert failed: {response}")
+
+    def get_document_record(self, document_id: str) -> dict[str, Any] | None:
+        """读取未删除的文档主记录；不存在或已删除时返回 None。"""
+        self.ensure_document_indexes()
+        index_name = self.resolve_document_index_name("documents")
+        response = self._client.search(
+            index=index_name,
+            query={
+                "bool": {
+                    "filter": [
+                        {"term": {"document_id": document_id}},
+                        {"bool": {"must_not": [{"term": {"status": "deleted"}}]}},
+                    ]
+                }
+            },
+            size=1,
+            source=None,
+        )
+        hits = response.get("hits", {}).get("hits", [])
+        if not hits:
+            return None
+        return cast(dict[str, Any], hits[0].get("_source", {}))
+
+    def list_document_records(self, namespace: str | None = None) -> list[dict[str, Any]]:
+        """列出未删除文档，默认返回所有命名空间。"""
+        self.ensure_document_indexes()
+        filters: list[dict[str, Any]] = [{"bool": {"must_not": [{"term": {"status": "deleted"}}]}}]
+        if namespace is not None:
+            filters.append({"term": {"namespace": namespace}})
+        response = self._client.search(
+            index=self.resolve_document_index_name("documents"),
+            query={"bool": {"filter": filters}},
+            size=1000,
+            source=None,
+        )
+        return [cast(dict[str, Any], hit.get("_source", {})) for hit in response.get("hits", {}).get("hits", [])]
+
+    def delete_document_record(self, document_id: str) -> None:
+        """软删除文档主记录，保留来源文件与历史审计字段。"""
+        record = self.get_document_record(document_id)
+        if record is None:
+            return
+        record["status"] = "deleted"
+        self.upsert_document_record(record)
+
+    def upsert_document_chunks(self, chunks: list[VectorStoreDocument]) -> None:
+        """批量写入文档分块，包含嵌入向量和追踪元数据。"""
+        if not chunks:
+            return
+        self.ensure_document_indexes()
+        index_name = self.resolve_document_index_name("chunks")
+        operations: list[dict[str, Any]] = []
+        for chunk in chunks:
+            metadata = self.normalize_metadata(chunk.metadata)
+            operations.append({"index": {"_index": index_name, "_id": chunk.id}})
+            operations.append(
+                {
+                    "content": chunk.content,
+                    "embedding": chunk.embedding or self.build_embedding(chunk.content),
+                    "metadata": metadata,
+                    "document_id": str(metadata.get("document_id", "")),
+                    "chunk_id": chunk.id,
+                    "namespace": str(metadata.get("namespace", "")),
+                    "source_type": str(metadata.get("source_type", "json")),
+                    "source_path": str(metadata.get("source_path", "")),
+                    "version": str(metadata.get("document_version", "")),
+                    "is_active": bool(metadata.get("is_active", True)),
+                    "chunk_index": int(metadata.get("chunk_index", 0)),
+                    "updated_at": str(metadata.get("updated_at", "")),
+                }
+            )
+        response = self._client.bulk(operations=operations, refresh=True)
+        if response.get("errors"):
+            raise RuntimeError(f"Elasticsearch document chunk upsert failed: {response}")
+
+    def deactivate_document_chunks(self, document_id: str, document_version: int | None = None) -> None:
+        """通过 update_by_query 将指定文档分块标记为非活跃。"""
+        self.ensure_document_indexes()
+        filters: list[dict[str, Any]] = [{"term": {"document_id": document_id}}, {"term": {"is_active": True}}]
+        if document_version is not None:
+            filters.append({"term": {"metadata.document_version": document_version}})
+        response = self._client.update_by_query(
+            index=self.resolve_document_index_name("chunks"),
+            query={"bool": {"filter": filters}},
+            script={"source": "ctx._source.is_active = false; ctx._source.metadata.is_active = false"},
+            refresh=True,
+        )
+        if response.get("failures"):
+            raise RuntimeError(f"Elasticsearch deactivate chunks failed: {response}")
 
     def resolve_index_name(self, namespace: str) -> str:
         """根据命名空间配置与前缀规则计算索引名。"""
