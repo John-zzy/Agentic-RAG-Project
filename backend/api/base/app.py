@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from backend.api.chat.routes import router as api_router
@@ -27,6 +28,12 @@ def create_app(chat_service: ChatService | None = None) -> FastAPI:
         description="Ecommerce customer-service agent backend API.",
         debug=settings.debug,
         lifespan=lifespan,
+    )
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_methods=["*"],
+        allow_headers=["*"],
     )
     app.include_router(api_router)
     frontend_dir = Path(__file__).resolve().parents[3] / "frontend"

@@ -1,71 +1,44 @@
-# Repository Guidelines
+# AI RAG Project
 
-## 维护原则
-这份文档的首要目标是让 AI 快速定位需要修改的代码位置，而不是泛泛列举目录。接到任务后，先根据“任务到代码位置”找到最小改动面，再读取相关文件；不要从仓库根目录递归扫 `backend/.venv/`、`backend/data/` 或 `backend/tests/artifacts/`。
+一个面向电商客服场景的 AI RAG 项目，用于演示“知识库检索 + 会话记忆 + 大模型回答”这一条最小可运行链路。当前仓库以后端 MVP 为主，覆盖商品导购、评价检索、多轮对话、会话管理等基础能力，适合作为面试展示、RAG 工程练习和后续多 Agent 扩展的起点。
 
-## 当前技术架构（2026-04）
-后端知识库与 Agentic RAG 统一基于 LangChain 技术栈实现。`backend/knowledge/ecommerce/retriever.py` 中的 `KnowledgeBaseRetriever` 和 `backend/knowledge/rag/agentic.py` 中的 `AgenticRetriever` 都应保持为 LangChain `BaseRetriever`，对外主入口是 `invoke(query)` / `ainvoke(query)`，返回 `list[Document]`，而不是自定义裸 Python 返回值。
+## 项目亮点
 
-`backend/knowledge/rag/core.py` 维护 Agentic RAG 的 LangChain 抽象：`RetrievalTool` 是可组合的子 retriever，`SufficiencyJudge` 和 `QueryRewriter` 是 LangChain `RunnableSerializable`，`RetrievalResult` / `RetrievalContext` 只作为内部编排和调试模型存在。后续如果新增检索工具、充分性判断器或查询改写器，优先实现为 LangChain 组件，再接入 `AgenticRetriever`，不要回退到与 LangChain 脱节的自定义接口。
+- 基于 `FastAPI` 提供可直接联调的对话 API
+- 支持商品与评价知识的 RAG 检索增强回答
+- 内置 `Chroma` 与 `Elasticsearch` 两种向量存储后端
+- 使用 `SQLite` 持久化会话上下文，支持多轮对话
+- 提供静态 API 测试页，便于本地快速验证接口
+- 代码结构清晰，已拆分为 API、知识库、记忆、模型路由、配置等模块
 
-会话记忆、工具和模型层也统一按 LangChain 约定组织。`backend/memory/base/chat_history.py` 中的 `SQLiteChatMessageHistory` 应保持为 `BaseChatMessageHistory` 适配器；`backend/tools/ecommerce/*.py` 中对外暴露的能力应保持为 `BaseTool` / `StructuredTool`；`backend/models/llm/client.py` 中的主入口应直接返回 `BaseChatModel` 或可组合 `Runnable`。如果后续新增 Agent 编排，优先直接复用这些 LangChain 组件，不要再包一层项目私有协议。
+## 技术栈
 
-## 任务到代码位置
-改 API 路由、请求参数、响应字段或 HTTP 错误处理时，优先看 `backend/api/routes.py` 和 `backend/api/schemas.py`。`routes.py` 定义 `/health`、`/chat`、`/sessions` 等 FastAPI endpoint；`schemas.py` 定义 `ChatRequest`、`ChatResponse`、会话响应模型。对应测试通常在 `backend/tests/test_chat_api.py`。
+- Python 3.11+
+- FastAPI
+- LangChain / LangGraph
+- ChromaDB / Elasticsearch
+- SQLite
+- DashScope 兼容模型接口
+- Pytest
 
-改聊天主流程、RAG 编排、引用返回、会话读写串联或模型调用时，优先看 `backend/api/chat_service.py`。它是 `ChatService` 的主实现，连接 `KnowledgeService`、`SQLiteSessionStore`、`PromptContextBuilder` 和模型链。提示词模板在 `backend/api/prompts.py`，上下文裁剪逻辑在 `backend/memory/prompt_context.py`。
+## 目录结构
 
-改会话创建、恢复、过期、历史窗口、SQLite 持久化或旧库迁移时，优先看 `backend/memory/base/session_store.py`。若需要接 LangChain message history，同步看 `backend/memory/base/chat_history.py`；会话窗口只影响提示词上下文时，再看 `backend/memory/chat/prompt_context.py`。对应测试在 `backend/tests/test_session_store.py` 和 `backend/tests/test_prompt_context_builder.py`。
-
-改知识库检索、文档入库、过滤、引用片段或向量库抽象时，优先看 `backend/knowledge/ecommerce/service.py` 和 `backend/knowledge/base/store.py`。`service.py` 是业务入口，`store.py` 定义 `VectorStore` 合约以及 `ChromaVectorStore`、`ElasticsearchVectorStore`、`VectorStoreFactory`。数据预加载在 `backend/knowledge/ecommerce/loader.py`，商品和评论转文档在 `backend/knowledge/ecommerce/extractor.py`，LangChain retriever 适配在 `backend/knowledge/ecommerce/retriever.py`。
-
-改 Agentic RAG 编排、多轮检索、LangChain retriever 接口、查询改写或充分性判断时，优先看 `backend/knowledge/rag/agentic.py` 和 `backend/knowledge/rag/core.py`。其中 `agentic.py` 负责 `AgenticRetriever(BaseRetriever)` 的多轮编排，`core.py` 负责 `RetrievalTool(BaseRetriever)`、`SufficiencyJudge(RunnableSerializable)`、`QueryRewriter(RunnableSerializable)` 及内部结果模型。若要接到 LangGraph 或其他 LangChain 链路，优先复用这些接口，不要新写平行的检索抽象。
-
-改 Chroma 或 Elasticsearch 行为时，主要看 `backend/knowledge/base/store.py`。Chroma 相关实现集中在 `ChromaVectorStore`，Elasticsearch 相关实现集中在 `ElasticsearchVectorStore`，provider 选择在 `VectorStoreFactory.create()`。对应测试在 `backend/tests/test_knowledge_chroma.py`、`backend/tests/test_knowledge_elasticsearch.py`、`backend/tests/test_knowledge_vector_store_contract.py`。
-
-改模型供应商、模型路由、API Key、流式输出或模型客户端时，优先看 `backend/models/base/router.py`、`backend/models/llm/client.py`、`backend/config/model_routing.json` 和 `backend/config/settings.py`。`router.py` 负责按任务复杂度选择模型，`client.py` 负责返回 `BaseChatModel` 与 LangChain runnable，`settings.py` 负责从 `.env` 和 JSON 配置装载模型端点。
-
-改 LangChain 工具定义、工具白名单、Agent 可用工具组装或工具输出结构时，优先看 `backend/tools/base/__init__.py`、`backend/tools/ecommerce/commerce.py`、`backend/tools/ecommerce/retrieval.py` 和 `backend/tools/ecommerce/registry.py`。其中 `base/__init__.py` 维护 `StructuredTool` 构建辅助函数，`commerce.py`/`retrieval.py` 负责具体 `BaseTool` 实现，`registry.py` 负责 LangChain tools 的白名单与分组注册。
-
-改环境变量、默认路径、端口、会话配置、向量库配置或配置解析时，优先看 `backend/config/settings.py`。不要在业务代码里硬编码路径或配置值；应通过 `AppSettings`、`settings.session`、`settings.vector_store` 或相关配置模型传入。
-
-改应用启动、生命周期、静态页面挂载或启动前预加载时，优先看 `backend/run.py` 和 `backend/api/app.py`。`run.py` 负责 runtime bootstrap、知识库预加载和 uvicorn 启动；`app.py` 负责创建 FastAPI app、注册 router、挂载 `frontend/` 到 `/frontend`。
-
-改静态调试页面时，只看 `frontend/api-tester.html`。它是当前前端入口，用来手动调用后端 API；后端静态挂载逻辑在 `backend/api/app.py`。
-
-改示例数据或本地知识源时，看 `backend/data/products.json`、`backend/data/reviews.json`、`backend/data/orders.json`。这些是样例数据文件；不要把运行生成的 `sessions.db`、`.chroma/`、`elasticsearch/` 当作源码改动。
-
-改 Elasticsearch 本地开发编排时，看 `docs/elasticsearch/docker-compose.yml` 和 `docs/elasticsearch/README.md`。不要直接修改 `backend/data/elasticsearch/` 下的运行数据。
-
-改需求或设计文档时，看 `openspec/changes/<change-id>/proposal.md`、`design.md`、`tasks.md` 和对应 `specs/**/spec.md`。已归档内容在 `openspec/changes/archive/`，除非任务明确要求，不要修改归档变更。
-
-## 修改入口速查
-新增或调整 endpoint：`backend/api/routes.py` -> `backend/api/schemas.py` -> `backend/tests/test_chat_api.py`。
-
-新增聊天返回字段：`backend/api/schemas.py` -> `backend/api/chat_service.py` -> `backend/tests/test_chat_api.py`。
-
-调整 RAG 检索策略：`backend/api/chat_service.py` -> `backend/knowledge/ecommerce/service.py` -> `backend/knowledge/base/store.py` -> 知识库测试。
-
-调整 LangChain 风格的 Agentic Retrieval：`backend/knowledge/rag/agentic.py` -> `backend/knowledge/rag/core.py` -> `backend/knowledge/ecommerce/retriever.py`。
-
-调整提示词：`backend/api/prompts.py`；如果涉及历史上下文，再看 `backend/memory/prompt_context.py`。
-
-调整会话生命周期：`backend/memory/base/session_store.py` -> `backend/memory/base/chat_history.py` -> `backend/config/settings.py` -> `backend/tests/test_session_store.py`。
-
-调整 LangChain 会话记忆：`backend/memory/base/chat_history.py` -> `backend/memory/base/session_store.py` -> `backend/memory/chat/prompt_context.py`。
-
-新增向量库 provider：`backend/knowledge/base/store.py` 的 `VectorStore` 合约和 `VectorStoreFactory` -> `backend/config/settings.py` 的配置模型 -> provider 合约测试。
-
-调整模型选择：`backend/models/base/router.py` -> `backend/models/llm/client.py` -> `backend/config/model_routing.json` -> `backend/config/settings.py`。
-
-调整模型调用实现：`backend/models/llm/client.py`；涉及调用方行为时再看 `backend/api/chat_service.py`。
-
-调整 LangChain 工具实现：`backend/tools/ecommerce/commerce.py` / `backend/tools/ecommerce/retrieval.py` -> `backend/tools/ecommerce/registry.py`。
-
-调整启动时初始化：`backend/run.py`；涉及 app 生命周期或静态挂载时再看 `backend/api/app.py`。
-
-## 不要优先查看或修改的目录
-`backend/.venv/` 是本地虚拟环境，不属于项目源码。`backend/data/.chroma/`、`backend/data/elasticsearch/`、`backend/data/sessions.db` 是运行时数据。`backend/tests/artifacts/` 是测试产物。`__pycache__/` 是 Python 缓存。除非用户明确要求处理运行数据或环境问题，不要读取、编辑或提交这些内容。
+```text
+.
+├── backend/                # 后端主代码
+│   ├── api/                # 路由、Schema、聊天服务
+│   ├── config/             # 应用配置
+│   ├── knowledge/          # 知识库、向量检索、预加载
+│   ├── memory/             # 会话存储与上下文构建
+│   ├── models/             # 模型路由与客户端封装
+│   ├── tests/              # pytest 测试
+│   ├── .env.example        # 环境变量示例
+│   └── run.py              # 启动入口
+├── frontend/               # 静态 API 测试页
+├── docs/elasticsearch/     # 本地 Elasticsearch docker compose
+├── openspec/               # 需求变更与实现任务文档
+└── README.md
+```
 
 ## 构建、测试与开发命令
 先创建虚拟环境并安装后端依赖：
@@ -95,6 +68,7 @@ python -m pytest backend\tests -q -c backend\tests\pytest.ini
 docker compose -f docs\elasticsearch\docker-compose.yml up -d
 ```
 
+# 代码风格约束
 ## 代码风格与命名约定
 沿用当前 Python 风格：4 空格缩进、补全类型标注、函数和模块使用 `snake_case`、类使用 `PascalCase`。优先写职责单一的小函数，导入保持显式，路径处理优先使用 `Path`，不要硬编码字符串路径。仓库当前未提交格式化或 lint 配置，新增代码时以相邻文件风格为准。
 新增或修改类、方法时，应补充简洁明确的中文注释或 docstring，说明该类/方法的职责、使用场景或关键输入输出；避免只写重复代码字面的无效注释。目标是让后续阅读者不需要反推实现细节，也能快速理解“这个类/方法是干什么的”。
