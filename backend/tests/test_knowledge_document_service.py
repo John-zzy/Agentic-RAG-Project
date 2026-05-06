@@ -114,8 +114,23 @@ class FailsOnceOnChunksStore(InMemoryDocumentStore):
 
 
 class NonDocumentCapableStore(InMemoryDocumentStore):
+    def get_document_record(self, document_id: str) -> dict[str, Any] | None:
+        raise NotImplementedError("document management unavailable")
+
     def list_document_records(self, namespace: str | None = None) -> list[dict[str, Any]]:
         raise NotImplementedError("document management unavailable")
+
+
+class FailsOnceOnRecordWriteStore(InMemoryDocumentStore):
+    def __init__(self, app_settings: AppSettings) -> None:
+        super().__init__(app_settings)
+        self.fail_next_record_write = False
+
+    def upsert_document_record(self, record: dict[str, Any]) -> None:
+        if self.fail_next_record_write:
+            self.fail_next_record_write = False
+            raise RuntimeError("record write failed")
+        super().upsert_document_record(record)
 
 
 @pytest.fixture
@@ -446,6 +461,46 @@ def test_rechunk_failure_preserves_previous_active_record_and_chunks(
     ) == active_v1_count
 
 
+def test_rechunk_publish_failure_preserves_previous_active_record_and_chunks(
+    document_app_settings: AppSettings,
+    files_root: Path,
+) -> None:
+    store = FailsOnceOnRecordWriteStore(document_app_settings)
+    service = KnowledgeDocumentService(
+        app_settings=document_app_settings,
+        store=store,
+        files_root=files_root,
+    )
+    first = service.register_document("faq", "faq/returns.json", 12, 2, False)
+    active_v1_count = len(
+        [
+            chunk
+            for chunk in store.chunks.values()
+            if chunk["document_id"] == first.document_id
+            and chunk["document_version"] == 1
+            and chunk["is_active"] is True
+        ]
+    )
+
+    store.fail_next_record_write = True
+    with pytest.raises(KnowledgeDocumentStoreError, match="record write failed"):
+        service.rechunk_document(first.document_id, chunk_size=8, chunk_overlap=1)
+
+    detail = service.get_document(first.document_id)
+    assert detail.status == "active"
+    assert detail.active_version == 1
+    assert [version.document_version for version in detail.versions] == [1]
+    assert len(
+        [
+            chunk
+            for chunk in store.chunks.values()
+            if chunk["document_id"] == first.document_id
+            and chunk["document_version"] == 1
+            and chunk["is_active"] is True
+        ]
+    ) == active_v1_count
+
+
 def test_non_document_capable_store_errors_are_wrapped(
     document_app_settings: AppSettings,
 ) -> None:
@@ -456,3 +511,17 @@ def test_non_document_capable_store_errors_are_wrapped(
 
     with pytest.raises(KnowledgeDocumentStoreError, match="does not support document management"):
         service.list_documents()
+
+
+def test_register_document_wraps_non_document_capable_store_error(
+    document_app_settings: AppSettings,
+    files_root: Path,
+) -> None:
+    service = KnowledgeDocumentService(
+        app_settings=document_app_settings,
+        store=NonDocumentCapableStore(document_app_settings),
+        files_root=files_root,
+    )
+
+    with pytest.raises(KnowledgeDocumentStoreError, match="does not support document management"):
+        service.register_document("faq", "faq/returns.json", 12, 2, False)

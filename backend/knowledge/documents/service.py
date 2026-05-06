@@ -153,7 +153,11 @@ class KnowledgeDocumentService:
         records = load_document_records(namespace=namespace, source_path=source_path, data_root=self.files_root)
         normalized_source_path = records[0].source_path
         document_id = build_document_id(namespace=namespace, source_path=normalized_source_path)
-        current_record = existing_record or self.store.get_document_record(document_id)
+        current_record = existing_record or self._call_store(
+            "get document record",
+            self.store.get_document_record,
+            document_id,
+        )
         document_version = self._next_version(current_record)
         updated_at = self._now()
         chunks = build_document_chunks(
@@ -194,6 +198,7 @@ class KnowledgeDocumentService:
 
         try:
             self._call_store("upsert document chunks", self.store.upsert_document_chunks, vector_chunks)
+            self._call_store("upsert document record", self.store.upsert_document_record, record)
             if current_record is not None:
                 self._call_store(
                     "deactivate document chunks",
@@ -201,7 +206,6 @@ class KnowledgeDocumentService:
                     document_id,
                     None if keep_version else int(current_record["active_version"]),
                 )
-            self._call_store("upsert document record", self.store.upsert_document_record, record)
         except Exception as exc:
             self._cleanup_new_chunks(new_chunk_ids)
             if current_record is None:
