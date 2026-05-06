@@ -207,13 +207,15 @@ class KnowledgeDocumentService:
                     int(current_record["active_version"]),
                 )
         except Exception as exc:
-            self._cleanup_new_chunks(new_chunk_ids)
-            if current_record is None:
+            if current_record is not None:
+                self._restore_current_record(current_record)
+            else:
                 failed_record = self._mark_failed(record, document_version, str(exc))
                 try:
                     self._call_store("upsert failed document record", self.store.upsert_document_record, failed_record)
                 except KnowledgeDocumentStoreError:
                     pass
+            self._cleanup_new_chunks(new_chunk_ids)
             raise KnowledgeDocumentStoreError(f"Failed to switch document '{document_id}': {exc}") from exc
 
         return self._to_operation_result(record, document_version)
@@ -347,6 +349,13 @@ class KnowledgeDocumentService:
         """失败回滚时尽力清理新分块，不影响主异常返回。"""
         try:
             self._call_store("delete document chunks", self.store.delete_document_chunks, chunk_ids)
+        except KnowledgeDocumentStoreError:
+            return None
+
+    def _restore_current_record(self, current_record: dict[str, object]) -> None:
+        """发布后失败时尽力恢复旧主记录，保持 active_version 与旧分块一致。"""
+        try:
+            self._call_store("restore document record", self.store.upsert_document_record, current_record)
         except KnowledgeDocumentStoreError:
             return None
 

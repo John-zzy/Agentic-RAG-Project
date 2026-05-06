@@ -94,6 +94,10 @@ class InMemoryDocumentStore(VectorStore):
         if document_id in self.documents:
             self.documents[document_id]["status"] = "deleted"
 
+    def delete_document_chunks(self, chunk_ids: list[str]) -> None:
+        for chunk_id in chunk_ids:
+            self.chunks.pop(chunk_id, None)
+
     def count_chunks(
         self,
         *,
@@ -148,6 +152,18 @@ class FailsOnceOnRecordWriteStore(InMemoryDocumentStore):
             self.fail_next_record_write = False
             raise RuntimeError("record write failed")
         super().upsert_document_record(record)
+
+
+class FailsOnceOnDeactivateStore(InMemoryDocumentStore):
+    def __init__(self, app_settings: AppSettings) -> None:
+        super().__init__(app_settings)
+        self.fail_next_deactivate = False
+
+    def deactivate_document_chunks(self, document_id: str, document_version: int | None = None) -> None:
+        if self.fail_next_deactivate:
+            self.fail_next_deactivate = False
+            raise RuntimeError("deactivate failed")
+        super().deactivate_document_chunks(document_id, document_version)
 
 
 @pytest.fixture
@@ -529,6 +545,43 @@ def test_rechunk_publish_failure_preserves_previous_active_record_and_chunks(
             and chunk["is_active"] is True
         ]
     ) == active_v1_count
+
+
+def test_rechunk_deactivate_failure_restores_previous_record_and_chunks(
+    document_app_settings: AppSettings,
+    files_root: Path,
+) -> None:
+    store = FailsOnceOnDeactivateStore(document_app_settings)
+    service = KnowledgeDocumentService(
+        app_settings=document_app_settings,
+        store=store,
+        files_root=files_root,
+    )
+    first = service.register_document("faq", "faq/returns.json", 12, 2, False)
+    active_v1_count = store.count_chunks(
+        document_id=first.document_id,
+        document_version=1,
+        is_active=True,
+    )
+
+    store.fail_next_deactivate = True
+    with pytest.raises(KnowledgeDocumentStoreError, match="deactivate failed"):
+        service.rechunk_document(first.document_id, chunk_size=8, chunk_overlap=1)
+
+    detail = service.get_document(first.document_id)
+    assert detail.status == "active"
+    assert detail.active_version == 1
+    assert [version.document_version for version in detail.versions] == [1]
+    assert store.count_chunks(
+        document_id=first.document_id,
+        document_version=1,
+        is_active=True,
+    ) == active_v1_count
+    assert store.count_chunks(
+        document_id=first.document_id,
+        document_version=2,
+        is_active=True,
+    ) == 0
 
 
 def test_non_document_capable_store_errors_are_wrapped(
