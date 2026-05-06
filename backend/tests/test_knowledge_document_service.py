@@ -94,6 +94,23 @@ class InMemoryDocumentStore(VectorStore):
         if document_id in self.documents:
             self.documents[document_id]["status"] = "deleted"
 
+    def count_chunks(
+        self,
+        *,
+        document_id: str,
+        document_version: int,
+        is_active: bool,
+    ) -> int:
+        return len(
+            [
+                chunk
+                for chunk in self.chunks.values()
+                if chunk["document_id"] == document_id
+                and chunk["document_version"] == document_version
+                and chunk["is_active"] is is_active
+            ]
+        )
+
 
 class FailsOnceOnChunksStore(InMemoryDocumentStore):
     def __init__(self, app_settings: AppSettings) -> None:
@@ -342,11 +359,24 @@ def test_rechunk_document_keeps_previous_version_when_requested(
     assert second.chunk_size == 8
     assert second.chunk_overlap == 1
     assert any(version.document_version == 1 for version in second.versions)
-    assert any(
-        chunk["document_version"] == 1 and chunk["is_active"] is False
-        for chunk in store.chunks.values()
-        if chunk["document_id"] == first.document_id
-    )
+    assert store.count_chunks(document_id=first.document_id, document_version=2, is_active=True) > 0
+    assert store.count_chunks(document_id=first.document_id, document_version=1, is_active=True) == 0
+    assert store.count_chunks(document_id=first.document_id, document_version=1, is_active=False) > 0
+
+
+def test_register_document_keep_version_keeps_new_chunks_active(
+    service: KnowledgeDocumentService,
+    store: InMemoryDocumentStore,
+) -> None:
+    first = service.register_document("faq", "faq/returns.json", 12, 2, False)
+    second = service.register_document("faq", "faq/returns.json", 8, 1, True)
+
+    assert second.document_id == first.document_id
+    assert second.active_version == 2
+    assert any(version.document_version == 1 for version in second.versions)
+    assert store.count_chunks(document_id=first.document_id, document_version=2, is_active=True) > 0
+    assert store.count_chunks(document_id=first.document_id, document_version=1, is_active=True) == 0
+    assert store.count_chunks(document_id=first.document_id, document_version=1, is_active=False) > 0
 
 
 def test_list_documents_filters_namespace_and_excludes_deleted(

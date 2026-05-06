@@ -204,7 +204,7 @@ class KnowledgeDocumentService:
                     "deactivate document chunks",
                     self.store.deactivate_document_chunks,
                     document_id,
-                    None if keep_version else int(current_record["active_version"]),
+                    int(current_record["active_version"]),
                 )
         except Exception as exc:
             self._cleanup_new_chunks(new_chunk_ids)
