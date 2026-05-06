@@ -107,6 +107,12 @@ def load_vector_store_config() -> dict[str, object]:
             "collection_name": get_env_value("AI_RAG_VECTOR_STORE__REVIEWS__COLLECTION_NAME") or "reviews",
             "index_name": get_env_value("AI_RAG_VECTOR_STORE__REVIEWS__INDEX_NAME") or "ai-rag-reviews",
         },
+        "documents": {
+            "index_name": get_env_value("AI_RAG_VECTOR_STORE__DOCUMENTS__INDEX_NAME") or "documents",
+        },
+        "chunks": {
+            "index_name": get_env_value("AI_RAG_VECTOR_STORE__CHUNKS__INDEX_NAME") or "chunks",
+        },
         "chroma": {
             "persist_directory": Path(chroma_directory) if chroma_directory else CHROMA_DIR,
         },
@@ -160,6 +166,12 @@ class VectorNamespaceConfig(BaseModel):
     index_name: str
 
 
+class DocumentIndexConfig(BaseModel):
+    """描述文档管理索引的基础命名配置。"""
+
+    index_name: str
+
+
 class VectorStoreConfig(BaseModel):
     provider: Literal["chroma", "elasticsearch"] = "chroma"
     top_k: int = Field(default=5, ge=1)
@@ -175,6 +187,10 @@ class VectorStoreConfig(BaseModel):
             index_name="ai-rag-reviews",
         )
     )
+    documents: DocumentIndexConfig = Field(
+        default_factory=lambda: DocumentIndexConfig(index_name="documents")
+    )
+    chunks: DocumentIndexConfig = Field(default_factory=lambda: DocumentIndexConfig(index_name="chunks"))
     chroma: ChromaConfig = ChromaConfig()
     elasticsearch: ElasticsearchConfig = ElasticsearchConfig()
 

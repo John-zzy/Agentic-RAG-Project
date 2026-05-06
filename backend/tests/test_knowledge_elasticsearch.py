@@ -203,6 +203,38 @@ def test_elasticsearch_store_initializes_indexes_and_healthcheck(monkeypatch: py
     )
 
 
+def test_elasticsearch_store_initializes_document_management_indexes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_factory = FakeElasticsearchFactory()
+    monkeypatch.setattr(store_module, "Elasticsearch", fake_factory)
+
+    app_settings = AppSettings(
+        data_dir=DATA_DIR,
+        vector_store=VectorStoreConfig(
+            provider="elasticsearch",
+            elasticsearch={"url": "http://localhost:9200", "index_prefix": "ai-rag"},
+        ),
+    )
+
+    store = ElasticsearchVectorStore(app_settings)
+    store.ensure_document_indexes()
+
+    fake_client = fake_factory.instances[-1]
+    assert fake_client.indices.exists(index="ai-rag-documents")
+    assert fake_client.indices.exists(index="ai-rag-chunks")
+    assert fake_client.indices.mappings["ai-rag-documents"]["properties"]["document_id"]["type"] == "keyword"
+    assert fake_client.indices.mappings["ai-rag-chunks"]["properties"]["embedding"]["dims"] == 256
+
+
+def test_elasticsearch_store_rejects_unknown_document_index_kind() -> None:
+    app_settings = build_elasticsearch_settings()
+    store = ElasticsearchVectorStore(app_settings, client=FakeElasticsearchClient())
+
+    with pytest.raises(ValueError, match="Unsupported document index kind"):
+        store.resolve_document_index_name("unknown")
+
+
 def test_elasticsearch_store_supports_upsert_search_filter_and_delete(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

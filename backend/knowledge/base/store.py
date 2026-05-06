@@ -21,6 +21,7 @@ except ModuleNotFoundError:  # pragma: no cover
 VectorMetadata = dict[str, Any]
 MetadataValue = str | int | float | bool
 SUPPORTED_NAMESPACES = ("products", "reviews")
+DOCUMENT_INDEX_KINDS = ("documents", "chunks")
 
 
 class VectorStoreDocument(BaseModel):
@@ -345,6 +346,11 @@ class ElasticsearchVectorStore(VectorStore):
         detail = None if available else "Elasticsearch ping returned False."
         return VectorStoreHealth(provider="elasticsearch", available=available, detail=detail)
 
+    def ensure_document_indexes(self) -> None:
+        """确保文档管理所需的 documents/chunks 索引存在。"""
+        self._ensure_named_index(self.resolve_document_index_name("documents"), self._document_index_mappings())
+        self._ensure_named_index(self.resolve_document_index_name("chunks"), self._chunk_index_mappings())
+
     def resolve_index_name(self, namespace: str) -> str:
         """根据命名空间配置与前缀规则计算索引名。"""
         namespace_config = self.resolve_namespace_config(namespace)
@@ -354,14 +360,23 @@ class ElasticsearchVectorStore(VectorStore):
             return f"{prefix}-{configured_name}"
         return configured_name
 
+    def resolve_document_index_name(self, kind: str) -> str:
+        """根据文档管理索引类型计算带前缀的 Elasticsearch 索引名。"""
+        if kind not in DOCUMENT_INDEX_KINDS:
+            raise ValueError(f"Unsupported document index kind '{kind}'. Expected one of: documents, chunks.")
+        index_config = getattr(self.config, kind)
+        configured_name = str(index_config.index_name).strip()
+        prefix = self.config.elasticsearch.index_prefix.strip("-")
+        if prefix and configured_name == kind:
+            return f"{prefix}-{configured_name}"
+        return configured_name
+
     def _ensure_index(self, namespace: str) -> str:
         """确保索引存在，不存在则按映射创建。"""
         index_name = self.resolve_index_name(namespace)
-        if self._client.indices.exists(index=index_name):
-            return index_name
-        self._client.indices.create(
-            index=index_name,
-            mappings={
+        self._ensure_named_index(
+            index_name,
+            {
                 "properties": {
                     "content": {"type": "text"},
                     "embedding": {"type": "dense_vector", "dims": self._embedder.dimensions, "index": False},
@@ -369,9 +384,58 @@ class ElasticsearchVectorStore(VectorStore):
                     "namespace": {"type": "keyword"},
                 }
             },
-            settings={"number_of_shards": 1, "number_of_replicas": 0},
         )
         return index_name
+
+    def _ensure_named_index(self, index_name: str, mappings: dict[str, Any]) -> None:
+        """按给定名称和映射创建索引；已存在时保持不变。"""
+        if self._client.indices.exists(index=index_name):
+            return
+        self._client.indices.create(
+            index=index_name,
+            mappings=mappings,
+            settings={"number_of_shards": 1, "number_of_replicas": 0},
+        )
+
+    def _document_index_mappings(self) -> dict[str, Any]:
+        """构建文档元数据索引映射，记录版本、状态和来源信息。"""
+        return {
+            "properties": {
+                "document_id": {"type": "keyword"},
+                "namespace": {"type": "keyword"},
+                "source_type": {"type": "keyword"},
+                "source_path": {"type": "keyword"},
+                "status": {"type": "keyword"},
+                "active_version": {"type": "integer"},
+                "chunk_count": {"type": "integer"},
+                "created_at": {"type": "date"},
+                "updated_at": {"type": "date"},
+                "last_error": {
+                    "type": "text",
+                    "fields": {"keyword": {"type": "keyword", "ignore_above": 256}},
+                },
+                "versions": {"type": "nested", "enabled": True},
+            }
+        }
+
+    def _chunk_index_mappings(self) -> dict[str, Any]:
+        """构建文档分块索引映射，保存内容、向量和追踪字段。"""
+        return {
+            "properties": {
+                "content": {"type": "text"},
+                "embedding": {"type": "dense_vector", "dims": self._embedder.dimensions, "index": False},
+                "metadata": {"type": "flattened"},
+                "document_id": {"type": "keyword"},
+                "chunk_id": {"type": "keyword"},
+                "namespace": {"type": "keyword"},
+                "source_type": {"type": "keyword"},
+                "source_path": {"type": "keyword"},
+                "version": {"type": "keyword"},
+                "is_active": {"type": "boolean"},
+                "chunk_index": {"type": "integer"},
+                "updated_at": {"type": "date"},
+            }
+        }
 
     def _build_client(self) -> Any:
         """按配置构造 Elasticsearch 客户端实例。"""
