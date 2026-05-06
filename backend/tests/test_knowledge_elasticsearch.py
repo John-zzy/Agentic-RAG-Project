@@ -224,6 +224,9 @@ def test_elasticsearch_store_initializes_document_management_indexes(
     assert fake_client.indices.exists(index="ai-rag-documents")
     assert fake_client.indices.exists(index="ai-rag-chunks")
     assert fake_client.indices.mappings["ai-rag-documents"]["properties"]["document_id"]["type"] == "keyword"
+    versions_mapping = fake_client.indices.mappings["ai-rag-documents"]["properties"]["versions"]
+    assert versions_mapping["type"] == "nested"
+    assert "enabled" not in versions_mapping
     assert fake_client.indices.mappings["ai-rag-chunks"]["properties"]["embedding"]["dims"] == 256
 
 

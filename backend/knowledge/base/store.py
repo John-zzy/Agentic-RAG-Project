@@ -414,7 +414,7 @@ class ElasticsearchVectorStore(VectorStore):
                     "type": "text",
                     "fields": {"keyword": {"type": "keyword", "ignore_above": 256}},
                 },
-                "versions": {"type": "nested", "enabled": True},
+                "versions": {"type": "nested"},
             }
         }
 
