@@ -158,6 +158,10 @@ class VectorStore(ABC):
     def deactivate_document_chunks(self, document_id: str, document_version: int | None = None) -> None:
         """按文档 ID 停用分块，可限定具体版本。"""
 
+    def delete_document_chunks(self, chunk_ids: list[str]) -> None:
+        """按分块 ID 删除新写入但未发布的文档分块。"""
+        return None
+
     def resolve_namespace_config(self, namespace: str) -> VectorNamespaceConfig:
         """解析命名空间对应的配置对象。"""
         if namespace not in SUPPORTED_NAMESPACES:
@@ -296,6 +300,10 @@ class ChromaVectorStore(VectorStore):
 
     def deactivate_document_chunks(self, document_id: str, document_version: int | None = None) -> None:
         """Chroma MVP 暂不支持停用文档管理分块。"""
+        raise NotImplementedError("Chroma document management chunks are not implemented.")
+
+    def delete_document_chunks(self, chunk_ids: list[str]) -> None:
+        """Chroma MVP 暂不支持删除文档管理分块。"""
         raise NotImplementedError("Chroma document management chunks are not implemented.")
 
     def _get_collection(self, namespace: str) -> Collection:
@@ -510,6 +518,17 @@ class ElasticsearchVectorStore(VectorStore):
         )
         if response.get("failures"):
             raise RuntimeError(f"Elasticsearch deactivate chunks failed: {response}")
+
+    def delete_document_chunks(self, chunk_ids: list[str]) -> None:
+        """删除未发布成功的新分块，用于失败回滚清理。"""
+        if not chunk_ids:
+            return
+        self.ensure_document_indexes()
+        index_name = self.resolve_document_index_name("chunks")
+        operations = [{"delete": {"_index": index_name, "_id": chunk_id}} for chunk_id in chunk_ids]
+        response = self._client.bulk(operations=operations, refresh=True)
+        if response.get("errors"):
+            raise RuntimeError(f"Elasticsearch document chunk cleanup failed: {response}")
 
     def resolve_index_name(self, namespace: str) -> str:
         """根据命名空间配置与前缀规则计算索引名。"""

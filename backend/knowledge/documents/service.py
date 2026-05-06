@@ -81,7 +81,7 @@ class KnowledgeDocumentService:
         self.app_settings = app_settings or settings
         self.store = store or VectorStoreFactory.create(self.app_settings)
         self.files_root = Path(files_root) if files_root is not None else self.app_settings.data_dir / "files"
-        self.store.ensure_document_indexes()
+        self._call_store("ensure document indexes", self.store.ensure_document_indexes)
 
     def register_document(
         self,
@@ -105,7 +105,8 @@ class KnowledgeDocumentService:
         """列出未删除文档，可按命名空间过滤。"""
         if namespace is not None:
             validate_namespace(namespace)
-        return [self._to_summary(record) for record in self.store.list_document_records(namespace)]
+        records = self._call_store("list document records", self.store.list_document_records, namespace)
+        return [self._to_summary(record) for record in records]
 
     def get_document(self, document_id: str) -> KnowledgeDocumentDetail:
         """读取文档详情；缺失或已删除时抛出服务级 404 异常。"""
@@ -115,8 +116,8 @@ class KnowledgeDocumentService:
     def delete_document(self, document_id: str) -> KnowledgeDocumentOperationResult:
         """软删除文档记录并停用该文档所有活跃分块，不删除源 JSON 文件。"""
         record = self._get_existing_record(document_id)
-        self.store.deactivate_document_chunks(document_id)
-        self.store.delete_document_record(document_id)
+        self._call_store("deactivate document chunks", self.store.deactivate_document_chunks, document_id)
+        self._call_store("delete document record", self.store.delete_document_record, document_id)
         record["status"] = "deleted"
         return self._to_operation_result(record, int(record["active_version"]))
 
@@ -189,21 +190,32 @@ class KnowledgeDocumentService:
             )
             for chunk in chunks
         ]
+        new_chunk_ids = [chunk.id for chunk in vector_chunks]
 
-        self.store.upsert_document_record(record)
         try:
+            self._call_store("upsert document chunks", self.store.upsert_document_chunks, vector_chunks)
             if current_record is not None:
-                self.store.deactivate_document_chunks(document_id, None if keep_version else int(current_record["active_version"]))
-            self.store.upsert_document_chunks(vector_chunks)
+                self._call_store(
+                    "deactivate document chunks",
+                    self.store.deactivate_document_chunks,
+                    document_id,
+                    None if keep_version else int(current_record["active_version"]),
+                )
+            self._call_store("upsert document record", self.store.upsert_document_record, record)
         except Exception as exc:
-            failed_record = self._mark_failed(record, document_version, str(exc))
-            self.store.upsert_document_record(failed_record)
-            raise KnowledgeDocumentStoreError(f"Failed to write document '{document_id}': {exc}") from exc
+            self._cleanup_new_chunks(new_chunk_ids)
+            if current_record is None:
+                failed_record = self._mark_failed(record, document_version, str(exc))
+                try:
+                    self._call_store("upsert failed document record", self.store.upsert_document_record, failed_record)
+                except KnowledgeDocumentStoreError:
+                    pass
+            raise KnowledgeDocumentStoreError(f"Failed to switch document '{document_id}': {exc}") from exc
 
         return self._to_operation_result(record, document_version)
 
     def _get_existing_record(self, document_id: str) -> dict[str, object]:
-        record = self.store.get_document_record(document_id)
+        record = self._call_store("get document record", self.store.get_document_record, document_id)
         if record is None:
             raise KnowledgeDocumentNotFoundError(f"Knowledge document not found: {document_id}")
         return record
@@ -326,3 +338,19 @@ class KnowledgeDocumentService:
 
     def _now(self) -> str:
         return datetime.now(UTC).isoformat()
+
+    def _cleanup_new_chunks(self, chunk_ids: list[str]) -> None:
+        """失败回滚时尽力清理新分块，不影响主异常返回。"""
+        try:
+            self._call_store("delete document chunks", self.store.delete_document_chunks, chunk_ids)
+        except KnowledgeDocumentStoreError:
+            return None
+
+    def _call_store(self, operation: str, method: object, *args: object) -> object:
+        """将后端不支持能力转换为服务级错误，避免泄露原始实现异常。"""
+        try:
+            return method(*args)  # type: ignore[operator]
+        except NotImplementedError as exc:
+            raise KnowledgeDocumentStoreError(
+                f"Vector store '{self.app_settings.vector_store.provider}' does not support document management: {operation}."
+            ) from exc
