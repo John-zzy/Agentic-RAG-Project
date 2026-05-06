@@ -166,6 +166,7 @@ class FailsOnceOnDeactivateStore(InMemoryDocumentStore):
     def __init__(self, app_settings: AppSettings) -> None:
         super().__init__(app_settings)
         self.fail_next_deactivate = False
+        self.fail_cleanup = False
 
     def deactivate_document_chunks(self, document_id: str, document_version: int | None = None) -> None:
         if self.fail_next_deactivate:
@@ -173,6 +174,11 @@ class FailsOnceOnDeactivateStore(InMemoryDocumentStore):
             super().deactivate_document_chunks(document_id, document_version)
             raise RuntimeError("deactivate failed")
         super().deactivate_document_chunks(document_id, document_version)
+
+    def delete_document_chunks(self, chunk_ids: list[str]) -> None:
+        if self.fail_cleanup:
+            raise RuntimeError("cleanup failed")
+        super().delete_document_chunks(chunk_ids)
 
 
 @pytest.fixture
@@ -591,6 +597,27 @@ def test_rechunk_deactivate_failure_restores_previous_record_and_chunks(
         document_version=2,
         is_active=True,
     ) == 0
+
+
+def test_rechunk_cleanup_failure_does_not_mask_original_publish_error(
+    document_app_settings: AppSettings,
+    files_root: Path,
+) -> None:
+    store = FailsOnceOnDeactivateStore(document_app_settings)
+    service = KnowledgeDocumentService(
+        app_settings=document_app_settings,
+        store=store,
+        files_root=files_root,
+    )
+    first = service.register_document("faq", "faq/returns.json", 12, 2, False)
+
+    store.fail_next_deactivate = True
+    store.fail_cleanup = True
+    with pytest.raises(KnowledgeDocumentStoreError, match="deactivate failed") as exc_info:
+        service.rechunk_document(first.document_id, chunk_size=8, chunk_overlap=1)
+
+    assert "cleanup failed" not in str(exc_info.value)
+    assert service.get_document(first.document_id).active_version == 1
 
 
 def test_non_document_capable_store_errors_are_wrapped(

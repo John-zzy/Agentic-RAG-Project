@@ -350,7 +350,7 @@ class KnowledgeDocumentService:
         """失败回滚时尽力清理新分块，不影响主异常返回。"""
         try:
             self._call_store("delete document chunks", self.store.delete_document_chunks, chunk_ids)
-        except KnowledgeDocumentStoreError:
+        except Exception:
             return None
 
     def _restore_current_record(self, current_record: dict[str, object]) -> None:
