@@ -150,6 +150,37 @@ def test_chroma_store_supports_document_management_operations() -> None:
     assert store.list_document_records() == []
 
 
+def test_chroma_document_chunk_search_supports_hybrid_keyword_recall() -> None:
+    tmp_path = make_test_runtime_dir("knowledge-chroma-hybrid-document-search")
+    app_settings = build_test_settings(tmp_path)
+    store = ChromaVectorStore(app_settings)
+    store.ensure_document_indexes()
+    store.upsert_document_chunks(
+        [
+            VectorStoreDocument(
+                id="chunk-doc-1",
+                content="我是Ai Agent的文档：我叫zzy",
+                metadata={
+                    "document_id": "doc-1",
+                    "document_version": 1,
+                    "namespace": "faq",
+                    "source_type": "txt",
+                    "source_path": "doc.txt",
+                    "chunk_id": "chunk-doc-1",
+                    "chunk_index": 0,
+                    "updated_at": "2026-05-07T12:00:00Z",
+                    "is_active": True,
+                },
+            )
+        ]
+    )
+
+    results = store.search_document_chunks("你叫什么", top_k=3, namespace="faq")
+    assert results
+    assert results[0].document.id == "chunk-doc-1"
+    assert "zzy" in results[0].document.content
+
+
 def test_preload_knowledge_base_uses_factory_and_loads_json_data() -> None:
     tmp_path = make_test_runtime_dir("knowledge-preload")
     app_settings = build_test_settings(tmp_path)

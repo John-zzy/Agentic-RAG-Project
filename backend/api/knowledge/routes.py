@@ -12,17 +12,19 @@ from backend.api.knowledge.schemas import (
     KnowledgeDocumentRechunkRequest,
     KnowledgeDocumentRegisterRequest,
     KnowledgeDocumentSummaryResponse,
+    KnowledgeFileIndexListResponse,
+    KnowledgeFileIndexSummaryResponse,
 )
 from backend.knowledge.documents.service import (
-    KnowledgeDocumentService,
     KnowledgeDocumentError,
     KnowledgeDocumentNotFoundError,
+    KnowledgeDocumentService,
     KnowledgeDocumentStoreError,
 )
 
 
 class KnowledgeDocumentServiceProtocol(Protocol):
-    """路由依赖的文档服务协议，便于测试注入轻量实现。"""
+    """知识文档路由依赖协议。"""
 
     def register_document(
         self,
@@ -35,6 +37,9 @@ class KnowledgeDocumentServiceProtocol(Protocol):
         ...
 
     def list_documents(self, namespace: str | None = None) -> list[object]:
+        ...
+
+    def list_file_indexes(self, namespace: str | None = None) -> list[object]:
         ...
 
     def get_document(self, document_id: str) -> object:
@@ -61,7 +66,7 @@ def register_knowledge_document(
     payload: KnowledgeDocumentRegisterRequest,
     request: Request,
 ) -> object:
-    """注册知识文档并返回新发布的文档版本。"""
+    """注册知识文档并返回新版本。"""
     service = _get_document_service(request)
     try:
         return service.register_document(
@@ -80,7 +85,7 @@ def list_knowledge_documents(
     request: Request,
     namespace: str | None = Query(default=None),
 ) -> KnowledgeDocumentListResponse:
-    """列出知识文档，可按命名空间过滤。"""
+    """列出知识文档。"""
     service = _get_document_service(request)
     try:
         documents = service.list_documents(namespace=namespace)
@@ -88,6 +93,22 @@ def list_knowledge_documents(
         _raise_document_http_error(exc)
     return KnowledgeDocumentListResponse(
         documents=[KnowledgeDocumentSummaryResponse.model_validate(_to_response_data(document)) for document in documents]
+    )
+
+
+@router.get("/files", response_model=KnowledgeFileIndexListResponse)
+def list_knowledge_files(
+    request: Request,
+    namespace: str | None = Query(default=None),
+) -> KnowledgeFileIndexListResponse:
+    """按上传文件聚合索引状态。"""
+    service = _get_document_service(request)
+    try:
+        items = service.list_file_indexes(namespace=namespace)
+    except Exception as exc:
+        _raise_document_http_error(exc)
+    return KnowledgeFileIndexListResponse(
+        items=[KnowledgeFileIndexSummaryResponse.model_validate(_to_response_data(item)) for item in items]
     )
 
 
@@ -103,7 +124,7 @@ def get_knowledge_document(document_id: str, request: Request) -> object:
 
 @router.delete("/{document_id}", response_model=KnowledgeDocumentDeleteResponse)
 def delete_knowledge_document(document_id: str, request: Request) -> object:
-    """软删除知识文档并停用对应分块。"""
+    """软删除知识文档。"""
     service = _get_document_service(request)
     try:
         return service.delete_document(document_id)
@@ -117,7 +138,7 @@ def rechunk_knowledge_document(
     payload: KnowledgeDocumentRechunkRequest,
     request: Request,
 ) -> object:
-    """重新切分并发布知识文档的新版本。"""
+    """重建知识文档分块。"""
     service = _get_document_service(request)
     try:
         return service.rechunk_document(
@@ -131,7 +152,7 @@ def rechunk_knowledge_document(
 
 
 def _get_document_service(request: Request) -> KnowledgeDocumentServiceProtocol:
-    """从应用状态读取知识文档服务，首次访问知识路由时惰性创建。"""
+    """从应用状态读取服务，缺失时懒加载。"""
     service = getattr(request.app.state, "knowledge_document_service", None)
     if service is not None:
         return service
@@ -150,7 +171,7 @@ def _get_document_service(request: Request) -> KnowledgeDocumentServiceProtocol:
 
 
 def _raise_document_http_error(exc: Exception) -> None:
-    """将文档服务异常映射为结构化 HTTP 错误。"""
+    """将服务层异常映射为结构化 HTTP 错误。"""
     if isinstance(exc, KnowledgeDocumentNotFoundError):
         raise HTTPException(
             status_code=404,
@@ -193,7 +214,7 @@ def _raise_document_http_error(exc: Exception) -> None:
 
 
 def _to_response_data(payload: object) -> object:
-    """兼容服务层 Pydantic 模型与普通字典响应。"""
+    """兼容 Pydantic 模型与普通字典响应。"""
     if hasattr(payload, "model_dump"):
         return payload.model_dump()  # type: ignore[attr-defined]
     return payload

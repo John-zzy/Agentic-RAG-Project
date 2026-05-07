@@ -1,0 +1,1153 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>知识库管理台</title>
+  <style>
+    :root {
+      --bg: #f4f7fb;
+      --panel: #ffffff;
+      --panel-soft: #f8fafc;
+      --text: #172033;
+      --muted: #647084;
+      --faint: #98a2b3;
+      --line: #e6ebf2;
+      --brand: #2563eb;
+      --brand-deep: #1d4ed8;
+      --mint: #10b981;
+      --warm: #f59e0b;
+      --danger: #dc2626;
+      --shadow: 0 24px 70px rgba(26, 37, 63, 0.12);
+      --shadow-soft: 0 12px 30px rgba(26, 37, 63, 0.08);
+      --radius-sm: 16px;
+      --body: "Microsoft YaHei", "PingFang SC", "Segoe UI", sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: var(--body);
+      color: var(--text);
+      background:
+        linear-gradient(120deg, rgba(37, 99, 235, 0.08), transparent 32%),
+        linear-gradient(240deg, rgba(16, 185, 129, 0.1), transparent 28%),
+        var(--bg);
+    }
+
+    button,
+    input {
+      font: inherit;
+    }
+
+    button {
+      border: 0;
+      cursor: pointer;
+    }
+
+    button:focus-visible,
+    input:focus-visible,
+    a:focus-visible {
+      outline: 3px solid rgba(37, 99, 235, 0.22);
+      outline-offset: 2px;
+    }
+
+    .app {
+      width: min(1280px, calc(100vw - 32px));
+      min-height: calc(100vh - 32px);
+      margin: 16px auto;
+      display: grid;
+      grid-template-columns: 340px minmax(0, 1fr);
+      overflow: hidden;
+      border: 1px solid rgba(230, 235, 242, 0.9);
+      border-radius: 32px;
+      background: rgba(255, 255, 255, 0.82);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(20px);
+    }
+
+    .service-panel {
+      padding: 34px;
+      display: flex;
+      flex-direction: column;
+      gap: 26px;
+      background:
+        linear-gradient(180deg, rgba(37, 99, 235, 0.08), transparent 42%),
+        #ffffff;
+      border-right: 1px solid var(--line);
+    }
+
+    .brand-mark {
+      width: 52px;
+      height: 52px;
+      display: grid;
+      place-items: center;
+      border-radius: 18px;
+      color: #ffffff;
+      font-size: 20px;
+      font-weight: 900;
+      background: linear-gradient(145deg, var(--brand), var(--mint));
+      box-shadow: 0 14px 30px rgba(37, 99, 235, 0.24);
+    }
+
+    .hero h1 {
+      margin: 18px 0 12px;
+      font-size: 34px;
+      line-height: 1.12;
+      letter-spacing: 0;
+    }
+
+    .hero p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 15px;
+      line-height: 1.72;
+    }
+
+    .service-status {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      width: fit-content;
+      min-height: 38px;
+      padding: 0 14px;
+      border-radius: 999px;
+      color: #047857;
+      background: #ecfdf5;
+      border: 1px solid #bbf7d0;
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--mint);
+      box-shadow: 0 0 0 6px rgba(16, 185, 129, 0.12);
+    }
+
+    .quick-area,
+    .trust-list {
+      display: grid;
+      gap: 12px;
+    }
+
+    .section-label {
+      margin: 0;
+      color: var(--faint);
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: 0;
+    }
+
+    .quick-card,
+    .trust-item,
+    .panel-card,
+    .table-row {
+      border: 1px solid var(--line);
+      border-radius: var(--radius-sm);
+      background: #ffffff;
+    }
+
+    .quick-card {
+      width: 100%;
+      padding: 16px;
+      text-align: left;
+      transition: transform 160ms ease, border-color 160ms ease, box-shadow 160ms ease;
+    }
+
+    .quick-card:hover {
+      transform: translateY(-2px);
+      border-color: rgba(37, 99, 235, 0.32);
+      box-shadow: var(--shadow-soft);
+    }
+
+    .quick-card strong,
+    .trust-item strong,
+    .panel-card strong {
+      display: block;
+      margin-bottom: 6px;
+      font-size: 15px;
+    }
+
+    .quick-card span,
+    .trust-item span,
+    .panel-card span {
+      display: block;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.55;
+    }
+
+    .trust-list {
+      margin-top: auto;
+    }
+
+    .trust-item {
+      display: flex;
+      gap: 12px;
+      align-items: flex-start;
+      padding: 14px;
+      background: var(--panel-soft);
+    }
+
+    .trust-icon {
+      flex: 0 0 34px;
+      width: 34px;
+      height: 34px;
+      display: grid;
+      place-items: center;
+      border-radius: 12px;
+      color: var(--brand);
+      background: #eff6ff;
+      font-weight: 900;
+    }
+
+    .workspace {
+      min-width: 0;
+      display: grid;
+      grid-template-rows: auto auto minmax(0, 1fr);
+      background: #fbfdff;
+    }
+
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 22px 26px;
+      border-bottom: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.92);
+    }
+
+    .agent-info {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      min-width: 0;
+    }
+
+    .agent-avatar {
+      width: 46px;
+      height: 46px;
+      display: grid;
+      place-items: center;
+      border-radius: 16px;
+      color: #ffffff;
+      font-weight: 900;
+      background: var(--brand);
+    }
+
+    .agent-info h2 {
+      margin: 0;
+      font-size: 18px;
+    }
+
+    .agent-info p {
+      margin: 4px 0 0;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .new-chat {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 42px;
+      padding: 0 16px;
+      border-radius: 999px;
+      color: var(--brand);
+      background: #eff6ff;
+      font-weight: 800;
+      text-decoration: none;
+    }
+
+    .toolbar {
+      display: grid;
+      gap: 16px;
+      padding: 20px 26px;
+      border-bottom: 1px solid var(--line);
+      background: #ffffff;
+    }
+
+    .toolbar-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) 140px 140px minmax(0, 1fr);
+      gap: 10px;
+    }
+
+    .field {
+      display: grid;
+      gap: 7px;
+    }
+
+    .field label {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 800;
+    }
+
+    .field input {
+      width: 100%;
+      min-height: 42px;
+      padding: 0 12px;
+      border: 1px solid var(--line);
+      border-radius: 13px;
+      color: var(--text);
+      background: #ffffff;
+    }
+
+    .actions {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    .knowledge-button {
+      min-height: 42px;
+      padding: 0 12px;
+      border-radius: 14px;
+      color: #ffffff;
+      background: var(--brand);
+      font-weight: 800;
+    }
+
+    .knowledge-button.secondary {
+      color: var(--brand);
+      background: #eff6ff;
+    }
+
+    .knowledge-button.danger {
+      color: var(--danger);
+      background: #fef2f2;
+    }
+
+    .knowledge-button:disabled {
+      cursor: not-allowed;
+      opacity: 0.55;
+      transform: none;
+    }
+
+    .knowledge-status {
+      min-height: 38px;
+      padding: 10px 12px;
+      border-radius: 13px;
+      color: #92400e;
+      background: #fffbeb;
+      border: 1px solid #fde68a;
+      font-size: 12px;
+      line-height: 1.5;
+      white-space: pre-wrap;
+    }
+
+    .knowledge-status.error {
+      color: #b91c1c;
+      background: #fef2f2;
+      border-color: #fecaca;
+    }
+
+    .knowledge-status.ok {
+      color: #047857;
+      background: #ecfdf5;
+      border-color: #bbf7d0;
+    }
+
+    .content {
+      min-height: 0;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 320px;
+    }
+
+    .list-panel,
+    .detail-panel {
+      min-height: 0;
+      overflow-y: auto;
+      padding: 24px 26px;
+    }
+
+    .detail-panel {
+      border-left: 1px solid var(--line);
+      background:
+        linear-gradient(180deg, rgba(245, 158, 11, 0.08), transparent 38%),
+        #ffffff;
+    }
+
+    .table-list {
+      display: grid;
+      gap: 12px;
+    }
+
+    .table-head {
+      display: grid;
+      grid-template-columns: minmax(0, 1.6fr) 100px 110px 100px 1fr;
+      gap: 10px;
+      padding: 0 6px;
+      color: var(--faint);
+      font-size: 12px;
+      font-weight: 800;
+    }
+
+    .table-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1.6fr) 100px 110px 100px 1fr;
+      gap: 10px;
+      align-items: center;
+      padding: 14px;
+    }
+
+    .file-cell strong,
+    .detail-grid strong {
+      display: block;
+      margin-bottom: 4px;
+      font-size: 14px;
+    }
+
+    .file-cell strong {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .file-cell span,
+    .text-cell,
+    .detail-grid span {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.55;
+      word-break: break-word;
+    }
+
+    .status-badge {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 30px;
+      padding: 0 12px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 800;
+    }
+
+    .status-badge.active {
+      color: #047857;
+      background: #ecfdf5;
+      border: 1px solid #bbf7d0;
+    }
+
+    .status-badge.failed {
+      color: #b91c1c;
+      background: #fef2f2;
+      border: 1px solid #fecaca;
+    }
+
+    .status-badge.deleted {
+      color: #647084;
+      background: #f3f4f6;
+      border: 1px solid #d1d5db;
+    }
+
+    .status-badge.unindexed,
+    .status-badge.unsupported {
+      color: #92400e;
+      background: #fffbeb;
+      border: 1px solid #fde68a;
+    }
+
+    .row-actions {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      justify-content: flex-start;
+    }
+
+    .row-actions .knowledge-button {
+      min-height: 34px;
+      padding: 0 10px;
+      font-size: 12px;
+    }
+
+    .list-meta {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+
+    .list-meta h3,
+    .detail-panel h3 {
+      margin: 0;
+      font-size: 18px;
+    }
+
+    .list-meta span,
+    .pager span {
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .pager {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-top: 16px;
+    }
+
+    .pager-actions {
+      display: flex;
+      gap: 10px;
+    }
+
+    .detail-card {
+      display: grid;
+      gap: 12px;
+      padding: 16px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-sm);
+      background: rgba(248, 250, 252, 0.88);
+    }
+
+    .detail-grid {
+      display: grid;
+      gap: 8px;
+    }
+
+    .empty-state {
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.6;
+    }
+
+    @media (max-width: 1180px) {
+      .toolbar-grid {
+        grid-template-columns: 1fr 1fr 140px 140px;
+      }
+
+      .content {
+        grid-template-columns: 1fr;
+      }
+
+      .detail-panel {
+        border-left: 0;
+        border-top: 1px solid var(--line);
+      }
+    }
+
+    @media (max-width: 960px) {
+      .app {
+        grid-template-columns: 1fr;
+      }
+
+      .service-panel {
+        border-right: 0;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .trust-list {
+        margin-top: 0;
+      }
+
+      .toolbar-grid,
+      .table-head,
+      .table-row {
+        grid-template-columns: 1fr;
+      }
+
+      .table-head {
+        display: none;
+      }
+    }
+
+    @media (max-width: 640px) {
+      body {
+        background: #ffffff;
+      }
+
+      .app {
+        width: 100vw;
+        min-height: 100vh;
+        margin: 0;
+        border: 0;
+        border-radius: 0;
+      }
+
+      .service-panel,
+      .list-panel,
+      .detail-panel {
+        padding: 22px;
+      }
+
+      .hero h1 {
+        font-size: 28px;
+      }
+
+      .topbar,
+      .toolbar {
+        padding: 16px;
+      }
+
+      .pager,
+      .list-meta {
+        flex-direction: column;
+        align-items: flex-start;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="app">
+    <aside class="service-panel">
+      <section class="hero">
+        <div class="brand-mark">KB</div>
+        <h1>知识库管理页</h1>
+        <p>当前页面专门负责文件上传、文件列表、删除操作、索引状态查看，以及对 JSON 文件手动构建或重建索引。</p>
+      </section>
+
+      <div class="service-status" id="serviceStatus">
+        <span class="status-dot"></span>
+        <span>正在检查知识库服务</span>
+      </div>
+
+      <section class="quick-area" aria-label="页面说明">
+        <article class="quick-card">
+          <strong>文件与索引已拆分展示</strong>
+          <span>列表主视角是上传文件，索引状态通过 `/knowledge/documents/files` 聚合返回。</span>
+        </article>
+        <article class="quick-card">
+          <strong>当前索引能力</strong>
+          <span>这版后端仅支持对 JSON 文件构建索引，其他格式会显示为 `unsupported`。</span>
+        </article>
+        <article class="quick-card">
+          <strong>返回对话页</strong>
+          <span>聊天测试已从文档管理功能中独立出来。</span>
+          <a class="new-chat" href="/frontend/api-tester.html">打开对话页</a>
+        </article>
+      </section>
+
+      <section class="trust-list" aria-label="使用建议">
+        <div class="trust-item">
+          <div class="trust-icon">1</div>
+          <div>
+            <strong>先上传再建索引</strong>
+            <span>上传文件只调用 `/files`，真正建索引需要在列表中点击“建索引”。</span>
+          </div>
+        </div>
+        <div class="trust-item">
+          <div class="trust-icon">2</div>
+          <div>
+            <strong>删除文件会联动索引</strong>
+            <span>若该文件已存在 document 记录，删除文件时会同步删除对应知识文档记录。</span>
+          </div>
+        </div>
+      </section>
+    </aside>
+
+    <section class="workspace">
+      <header class="topbar">
+        <div class="agent-info">
+          <div class="agent-avatar">管</div>
+          <div>
+            <h2>知识库文档管理</h2>
+            <p>上传、搜索、分页、查看状态、删除文件、手动构建与重建索引。</p>
+          </div>
+        </div>
+      </header>
+
+      <section class="toolbar">
+        <div class="toolbar-grid">
+          <div class="field">
+            <label for="searchInput">搜索文件</label>
+            <input id="searchInput" type="text" placeholder="文件名 / 路径 / namespace" />
+          </div>
+          <div class="field">
+            <label for="namespaceInput">命名空间</label>
+            <input id="namespaceInput" type="text" value="faq" />
+          </div>
+          <div class="field">
+            <label for="chunkSizeInput">分块大小</label>
+            <input id="chunkSizeInput" type="number" min="1" step="1" value="500" />
+          </div>
+          <div class="field">
+            <label for="chunkOverlapInput">重叠长度</label>
+            <input id="chunkOverlapInput" type="number" min="0" step="1" value="80" />
+          </div>
+          <div class="field">
+            <label for="fileUpload">上传文件</label>
+            <input id="fileUpload" type="file" accept=".json,.txt,.md,.csv,.pdf,.docx,.xlsx" />
+          </div>
+        </div>
+
+        <div class="actions">
+          <button id="uploadButton" class="knowledge-button" type="button">上传文件</button>
+          <button id="refreshButton" class="knowledge-button secondary" type="button">刷新列表</button>
+        </div>
+
+        <div id="statusBox" class="knowledge-status">就绪。</div>
+      </section>
+
+      <section class="content">
+        <div class="list-panel">
+          <div class="list-meta">
+            <h3>文件列表</h3>
+            <span id="countLabel">0 条记录</span>
+          </div>
+
+          <div class="table-list">
+            <div class="table-head">
+              <div>文件</div>
+              <div>状态</div>
+              <div>命名空间</div>
+              <div>版本</div>
+              <div>操作</div>
+            </div>
+            <div id="tableBody"></div>
+          </div>
+
+          <div class="pager">
+            <span id="pagerInfo"></span>
+            <div class="pager-actions">
+              <button id="prevPageButton" class="knowledge-button secondary" type="button">上一页</button>
+              <button id="nextPageButton" class="knowledge-button secondary" type="button">下一页</button>
+            </div>
+          </div>
+        </div>
+
+        <aside class="detail-panel">
+          <h3>索引详情</h3>
+          <div id="detailContent" class="empty-state">点击列表中的“详情”查看文档版本、分块参数和错误信息。</div>
+        </aside>
+      </section>
+    </section>
+  </main>
+
+  <script>
+    const API_BASE_URL = "http://127.0.0.1:8000";
+    const PAGE_SIZE = 6;
+
+    const refs = {
+      serviceStatus: document.getElementById("serviceStatus"),
+      searchInput: document.getElementById("searchInput"),
+      namespaceInput: document.getElementById("namespaceInput"),
+      chunkSizeInput: document.getElementById("chunkSizeInput"),
+      chunkOverlapInput: document.getElementById("chunkOverlapInput"),
+      fileUpload: document.getElementById("fileUpload"),
+      uploadButton: document.getElementById("uploadButton"),
+      refreshButton: document.getElementById("refreshButton"),
+      statusBox: document.getElementById("statusBox"),
+      tableBody: document.getElementById("tableBody"),
+      countLabel: document.getElementById("countLabel"),
+      pagerInfo: document.getElementById("pagerInfo"),
+      prevPageButton: document.getElementById("prevPageButton"),
+      nextPageButton: document.getElementById("nextPageButton"),
+      detailContent: document.getElementById("detailContent")
+    };
+
+    const state = {
+      files: [],
+      filtered: [],
+      currentPage: 1,
+      busy: false,
+      selectedDocumentId: ""
+    };
+
+    function escapeHtml(value) {
+      return String(value)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;");
+    }
+
+    function formatDateTime(value) {
+      if (!value) {
+        return "—";
+      }
+      const date = new Date(value);
+      return Number.isNaN(date.getTime()) ? value : date.toLocaleString("zh-CN");
+    }
+
+    function formatSize(bytes) {
+      if (typeof bytes !== "number") {
+        return "—";
+      }
+      if (bytes < 1024) return bytes + " B";
+      if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB";
+      return (bytes / (1024 * 1024)).toFixed(1) + " MB";
+    }
+
+    function setServiceStatus(ok) {
+      refs.serviceStatus.innerHTML = ok
+        ? '<span class="status-dot"></span><span>知识库服务已连接</span>'
+        : '<span class="status-dot"></span><span>知识库服务暂不可用</span>';
+      refs.serviceStatus.style.color = ok ? "#047857" : "#b91c1c";
+      refs.serviceStatus.style.background = ok ? "#ecfdf5" : "#fef2f2";
+      refs.serviceStatus.style.borderColor = ok ? "#bbf7d0" : "#fecaca";
+    }
+
+    function setBusy(isBusy) {
+      state.busy = isBusy;
+      refs.uploadButton.disabled = isBusy;
+      refs.refreshButton.disabled = isBusy;
+      refs.prevPageButton.disabled = isBusy;
+      refs.nextPageButton.disabled = isBusy;
+      refs.tableBody.querySelectorAll("button").forEach(function (button) {
+        button.disabled = isBusy;
+      });
+    }
+
+    function setStatus(message, tone) {
+      refs.statusBox.textContent = message;
+      refs.statusBox.className = "knowledge-status" + (tone ? " " + tone : "");
+    }
+
+    async function apiRequest(path, options) {
+      const response = await fetch(API_BASE_URL + path, Object.assign({
+        headers: { "Content-Type": "application/json" }
+      }, options || {}));
+      const text = await response.text();
+      let data = null;
+      try {
+        data = text ? JSON.parse(text) : null;
+      } catch (_) {
+        data = text;
+      }
+      if (!response.ok) {
+        const detail = data && data.detail ? data.detail : null;
+        throw new Error(detail && detail.message ? detail.message : "服务请求失败");
+      }
+      return data;
+    }
+
+    function readChunkConfig() {
+      const namespace = refs.namespaceInput.value.trim();
+      const chunkSize = Number(refs.chunkSizeInput.value);
+      const chunkOverlap = Number(refs.chunkOverlapInput.value);
+      if (!namespace) {
+        throw new Error("请填写命名空间。");
+      }
+      if (!Number.isInteger(chunkSize) || chunkSize <= 0) {
+        throw new Error("分块大小必须是正整数。");
+      }
+      if (!Number.isInteger(chunkOverlap) || chunkOverlap < 0) {
+        throw new Error("重叠长度必须是非负整数。");
+      }
+      if (chunkOverlap >= chunkSize) {
+        throw new Error("重叠长度必须小于分块大小。");
+      }
+      return {
+        namespace,
+        chunk_size: chunkSize,
+        chunk_overlap: chunkOverlap
+      };
+    }
+
+    function applyFilter() {
+      const keyword = refs.searchInput.value.trim().toLowerCase();
+      state.filtered = state.files.filter(function (item) {
+        if (!keyword) {
+          return true;
+        }
+        return [item.filename, item.source_path, item.namespace || ""].join(" ").toLowerCase().includes(keyword);
+      });
+      const totalPages = Math.max(1, Math.ceil(state.filtered.length / PAGE_SIZE));
+      state.currentPage = Math.min(state.currentPage, totalPages);
+      renderList();
+    }
+
+    function renderList() {
+      refs.countLabel.textContent = state.filtered.length + " 条记录";
+      if (!state.filtered.length) {
+        refs.tableBody.innerHTML = '<div class="empty-state">当前没有符合条件的文件。</div>';
+        refs.pagerInfo.textContent = "";
+        return;
+      }
+
+      const totalPages = Math.max(1, Math.ceil(state.filtered.length / PAGE_SIZE));
+      const startIndex = (state.currentPage - 1) * PAGE_SIZE;
+      const pageItems = state.filtered.slice(startIndex, startIndex + PAGE_SIZE);
+
+      refs.tableBody.innerHTML = pageItems.map(function (item) {
+        return (
+          '<article class="table-row">' +
+            '<div class="file-cell">' +
+              '<strong title="' + escapeHtml(item.filename) + '">' + escapeHtml(item.filename) + '</strong>' +
+              '<span>' + escapeHtml(item.source_path) + '</span>' +
+              '<span>' + escapeHtml(formatSize(item.file_size)) + ' · 上传于 ' + escapeHtml(formatDateTime(item.created_at)) + '</span>' +
+              (item.last_error ? '<span>' + escapeHtml(item.last_error) + '</span>' : '') +
+            '</div>' +
+            '<div class="text-cell"><span class="status-badge ' + escapeHtml(item.status) + '">' + escapeHtml(item.status) + '</span></div>' +
+            '<div class="text-cell">' + escapeHtml(item.namespace || "—") + '</div>' +
+            '<div class="text-cell">' + escapeHtml(item.active_version || "—") + '</div>' +
+            '<div class="row-actions">' +
+              (item.document_id
+                ? '<button class="knowledge-button secondary" type="button" data-action="detail" data-document-id="' + escapeHtml(item.document_id) + '">详情</button>' +
+                  '<button class="knowledge-button secondary" type="button" data-action="rebuild" data-document-id="' + escapeHtml(item.document_id) + '">重建</button>'
+                : (item.can_index
+                  ? '<button class="knowledge-button secondary" type="button" data-action="index" data-source-path="' + escapeHtml(item.source_path) + '">建索引</button>'
+                  : "")) +
+              '<button class="knowledge-button danger" type="button" data-action="delete-file" data-filename="' + escapeHtml(item.filename) + '" data-document-id="' + escapeHtml(item.document_id || "") + '">删除文件</button>' +
+            '</div>' +
+          '</article>'
+        );
+      }).join("");
+
+      refs.pagerInfo.textContent = "第 " + state.currentPage + " / " + totalPages + " 页";
+      refs.prevPageButton.disabled = state.busy || state.currentPage <= 1;
+      refs.nextPageButton.disabled = state.busy || state.currentPage >= totalPages;
+    }
+
+    function renderDetail(document) {
+      const versions = Array.isArray(document.versions) && document.versions.length
+        ? document.versions.map(function (version) {
+            return (
+              '<div class="detail-card">' +
+                '<div class="detail-grid">' +
+                  '<span><strong>版本：</strong>' + escapeHtml(version.document_version) + '</span>' +
+                  '<span><strong>状态：</strong>' + escapeHtml(version.status) + '</span>' +
+                  '<span><strong>分块数量：</strong>' + escapeHtml(version.chunk_count) + '</span>' +
+                  '<span><strong>分块参数：</strong>' + escapeHtml(version.chunk_size) + ' / ' + escapeHtml(version.chunk_overlap) + '</span>' +
+                  '<span><strong>创建时间：</strong>' + escapeHtml(formatDateTime(version.created_at)) + '</span>' +
+                  '<span><strong>错误信息：</strong>' + escapeHtml(version.last_error || "无") + '</span>' +
+                '</div>' +
+              '</div>'
+            );
+          }).join("")
+        : '<div class="empty-state">当前没有版本信息。</div>';
+
+      refs.detailContent.innerHTML =
+        '<div class="detail-card">' +
+          '<div class="detail-grid">' +
+            '<span><strong>文档 ID：</strong>' + escapeHtml(document.document_id) + '</span>' +
+            '<span><strong>命名空间：</strong>' + escapeHtml(document.namespace) + '</span>' +
+            '<span><strong>源文件：</strong>' + escapeHtml(document.source_path) + '</span>' +
+            '<span><strong>状态：</strong>' + escapeHtml(document.status) + '</span>' +
+            '<span><strong>生效版本：</strong>' + escapeHtml(document.active_version) + '</span>' +
+            '<span><strong>分块数量：</strong>' + escapeHtml(document.chunk_count) + '</span>' +
+            '<span><strong>分块参数：</strong>' + escapeHtml(document.chunk_size) + ' / ' + escapeHtml(document.chunk_overlap) + '</span>' +
+            '<span><strong>更新时间：</strong>' + escapeHtml(formatDateTime(document.updated_at)) + '</span>' +
+            '<span><strong>最后错误：</strong>' + escapeHtml(document.last_error || "无") + '</span>' +
+          '</div>' +
+        '</div>' +
+        versions;
+    }
+
+    async function refreshFiles(showBusy) {
+      const namespace = refs.namespaceInput.value.trim();
+      const query = namespace ? "?namespace=" + encodeURIComponent(namespace) : "";
+      if (showBusy !== false) {
+        setBusy(true);
+        setStatus("正在加载文件列表...", "");
+      }
+      try {
+        const data = await apiRequest("/knowledge/documents/files" + query);
+        state.files = Array.isArray(data.items) ? data.items : [];
+        applyFilter();
+        if (showBusy !== false) {
+          setStatus("已加载 " + state.files.length + " 个文件。", "ok");
+        }
+        setServiceStatus(true);
+      } catch (error) {
+        state.files = [];
+        state.filtered = [];
+        renderList();
+        setStatus(error.message || "加载失败", "error");
+        setServiceStatus(false);
+      } finally {
+        if (showBusy !== false) {
+          setBusy(false);
+        }
+      }
+    }
+
+    async function uploadFile() {
+      const file = refs.fileUpload.files[0];
+      if (!file) {
+        setStatus("请先选择要上传的文件。", "error");
+        return;
+      }
+
+      try {
+        setBusy(true);
+        setStatus("正在上传文件...", "");
+        const formData = new FormData();
+        formData.append("file", file);
+        const response = await fetch(API_BASE_URL + "/files/upload", {
+          method: "POST",
+          body: formData
+        });
+        const text = await response.text();
+        const data = text ? JSON.parse(text) : null;
+        if (!response.ok) {
+          throw new Error(data && data.detail ? data.detail.message : "上传失败");
+        }
+        refs.fileUpload.value = "";
+        await refreshFiles(false);
+        setStatus("文件上传成功：" + data.filename, "ok");
+      } catch (error) {
+        setStatus(error.message || "上传失败", "error");
+      } finally {
+        setBusy(false);
+      }
+    }
+
+    async function indexFile(sourcePath) {
+      try {
+        const payload = readChunkConfig();
+        setBusy(true);
+        setStatus("正在构建索引...", "");
+        await apiRequest("/knowledge/documents", {
+          method: "POST",
+          body: JSON.stringify({
+            namespace: payload.namespace,
+            source_path: sourcePath,
+            chunk_size: payload.chunk_size,
+            chunk_overlap: payload.chunk_overlap,
+            keep_version: false
+          })
+        });
+        await refreshFiles(false);
+        setStatus("索引构建完成。", "ok");
+      } catch (error) {
+        setStatus(error.message || "索引构建失败", "error");
+      } finally {
+        setBusy(false);
+      }
+    }
+
+    async function rebuildDocument(documentId) {
+      try {
+        const payload = readChunkConfig();
+        setBusy(true);
+        setStatus("正在重建索引...", "");
+        const document = await apiRequest("/knowledge/documents/" + encodeURIComponent(documentId) + "/rechunk", {
+          method: "POST",
+          body: JSON.stringify({
+            chunk_size: payload.chunk_size,
+            chunk_overlap: payload.chunk_overlap,
+            keep_version: true
+          })
+        });
+        renderDetail(document);
+        await refreshFiles(false);
+        setStatus("索引重建完成。", "ok");
+      } catch (error) {
+        setStatus(error.message || "索引重建失败", "error");
+      } finally {
+        setBusy(false);
+      }
+    }
+
+    async function loadDocumentDetail(documentId) {
+      try {
+        setBusy(true);
+        setStatus("正在加载文档详情...", "");
+        const document = await apiRequest("/knowledge/documents/" + encodeURIComponent(documentId));
+        state.selectedDocumentId = documentId;
+        renderDetail(document);
+        setStatus("详情已加载。", "ok");
+      } catch (error) {
+        setStatus(error.message || "详情加载失败", "error");
+      } finally {
+        setBusy(false);
+      }
+    }
+
+    async function deleteFile(filename, documentId) {
+      if (!window.confirm("确认删除文件 " + filename + " 吗？")) {
+        return;
+      }
+      try {
+        setBusy(true);
+        setStatus("正在删除文件...", "");
+        const response = await fetch(API_BASE_URL + "/files/" + encodeURIComponent(filename), {
+          method: "DELETE"
+        });
+        const text = await response.text();
+        const data = text ? JSON.parse(text) : null;
+        if (!response.ok) {
+          throw new Error(data && data.detail ? data.detail.message : "删除失败");
+        }
+        if (documentId) {
+          await apiRequest("/knowledge/documents/" + encodeURIComponent(documentId), {
+            method: "DELETE"
+          });
+        }
+        if (state.selectedDocumentId && state.selectedDocumentId === documentId) {
+          state.selectedDocumentId = "";
+          refs.detailContent.textContent = "当前文档已删除，请从列表重新选择。";
+        }
+        await refreshFiles(false);
+        setStatus("文件删除完成。", "ok");
+      } catch (error) {
+        setStatus(error.message || "删除失败", "error");
+      } finally {
+        setBusy(false);
+      }
+    }
+
+    async function checkHealth() {
+      try {
+        await apiRequest("/health");
+        setServiceStatus(true);
+      } catch (_) {
+        setServiceStatus(false);
+      }
+    }
+
+    function bindEvents() {
+      refs.uploadButton.addEventListener("click", uploadFile);
+      refs.refreshButton.addEventListener("click", function () {
+        refreshFiles(true);
+      });
+      refs.searchInput.addEventListener("input", function () {
+        state.currentPage = 1;
+        applyFilter();
+      });
+      refs.prevPageButton.addEventListener("click", function () {
+        if (state.currentPage > 1) {
+          state.currentPage -= 1;
+          renderList();
+        }
+      });
+      refs.nextPageButton.addEventListener("click", function () {
+        const totalPages = Math.max(1, Math.ceil(state.filtered.length / PAGE_SIZE));
+        if (state.currentPage < totalPages) {
+          state.currentPage += 1;
+          renderList();
+        }
+      });
+      refs.tableBody.addEventListener("click", function (event) {
+        const button = event.target.closest("[data-action]");
+        if (!button || state.busy) {
+          return;
+        }
+        const action = button.dataset.action;
+        if (action === "detail") {
+          loadDocumentDetail(button.dataset.documentId);
+        } else if (action === "rebuild") {
+          rebuildDocument(button.dataset.documentId);
+        } else if (action === "index") {
+          indexFile(button.dataset.sourcePath);
+        } else if (action === "delete-file") {
+          deleteFile(button.dataset.filename, button.dataset.documentId);
+        }
+      });
+    }
+
+    async function init() {
+      bindEvents();
+      await checkHealth();
+      await refreshFiles(true);
+    }
+
+    init();
+  </script>
+</body>
+</html>

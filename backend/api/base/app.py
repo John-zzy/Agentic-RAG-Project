@@ -10,6 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from backend.api.chat.routes import router as api_router
 from backend.api.chat.service import ChatService, create_chat_service
 from backend.api.knowledge.routes import router as knowledge_document_router
+from backend.api.file.routes import router as file_router
 from backend.config.settings import settings
 
 
@@ -43,6 +44,7 @@ def create_app(
     )
     app.include_router(api_router)
     app.include_router(knowledge_document_router)
+    app.include_router(file_router)
     frontend_dir = Path(__file__).resolve().parents[3] / "frontend"
     if frontend_dir.exists():
         app.mount("/frontend", StaticFiles(directory=str(frontend_dir)), name="frontend")

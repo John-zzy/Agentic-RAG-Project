@@ -10,6 +10,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = BASE_DIR / "data"
+FILES_DIR = DATA_DIR / "files"
 CHROMA_DIR = DATA_DIR / ".chroma"
 LEGACY_SQLITE_PATH = BASE_DIR / "memory" / "sessions.db"
 SQLITE_PATH = DATA_DIR / "sessions.db"

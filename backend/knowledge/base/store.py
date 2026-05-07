@@ -5,6 +5,7 @@ import json
 import math
 import re
 from abc import ABC, abstractmethod
+from collections import Counter
 from typing import Any, TypeVar, cast
 
 import chromadb
@@ -47,6 +48,103 @@ class VectorStoreHealth(BaseModel):
     provider: str
     available: bool
     detail: str | None = None
+
+
+class HybridSearchRanker:
+    """融合向量检索与关键词检索结果，提升短问句与精确词命中能力。"""
+
+    def __init__(self, *, vector_weight: float = 0.65, keyword_weight: float = 0.35) -> None:
+        self.vector_weight = vector_weight
+        self.keyword_weight = keyword_weight
+
+    def rank(
+        self,
+        *,
+        query: str,
+        vector_results: list[VectorSearchResult],
+        keyword_results: list[VectorSearchResult],
+        top_k: int,
+    ) -> list[VectorSearchResult]:
+        keyword_scores = self._build_keyword_scores(
+            query=query,
+            keyword_results=keyword_results,
+            top_k=max(top_k, len(keyword_results)),
+        )
+        merged: dict[str, VectorSearchResult] = {}
+        combined_scores: dict[str, float] = {}
+
+        for rank, result in enumerate(vector_results, start=1):
+            doc_id = result.document.id
+            merged.setdefault(doc_id, result)
+            combined_scores[doc_id] = combined_scores.get(doc_id, 0.0) + self.vector_weight / (rank + 60.0)
+
+        for doc_id, keyword_score in keyword_scores.items():
+            keyword_result = next((result for result in keyword_results if result.document.id == doc_id), None)
+            if keyword_result is not None:
+                merged.setdefault(doc_id, keyword_result)
+            combined_scores[doc_id] = combined_scores.get(doc_id, 0.0) + self.keyword_weight * keyword_score
+
+        ranked_ids = sorted(combined_scores, key=lambda doc_id: combined_scores[doc_id], reverse=True)
+        results: list[VectorSearchResult] = []
+        for doc_id in ranked_ids[:top_k]:
+            result = merged[doc_id]
+            results.append(
+                VectorSearchResult(
+                    document=result.document,
+                    score=combined_scores[doc_id],
+                )
+            )
+        return results
+
+    def _build_keyword_scores(
+        self,
+        *,
+        query: str,
+        keyword_results: list[VectorSearchResult],
+        top_k: int,
+    ) -> dict[str, float]:
+        documents = [result.document.content for result in keyword_results]
+        if not documents:
+            return {}
+
+        query_tokens = LocalHashingEmbedder()._tokenize(query.strip().lower())
+        if not query_tokens:
+            return {}
+
+        tokenized_documents = [LocalHashingEmbedder()._tokenize(document.strip().lower()) for document in documents]
+        document_count = len(tokenized_documents)
+        average_length = sum(len(tokens) for tokens in tokenized_documents) / document_count if document_count else 0.0
+        if average_length == 0:
+            return {}
+
+        document_frequency: Counter[str] = Counter()
+        for tokens in tokenized_documents:
+            document_frequency.update(set(tokens))
+
+        k1 = 1.5
+        b = 0.75
+        scores: dict[str, float] = {}
+        for result, tokens in zip(keyword_results, tokenized_documents, strict=False):
+            term_frequency = Counter(tokens)
+            document_length = len(tokens)
+            score = 0.0
+            for token in query_tokens:
+                frequency = term_frequency.get(token, 0)
+                if frequency == 0:
+                    continue
+                doc_freq = document_frequency.get(token, 0)
+                idf = math.log(1.0 + (document_count - doc_freq + 0.5) / (doc_freq + 0.5))
+                denominator = frequency + k1 * (1.0 - b + b * document_length / average_length)
+                score += idf * (frequency * (k1 + 1.0)) / denominator
+            if score > 0:
+                scores[result.document.id] = score
+
+        if not scores:
+            return {}
+        max_score = max(scores.values())
+        if max_score <= 0:
+            return {}
+        return {doc_id: score / max_score for doc_id, score in scores.items()}
 
 
 class LocalHashingEmbedder:
@@ -148,6 +246,15 @@ class VectorStore(ABC):
         """列出未删除的文档主记录，可按命名空间过滤。"""
 
     @abstractmethod
+    def search_document_chunks(
+        self,
+        query: str,
+        top_k: int | None = None,
+        namespace: str | None = None,
+    ) -> list[VectorSearchResult]:
+        """搜索已激活的知识文档分块，可按命名空间过滤。"""
+
+    @abstractmethod
     def delete_document_record(self, document_id: str) -> None:
         """将文档主记录标记为删除。"""
 
@@ -188,6 +295,21 @@ class VectorStore(ABC):
             elif value is not None:
                 normalized[key] = str(value)
         return normalized
+
+    def rerank_hybrid_results(
+        self,
+        *,
+        query: str,
+        vector_results: list[VectorSearchResult],
+        keyword_results: list[VectorSearchResult],
+        top_k: int,
+    ) -> list[VectorSearchResult]:
+        return HybridSearchRanker().rank(
+            query=query,
+            vector_results=vector_results,
+            keyword_results=keyword_results,
+            top_k=top_k,
+        )
 
 
 VectorStoreType = TypeVar("VectorStoreType", bound=VectorStore)
@@ -329,6 +451,57 @@ class ChromaVectorStore(VectorStore):
         record["status"] = "deleted"
         self.upsert_document_record(record)
 
+    def search_document_chunks(
+        self,
+        query: str,
+        top_k: int | None = None,
+        namespace: str | None = None,
+    ) -> list[VectorSearchResult]:
+        """在 Chroma 文档分块集合中执行语义检索。"""
+        collection = self._get_document_collection("chunks")
+        requested_top_k = top_k or self.config.top_k
+        query_embedding = self.build_embedding(query)
+        where: dict[str, Any] = {"is_active": True}
+        if namespace is not None:
+            where = {"$and": [where, {"namespace": namespace}]}
+        query_result = collection.query(
+            query_embeddings=[query_embedding],
+            n_results=requested_top_k,
+            where=where,
+        )
+        ids = query_result.get("ids", [[]])[0]
+        documents = query_result.get("documents", [[]])[0]
+        metadatas = query_result.get("metadatas", [[]])[0]
+        distances = query_result.get("distances", [[]])[0]
+
+        results: list[VectorSearchResult] = []
+        for index, document_id in enumerate(ids):
+            distance = distances[index] if index < len(distances) else None
+            score = None if distance is None else 1.0 / (1.0 + float(distance))
+            content = documents[index] if index < len(documents) else ""
+            metadata = metadatas[index] if index < len(metadatas) and metadatas[index] else {}
+            results.append(
+                VectorSearchResult(
+                    document=VectorStoreDocument(
+                        id=document_id,
+                        content=content,
+                        metadata=cast(dict[str, MetadataValue], metadata),
+                    ),
+                    score=score,
+                )
+            )
+        keyword_results = self._load_keyword_candidates(
+            collection=collection,
+            where=where,
+            limit=max(requested_top_k * 10, 20),
+        )
+        return self.rerank_hybrid_results(
+            query=query,
+            vector_results=results,
+            keyword_results=keyword_results,
+            top_k=requested_top_k,
+        )
+
     def upsert_document_chunks(self, chunks: list[VectorStoreDocument]) -> None:
         """批量写入文档管理分块到 Chroma。"""
         if not chunks:
@@ -386,6 +559,33 @@ class ChromaVectorStore(VectorStore):
         if collection_name not in self._collections:
             self.ensure_document_indexes()
         return self._collections[collection_name]
+
+    def _load_keyword_candidates(
+        self,
+        *,
+        collection: Collection,
+        where: dict[str, Any],
+        limit: int,
+    ) -> list[VectorSearchResult]:
+        result = collection.get(where=where, include=["documents", "metadatas"], limit=limit)
+        ids = result.get("ids") or []
+        documents = result.get("documents") or []
+        metadatas = result.get("metadatas") or []
+        candidates: list[VectorSearchResult] = []
+        for index, document_id in enumerate(ids):
+            content = documents[index] if index < len(documents) else ""
+            metadata = metadatas[index] if index < len(metadatas) and metadatas[index] else {}
+            candidates.append(
+                VectorSearchResult(
+                    document=VectorStoreDocument(
+                        id=document_id,
+                        content=str(content),
+                        metadata=cast(dict[str, MetadataValue], metadata),
+                    ),
+                    score=None,
+                )
+            )
+        return candidates
 
     def _record_metadata(self, record: dict[str, Any]) -> dict[str, Any]:
         """抽取主记录列表查询所需的标量元数据。"""
@@ -584,6 +784,61 @@ class ElasticsearchVectorStore(VectorStore):
         )
         return [cast(dict[str, Any], hit.get("_source", {})) for hit in response.get("hits", {}).get("hits", [])]
 
+    def search_document_chunks(
+        self,
+        query: str,
+        top_k: int | None = None,
+        namespace: str | None = None,
+    ) -> list[VectorSearchResult]:
+        """在 Elasticsearch 文档分块索引中搜索已激活分块。"""
+        self.ensure_document_indexes()
+        requested_top_k = top_k or self.config.top_k
+        filters: list[dict[str, Any]] = [{"term": {"is_active": True}}]
+        if namespace is not None:
+            filters.append({"term": {"namespace": namespace}})
+        index_name = self.resolve_document_index_name("chunks")
+        response = self._client.search(
+            index=index_name,
+            query={
+                "script_score": {
+                    "query": {"bool": {"filter": filters}},
+                    "script": {
+                        "source": "cosineSimilarity(params.query_vector, 'embedding') + 1.0",
+                        "params": {"query_vector": self.build_embedding(query)},
+                    },
+                }
+            },
+            size=requested_top_k,
+            source=None,
+        )
+        vector_results = self._build_elasticsearch_results(response)
+        keyword_response = self._client.search(
+            index=index_name,
+            query={
+                "bool": {
+                    "filter": filters,
+                    "must": [
+                        {
+                            "match": {
+                                "content": {
+                                    "query": query,
+                                }
+                            }
+                        }
+                    ],
+                }
+            },
+            size=max(requested_top_k * 10, 20),
+            source=None,
+        )
+        keyword_results = self._build_elasticsearch_results(keyword_response)
+        return self.rerank_hybrid_results(
+            query=query,
+            vector_results=vector_results,
+            keyword_results=keyword_results,
+            top_k=requested_top_k,
+        )
+
     def delete_document_record(self, document_id: str) -> None:
         """软删除文档主记录，保留来源文件与历史审计字段。"""
         record = self.get_document_record(document_id)
@@ -666,6 +921,22 @@ class ElasticsearchVectorStore(VectorStore):
         response = self._client.bulk(operations=operations, refresh=True)
         if response.get("errors"):
             raise RuntimeError(f"Elasticsearch document chunk cleanup failed: {response}")
+
+    def _build_elasticsearch_results(self, response: dict[str, Any]) -> list[VectorSearchResult]:
+        results: list[VectorSearchResult] = []
+        for hit in response.get("hits", {}).get("hits", []):
+            source = cast(dict[str, Any], hit.get("_source", {}))
+            results.append(
+                VectorSearchResult(
+                    document=VectorStoreDocument(
+                        id=str(source.get("chunk_id", hit.get("_id", ""))),
+                        content=str(source.get("content", "")),
+                        metadata=cast(dict[str, MetadataValue], source.get("metadata", {})),
+                    ),
+                    score=float(hit.get("_score")) if hit.get("_score") is not None else None,
+                )
+            )
+        return results
 
     def resolve_index_name(self, namespace: str) -> str:
         """根据命名空间配置与前缀规则计算索引名。"""

@@ -52,7 +52,8 @@
 
     button:focus-visible,
     input:focus-visible,
-    textarea:focus-visible {
+    textarea:focus-visible,
+    a:focus-visible {
       outline: 3px solid rgba(37, 99, 235, 0.22);
       outline-offset: 2px;
     }
@@ -62,7 +63,7 @@
       min-height: calc(100vh - 32px);
       margin: 16px auto;
       display: grid;
-      grid-template-columns: 340px minmax(0, 1fr) 360px;
+      grid-template-columns: 340px minmax(0, 1fr);
       overflow: hidden;
       border: 1px solid rgba(230, 235, 242, 0.9);
       border-radius: 32px;
@@ -146,7 +147,8 @@
       letter-spacing: 0;
     }
 
-    .quick-card {
+    .quick-card,
+    .nav-card {
       width: 100%;
       padding: 16px;
       text-align: left;
@@ -157,13 +159,15 @@
       transition: transform 160ms ease, border-color 160ms ease, box-shadow 160ms ease;
     }
 
-    .quick-card:hover {
+    .quick-card:hover,
+    .nav-card:hover {
       transform: translateY(-2px);
       border-color: rgba(37, 99, 235, 0.32);
       box-shadow: var(--shadow-soft);
     }
 
     .quick-card strong,
+    .nav-card strong,
     .trust-item strong {
       display: block;
       margin-bottom: 6px;
@@ -171,11 +175,27 @@
     }
 
     .quick-card span,
+    .nav-card span,
     .trust-item span {
       display: block;
       color: var(--muted);
       font-size: 13px;
       line-height: 1.55;
+    }
+
+    .nav-link {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 36px;
+      margin-top: 12px;
+      padding: 0 14px;
+      border-radius: 999px;
+      color: var(--brand);
+      background: #eff6ff;
+      font-size: 13px;
+      font-weight: 800;
+      text-decoration: none;
     }
 
     .trust-list {
@@ -408,8 +428,7 @@
       background: var(--brand-deep);
     }
 
-    .send-button:disabled,
-    .knowledge-button:disabled {
+    .send-button:disabled {
       cursor: not-allowed;
       opacity: 0.55;
       transform: none;
@@ -428,186 +447,6 @@
 
     .error-toast.show {
       display: block;
-    }
-
-    .knowledge-panel {
-      min-width: 0;
-      display: flex;
-      flex-direction: column;
-      gap: 18px;
-      padding: 24px;
-      border-left: 1px solid var(--line);
-      background:
-        linear-gradient(180deg, rgba(245, 158, 11, 0.08), transparent 38%),
-        #ffffff;
-      overflow-y: auto;
-    }
-
-    .knowledge-head h2 {
-      margin: 0;
-      font-size: 20px;
-    }
-
-    .knowledge-head p,
-    .knowledge-help {
-      margin: 8px 0 0;
-      color: var(--muted);
-      font-size: 13px;
-      line-height: 1.6;
-    }
-
-    .knowledge-help {
-      margin: 0;
-      padding: 12px;
-      border-radius: 13px;
-      color: #92400e;
-      background: #fffbeb;
-      border: 1px solid #fde68a;
-    }
-
-    .knowledge-form,
-    .knowledge-list,
-    .knowledge-detail {
-      display: grid;
-      gap: 12px;
-      padding: 16px;
-      border: 1px solid var(--line);
-      border-radius: var(--radius-sm);
-      background: rgba(248, 250, 252, 0.88);
-    }
-
-    .field {
-      display: grid;
-      gap: 7px;
-    }
-
-    .field label,
-    .checkbox-field {
-      color: var(--muted);
-      font-size: 12px;
-      font-weight: 800;
-    }
-
-    .field input {
-      width: 100%;
-      min-height: 42px;
-      padding: 0 12px;
-      border: 1px solid var(--line);
-      border-radius: 13px;
-      color: var(--text);
-      background: #ffffff;
-    }
-
-    .form-grid {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 10px;
-    }
-
-    .checkbox-field {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-    }
-
-    .checkbox-field input {
-      width: 16px;
-      height: 16px;
-      accent-color: var(--brand);
-    }
-
-    .knowledge-actions {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 10px;
-    }
-
-    .knowledge-button {
-      min-height: 42px;
-      padding: 0 12px;
-      border-radius: 14px;
-      color: #ffffff;
-      background: var(--brand);
-      font-weight: 800;
-    }
-
-    .knowledge-button.secondary {
-      color: var(--brand);
-      background: #eff6ff;
-    }
-
-    .knowledge-button.danger {
-      color: var(--danger);
-      background: #fef2f2;
-    }
-
-    .knowledge-status {
-      min-height: 38px;
-      padding: 10px 12px;
-      border-radius: 13px;
-      color: #92400e;
-      background: #fffbeb;
-      border: 1px solid #fde68a;
-      font-size: 12px;
-      line-height: 1.5;
-      white-space: pre-wrap;
-    }
-
-    .knowledge-status.error {
-      color: #b91c1c;
-      background: #fef2f2;
-      border-color: #fecaca;
-    }
-
-    .knowledge-status.ok {
-      color: #047857;
-      background: #ecfdf5;
-      border-color: #bbf7d0;
-    }
-
-    .document-card {
-      display: grid;
-      gap: 10px;
-      padding: 13px;
-      border: 1px solid var(--line);
-      border-radius: 14px;
-      background: #ffffff;
-    }
-
-    .document-card strong {
-      display: block;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-      font-size: 13px;
-    }
-
-    .document-meta,
-    .detail-grid {
-      display: grid;
-      gap: 6px;
-      color: var(--muted);
-      font-size: 12px;
-      line-height: 1.45;
-      word-break: break-word;
-    }
-
-    .document-actions {
-      display: grid;
-      grid-template-columns: repeat(3, 1fr);
-      gap: 8px;
-    }
-
-    .document-actions .knowledge-button {
-      min-height: 34px;
-      padding: 0 8px;
-      font-size: 12px;
-    }
-
-    .empty-documents {
-      color: var(--muted);
-      font-size: 13px;
-      line-height: 1.6;
     }
 
     @keyframes message-in {
@@ -633,18 +472,6 @@
       }
     }
 
-    @media (max-width: 1180px) {
-      .app {
-        grid-template-columns: 340px minmax(0, 1fr);
-      }
-
-      .knowledge-panel {
-        grid-column: 1 / -1;
-        border-left: 0;
-        border-top: 1px solid var(--line);
-      }
-    }
-
     @media (max-width: 960px) {
       .app {
         grid-template-columns: 1fr;
@@ -657,10 +484,6 @@
 
       .trust-list {
         margin-top: 0;
-      }
-
-      .knowledge-panel {
-        grid-column: auto;
       }
     }
 
@@ -677,8 +500,7 @@
         border-radius: 0;
       }
 
-      .service-panel,
-      .knowledge-panel {
+      .service-panel {
         padding: 22px;
       }
 
@@ -701,12 +523,6 @@
       .composer {
         padding: 14px;
       }
-
-      .form-grid,
-      .knowledge-actions,
-      .document-actions {
-        grid-template-columns: 1fr;
-      }
     }
   </style>
 </head>
@@ -723,6 +539,12 @@
         <span class="status-dot"></span>
         <span>正在连接客服服务</span>
       </div>
+
+      <section class="nav-card" aria-label="页面导航">
+        <strong>知识库管理已独立拆分</strong>
+        <span>文件上传、文件列表、索引状态和手动重建已迁移到独立页面，当前页面仅保留对话测试。</span>
+        <a class="nav-link" href="/frontend/knowledge-manager.html">打开知识库管理页</a>
+      </section>
 
       <section class="quick-area" aria-label="常见问题">
         <p class="section-label">猜你想问</p>
@@ -780,57 +602,6 @@
         <div id="errorToast" class="error-toast"></div>
       </footer>
     </section>
-
-    <aside class="knowledge-panel" aria-label="知识库文档管理">
-      <section class="knowledge-head">
-        <p class="section-label">知识库运维</p>
-        <h2>文档管理</h2>
-        <p>登记后端数据目录里的 JSON 知识文件，查看已生效分块，并触发重切分或删除。</p>
-      </section>
-
-      <section class="knowledge-form">
-        <p class="knowledge-help">
-          当前页面不是文件上传器。请先把 JSON 文件放到 backend/data 目录下，再在“文件路径”里填写相对路径，例如 products.json、reviews.json、orders.json。
-        </p>
-        <div class="field">
-          <label for="docNamespace">命名空间</label>
-          <input id="docNamespace" type="text" value="faq" autocomplete="off" />
-        </div>
-        <div class="field">
-          <label for="docSourcePath">文件路径</label>
-          <input id="docSourcePath" type="text" placeholder="products.json" autocomplete="off" />
-        </div>
-        <div class="form-grid">
-          <div class="field">
-            <label for="docChunkSize">分块大小</label>
-            <input id="docChunkSize" type="number" min="1" step="1" value="500" />
-          </div>
-          <div class="field">
-            <label for="docChunkOverlap">重叠长度</label>
-            <input id="docChunkOverlap" type="number" min="0" step="1" value="80" />
-          </div>
-        </div>
-        <label class="checkbox-field" for="docKeepVersion">
-          <input id="docKeepVersion" type="checkbox" />
-          保留旧版本
-        </label>
-        <div class="knowledge-actions">
-          <button id="registerDocument" class="knowledge-button" type="button">登记文档</button>
-          <button id="refreshDocuments" class="knowledge-button secondary" type="button">刷新列表</button>
-        </div>
-        <div id="knowledgeStatus" class="knowledge-status">就绪。</div>
-      </section>
-
-      <section class="knowledge-list">
-        <p class="section-label">文档列表</p>
-        <div id="documentList" class="empty-documents">还没有加载文档。点击“刷新列表”查看。</div>
-      </section>
-
-      <section class="knowledge-detail">
-        <p class="section-label">文档详情</p>
-        <div id="documentDetail" class="empty-documents">点击文档卡片上的“详情”查看版本和错误信息。</div>
-      </section>
-    </aside>
   </main>
 
   <script>
@@ -839,9 +610,7 @@
     const state = {
       sessionId: "",
       messages: [],
-      sending: false,
-      documents: [],
-      managingDocuments: false
+      sending: false
     };
 
     const refs = {
@@ -851,17 +620,7 @@
       input: document.getElementById("messageInput"),
       sendButton: document.getElementById("sendButton"),
       newChat: document.getElementById("newChat"),
-      errorToast: document.getElementById("errorToast"),
-      docNamespace: document.getElementById("docNamespace"),
-      docSourcePath: document.getElementById("docSourcePath"),
-      docChunkSize: document.getElementById("docChunkSize"),
-      docChunkOverlap: document.getElementById("docChunkOverlap"),
-      docKeepVersion: document.getElementById("docKeepVersion"),
-      registerDocument: document.getElementById("registerDocument"),
-      refreshDocuments: document.getElementById("refreshDocuments"),
-      knowledgeStatus: document.getElementById("knowledgeStatus"),
-      documentList: document.getElementById("documentList"),
-      documentDetail: document.getElementById("documentDetail")
+      errorToast: document.getElementById("errorToast")
     };
 
     function escapeHtml(value) {
@@ -975,245 +734,6 @@
       return data;
     }
 
-    function formatApiError(error) {
-      try {
-        const parsed = JSON.parse(error.message);
-        if (parsed && parsed.message) {
-          return parsed.code ? parsed.code + ": " + parsed.message : parsed.message;
-        }
-        return JSON.stringify(parsed);
-      } catch (_) {
-        return error.message || "请求失败";
-      }
-    }
-
-    function setKnowledgeBusy(isBusy) {
-      state.managingDocuments = isBusy;
-      refs.registerDocument.disabled = isBusy;
-      refs.refreshDocuments.disabled = isBusy;
-      refs.documentList.querySelectorAll("button").forEach(function (button) {
-        button.disabled = isBusy;
-      });
-    }
-
-    function setKnowledgeStatus(message, tone) {
-      refs.knowledgeStatus.textContent = message;
-      refs.knowledgeStatus.className = "knowledge-status" + (tone ? " " + tone : "");
-    }
-
-    function readDocumentPayload(requireSourcePath) {
-      const namespace = refs.docNamespace.value.trim();
-      const sourcePath = refs.docSourcePath.value.trim();
-      const chunkSize = Number(refs.docChunkSize.value);
-      const chunkOverlap = Number(refs.docChunkOverlap.value);
-      if (!namespace) {
-        throw new Error("请填写命名空间。");
-      }
-      if (requireSourcePath && !sourcePath) {
-        throw new Error("请填写文件路径。");
-      }
-      if (!Number.isInteger(chunkSize) || chunkSize <= 0) {
-        throw new Error("分块大小必须是正整数。");
-      }
-      if (!Number.isInteger(chunkOverlap) || chunkOverlap < 0) {
-        throw new Error("重叠长度必须是非负整数。");
-      }
-      if (chunkOverlap >= chunkSize) {
-        throw new Error("重叠长度必须小于分块大小。");
-      }
-      return {
-        namespace,
-        source_path: sourcePath,
-        chunk_size: chunkSize,
-        chunk_overlap: chunkOverlap,
-        keep_version: refs.docKeepVersion.checked
-      };
-    }
-
-    function documentSummaryHtml(document) {
-      return (
-        '<article class="document-card">' +
-          '<strong title="' + escapeHtml(document.document_id) + '">' + escapeHtml(document.source_path || document.document_id) + '</strong>' +
-          '<div class="document-meta">' +
-            '<span>状态：' + escapeHtml(document.status) + '</span>' +
-            '<span>命名空间：' + escapeHtml(document.namespace) + '</span>' +
-            '<span>生效版本：' + escapeHtml(document.active_version) + '</span>' +
-            '<span>分块数量：' + escapeHtml(document.chunk_count) + '</span>' +
-            '<span>更新时间：' + escapeHtml(document.updated_at) + '</span>' +
-          '</div>' +
-          '<div class="document-actions">' +
-            '<button class="knowledge-button secondary" type="button" data-doc-action="detail" data-document-id="' + escapeHtml(document.document_id) + '">详情</button>' +
-            '<button class="knowledge-button secondary" type="button" data-doc-action="rechunk" data-document-id="' + escapeHtml(document.document_id) + '">重切分</button>' +
-            '<button class="knowledge-button danger" type="button" data-doc-action="delete" data-document-id="' + escapeHtml(document.document_id) + '">删除</button>' +
-          '</div>' +
-        '</article>'
-      );
-    }
-
-    function renderDocumentList(documents) {
-      state.documents = Array.isArray(documents) ? documents : [];
-      if (!state.documents.length) {
-        refs.documentList.className = "empty-documents";
-        refs.documentList.textContent = "当前命名空间下没有文档。";
-        return;
-      }
-      refs.documentList.className = "";
-      refs.documentList.innerHTML = state.documents.map(documentSummaryHtml).join("");
-    }
-
-    function renderDocumentDetail(document) {
-      const versions = Array.isArray(document.versions) && document.versions.length
-        ? document.versions.map(function (version) {
-            return (
-              '<span>版本 ' + escapeHtml(version.document_version) +
-              ' - ' + escapeHtml(version.status) +
-              ' - 分块 ' + escapeHtml(version.chunk_count) +
-              ' - 参数 ' + escapeHtml(version.chunk_size) +
-              '/' + escapeHtml(version.chunk_overlap) +
-              ' - ' + escapeHtml(version.created_at) +
-              (version.last_error ? ' - 错误：' + escapeHtml(version.last_error) : '') +
-              '</span>'
-            );
-          }).join("")
-        : '<span>版本：无</span>';
-
-      refs.documentDetail.className = "";
-      refs.documentDetail.innerHTML =
-        '<div class="detail-grid">' +
-          '<span>文档 ID：' + escapeHtml(document.document_id) + '</span>' +
-          '<span>命名空间：' + escapeHtml(document.namespace) + '</span>' +
-          '<span>文件路径：' + escapeHtml(document.source_path) + '</span>' +
-          '<span>来源类型：' + escapeHtml(document.source_type || "") + '</span>' +
-          '<span>状态：' + escapeHtml(document.status) + '</span>' +
-          '<span>生效版本：' + escapeHtml(document.active_version) + '</span>' +
-          '<span>分块数量：' + escapeHtml(document.chunk_count) + '</span>' +
-          '<span>分块大小：' + escapeHtml(document.chunk_size) + '</span>' +
-          '<span>重叠长度：' + escapeHtml(document.chunk_overlap) + '</span>' +
-          '<span>更新时间：' + escapeHtml(document.updated_at) + '</span>' +
-          '<span>最后错误：' + escapeHtml(document.last_error || "无") + '</span>' +
-          versions +
-        '</div>';
-    }
-
-    async function registerKnowledgeDocument() {
-      try {
-        const payload = readDocumentPayload(true);
-        setKnowledgeBusy(true);
-        setKnowledgeStatus("正在登记文档...", "");
-        const document = await apiRequest("/knowledge/documents", {
-          method: "POST",
-          body: JSON.stringify(payload)
-        });
-        renderDocumentDetail(document);
-        await refreshKnowledgeDocuments(false);
-        setKnowledgeStatus("登记成功。生效版本=" + document.active_version + "，分块数量=" + document.chunk_count, "ok");
-      } catch (error) {
-        setKnowledgeStatus(formatApiError(error), "error");
-      } finally {
-        setKnowledgeBusy(false);
-      }
-    }
-
-    async function refreshKnowledgeDocuments(showBusy) {
-      const namespace = refs.docNamespace.value.trim();
-      const query = namespace ? "?namespace=" + encodeURIComponent(namespace) : "";
-      if (showBusy !== false) {
-        setKnowledgeBusy(true);
-        setKnowledgeStatus("正在加载文档列表...", "");
-      }
-      try {
-        const data = await apiRequest("/knowledge/documents" + query);
-        renderDocumentList(data && data.documents);
-        if (showBusy !== false) {
-          setKnowledgeStatus("已加载 " + state.documents.length + " 个文档。", "ok");
-        }
-      } catch (error) {
-        setKnowledgeStatus(formatApiError(error), "error");
-      } finally {
-        if (showBusy !== false) {
-          setKnowledgeBusy(false);
-        }
-      }
-    }
-
-    async function loadKnowledgeDocumentDetail(documentId) {
-      try {
-        setKnowledgeBusy(true);
-        setKnowledgeStatus("正在加载文档详情...", "");
-        const document = await apiRequest("/knowledge/documents/" + encodeURIComponent(documentId));
-        renderDocumentDetail(document);
-        setKnowledgeStatus("已加载文档详情：" + documentId, "ok");
-      } catch (error) {
-        setKnowledgeStatus(formatApiError(error), "error");
-      } finally {
-        setKnowledgeBusy(false);
-      }
-    }
-
-    async function deleteKnowledgeDocument(documentId) {
-      if (!window.confirm("确认删除知识库文档 " + documentId + "？")) {
-        return;
-      }
-      try {
-        setKnowledgeBusy(true);
-        setKnowledgeStatus("正在删除文档...", "");
-        const document = await apiRequest("/knowledge/documents/" + encodeURIComponent(documentId), {
-          method: "DELETE"
-        });
-        renderDocumentDetail(document);
-        await refreshKnowledgeDocuments(false);
-        setKnowledgeStatus("已删除文档。当前状态=" + document.status + "。", "ok");
-      } catch (error) {
-        setKnowledgeStatus(formatApiError(error), "error");
-      } finally {
-        setKnowledgeBusy(false);
-      }
-    }
-
-    async function rechunkKnowledgeDocument(documentId) {
-      try {
-        const payload = readDocumentPayload(false);
-        setKnowledgeBusy(true);
-        setKnowledgeStatus("正在重新切分文档...", "");
-        const document = await apiRequest("/knowledge/documents/" + encodeURIComponent(documentId) + "/rechunk", {
-          method: "POST",
-          body: JSON.stringify({
-            chunk_size: payload.chunk_size,
-            chunk_overlap: payload.chunk_overlap,
-            keep_version: payload.keep_version
-          })
-        });
-        renderDocumentDetail(document);
-        await refreshKnowledgeDocuments(false);
-        setKnowledgeStatus("重切分完成。生效版本=" + document.active_version + "，分块数量=" + document.chunk_count, "ok");
-      } catch (error) {
-        setKnowledgeStatus(formatApiError(error), "error");
-      } finally {
-        setKnowledgeBusy(false);
-      }
-    }
-
-    function initKnowledgeDocuments() {
-      refs.registerDocument.addEventListener("click", registerKnowledgeDocument);
-      refs.refreshDocuments.addEventListener("click", function () {
-        refreshKnowledgeDocuments(true);
-      });
-      refs.documentList.addEventListener("click", function (event) {
-        const button = event.target.closest("[data-doc-action]");
-        if (!button || state.managingDocuments) {
-          return;
-        }
-        const documentId = button.dataset.documentId;
-        if (button.dataset.docAction === "detail") {
-          loadKnowledgeDocumentDetail(documentId);
-        } else if (button.dataset.docAction === "delete") {
-          deleteKnowledgeDocument(documentId);
-        } else if (button.dataset.docAction === "rechunk") {
-          rechunkKnowledgeDocument(documentId);
-        }
-      });
-    }
-
     async function checkHealth() {
       try {
         await apiRequest("/health");
@@ -1287,7 +807,6 @@
     function init() {
       renderMessages();
       initQuickCards();
-      initKnowledgeDocuments();
       checkHealth();
       refs.sendButton.addEventListener("click", sendMessage);
       refs.newChat.addEventListener("click", newConversation);

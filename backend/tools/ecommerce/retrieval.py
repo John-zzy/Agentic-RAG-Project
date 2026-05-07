@@ -147,6 +147,27 @@ class SemanticRetrievalTool(RetrievalTool):
         )
 
 
+class KnowledgeDocumentSemanticRetrievalTool(RetrievalTool):
+    """用户上传知识文档的语义检索工具。"""
+
+    name: str = "knowledge_document_search"
+    description: str = "Search semantically relevant user-uploaded knowledge documents."
+    knowledge_service: Any = Field(exclude=True)
+    default_top_k: int = 5
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    def retrieve(self, query: str, *, run_manager: Any | None = None) -> RetrievalResult:
+        """从文档分块索引中检索用户上传的知识。"""
+        vector_results = self.knowledge_service.search_document_chunks(query=query, top_k=self.default_top_k)
+        return build_retrieval_result(
+            tool_name=self.name,
+            namespace="documents",
+            query=query,
+            vector_results=vector_results,
+        )
+
+
 def build_semantic_retrieval_tool(
     knowledge_service: KnowledgeService,
     *,
@@ -297,6 +318,7 @@ def build_agentic_retrieval_tools(
             tool_name="order_semantic_search",
             description="Search order information semantically for order tracking or status inquiries.",
         ),
+        KnowledgeDocumentSemanticRetrievalTool(knowledge_service=resolved_knowledge_service),
         InventoryLookupRetrievalTool(product_store=resolved_product_store),
         ProductDetailLookupRetrievalTool(product_store=resolved_product_store),
     )
@@ -462,6 +484,8 @@ def _build_semantic_record(namespace: str, result: VectorSearchResult) -> dict[s
         metadata.get("review_id")
         or metadata.get("product_id")
         or metadata.get("order_id")
+        or metadata.get("document_id")
+        or metadata.get("source_path")
         or metadata.get("id")
         or result.document.id
     )

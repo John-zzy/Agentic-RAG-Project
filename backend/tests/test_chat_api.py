@@ -33,15 +33,23 @@ class FakeKnowledgeService:
         self,
         products: list[VectorSearchResult] | None = None,
         reviews: list[VectorSearchResult] | None = None,
+        documents: list[VectorSearchResult] | None = None,
     ) -> None:
         self._products = products or []
         self._reviews = reviews or []
+        self._documents = documents or []
 
     def search_products(self, query: str, top_k: int | None = None) -> list[VectorSearchResult]:
         return self._products
 
     def search_reviews(self, query: str, top_k: int | None = None) -> list[VectorSearchResult]:
         return self._reviews
+
+    def search_orders(self, query: str, top_k: int | None = None) -> list[VectorSearchResult]:
+        return []
+
+    def search_document_chunks(self, query: str, top_k: int | None = None, namespace: str | None = None) -> list[VectorSearchResult]:
+        return self._documents
 
 
 class FakeModel:

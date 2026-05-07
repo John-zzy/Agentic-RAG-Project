@@ -23,7 +23,7 @@ from backend.tools.ecommerce.retrieval import ProductCatalogStore, build_agentic
 
 
 class KnowledgeBaseRetriever(BaseRetriever):
-    """将电商知识检索结果适配为 LangChain Retriever。"""
+    """将多知识源检索结果适配为 LangChain Retriever。"""
 
     knowledge_service: Any = Field(exclude=True)
     default_top_k: int = 5
@@ -32,20 +32,22 @@ class KnowledgeBaseRetriever(BaseRetriever):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     def _get_relevant_documents(self, query: str, *, run_manager: Any = None) -> list[Document]:
-        """适配 LangChain 检索器协议，返回相关文档。"""
+        """适配 LangChain 检索器协议。"""
         return self.search(query=query, top_k=self.default_top_k)
 
     def search(self, query: str, top_k: int | None = None) -> list[Document]:
-        """聚合商品、评价与订单检索结果，排序去重后返回。"""
+        """聚合商品、评价、订单和上传知识文档的检索结果。"""
         requested_top_k = top_k or self.default_top_k
         product_results = self.knowledge_service.search_products(query=query, top_k=requested_top_k)
         review_results = self.knowledge_service.search_reviews(query=query, top_k=requested_top_k)
         order_results = self.knowledge_service.search_orders(query=query, top_k=requested_top_k)
+        document_results = self.knowledge_service.search_document_chunks(query=query, top_k=requested_top_k)
 
         combined = (
             self._to_documents("products", product_results)
             + self._to_documents("reviews", review_results)
             + self._to_documents("orders", order_results)
+            + self._to_documents("documents", document_results)
         )
         combined.sort(key=self._doc_score, reverse=True)
 
@@ -64,7 +66,7 @@ class KnowledgeBaseRetriever(BaseRetriever):
         return deduped
 
     def _to_documents(self, namespace: str, results: list[VectorSearchResult]) -> list[Document]:
-        """将向量检索结果转换为统一的 LangChain Document。"""
+        """将向量检索结果转换为 LangChain Document。"""
         documents: list[Document] = []
         for result in results:
             score = float(result.score) if result.score is not None else None
@@ -75,6 +77,8 @@ class KnowledgeBaseRetriever(BaseRetriever):
                 metadata.get("review_id")
                 or metadata.get("product_id")
                 or metadata.get("order_id")
+                or metadata.get("document_id")
+                or metadata.get("source_path")
                 or metadata.get("id")
                 or result.document.id
             )
@@ -98,7 +102,7 @@ class KnowledgeBaseRetriever(BaseRetriever):
 
 
 class EcommerceSufficiencyJudge(SufficiencyJudge):
-    """为电商检索场景提供可解释的充分性判断策略。"""
+    """为电商与扩展知识库场景提供充分性判断。"""
 
     inventory_keywords: tuple[str, ...] = ("库存", "有货", "现货", "缺货", "到货", "补货")
     detail_keywords: tuple[str, ...] = ("参数", "规格", "配置", "价格", "多少钱", "品牌", "摄像")
@@ -111,7 +115,7 @@ class EcommerceSufficiencyJudge(SufficiencyJudge):
         config: RunnableConfig | None = None,
         **kwargs: Any,
     ) -> SufficiencyDecision:
-        """根据当前轮结果决定结束、改写、切工具还是追问用户。"""
+        """根据当前结果决定结束、改写、切换工具或追问。"""
         plan = input.plan
         result = input.results[-1]
         normalized_query = plan.user_query.lower()
@@ -120,17 +124,24 @@ class EcommerceSufficiencyJudge(SufficiencyJudge):
         top_product_id = self._resolve_top_product_id(result.records)
 
         if result_count == 0:
+            if current_tool != "knowledge_document_search" and "knowledge_document_search" not in plan.attempted_tools:
+                return SufficiencyDecision(
+                    is_sufficient=False,
+                    next_action="switch_tool",
+                    reason="Built-in ecommerce knowledge returned no hits; try uploaded knowledge documents next.",
+                    suggested_tool="knowledge_document_search",
+                )
             if plan.round_index >= plan.max_rounds:
                 return SufficiencyDecision(
                     is_sufficient=False,
                     next_action="ask_user",
                     reason="No relevant evidence was found after the allowed retrieval attempts.",
-                    follow_up_question="请补充更具体的商品名称、预算范围，或明确想了解的参数/库存信息。",
+                    follow_up_question="请补充更具体的商品名、文件中的关键术语，或说明你希望我优先查哪类知识。",
                 )
             return SufficiencyDecision(
                 is_sufficient=False,
                 next_action="rewrite",
-                reason="The current retrieval result is empty and needs a narrower or clearer query.",
+                reason="The current retrieval result is empty and needs a clearer query.",
             )
 
         if current_tool == "product_semantic_search":
@@ -163,6 +174,13 @@ class EcommerceSufficiencyJudge(SufficiencyJudge):
                     next_action="switch_tool",
                     reason="Need order evidence to support order tracking or logistics inquiries.",
                     suggested_tool="order_semantic_search",
+                )
+            if "knowledge_document_search" not in plan.attempted_tools:
+                return SufficiencyDecision(
+                    is_sufficient=False,
+                    next_action="switch_tool",
+                    reason="Need to cross-check uploaded knowledge documents before finishing.",
+                    suggested_tool="knowledge_document_search",
                 )
 
         return SufficiencyDecision(
@@ -201,10 +219,10 @@ class EcommerceQueryRewriter(QueryRewriter):
             .replace("怎么样", "参数 评价")
         ).strip()
         if rewritten == query:
-            rewritten = f"{query} 商品 参数 评价"
+            rewritten = f"{query} 商品 参数 评价 文档"
         return QueryRewrite(
             query=rewritten,
-            reason="Broadened the query with product, parameter, or review terms for the next round.",
+            reason="Broadened the query with product, review, and document terms for the next round.",
             metadata={"original_query": query},
         )
 
@@ -216,23 +234,7 @@ def create_agentic_knowledge_retriever(
     product_store: ProductCatalogStore | None = None,
     max_rounds: int = 3,
 ) -> AgenticRetriever:
-    """构建面向电商知识库的 AgenticRetriever。
-
-    该函数组装以下组件：
-    1. 检索工具集：包含语义检索（商品/评价/订单）和精确查询（库存/详情）
-    2. 充分性判断器：决定检索结果是否足够回答用户问题
-    3. 查询改写器：在证据不足时改写查询以获取更多结果
-
-    数据源说明：
-    - resolved_knowledge_service: 提供向量库的语义检索能力
-      （商品、评价、订单的语义搜索，数据来自向量数据库）
-    - resolved_product_store: 提供 JSON 文件的精确查询能力
-      （库存、价格等结构化数据，数据来自 products.json）
-
-    使用场景：
-    - 用户问"续航好的手机" → 语义检索找到相关商品
-    - 用户问"iPhone 16 有货吗" → 语义检索找到商品 → 精确查询库存
-    """
+    """构建面向电商与知识文档的 AgenticRetriever。"""
     current_settings = app_settings or settings
     resolved_knowledge_service = knowledge_service or create_knowledge_service(current_settings)
     resolved_product_store = product_store or ProductCatalogStore(data_dir=current_settings.data_dir)

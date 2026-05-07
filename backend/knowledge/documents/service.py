@@ -6,7 +6,7 @@ from typing import Literal
 
 from pydantic import BaseModel
 
-from backend.config.settings import AppSettings, settings
+from backend.config.settings import AppSettings, FILES_DIR, settings
 from backend.knowledge.base.store import VectorStore, VectorStoreDocument, VectorStoreFactory
 from backend.knowledge.documents.chunker import build_document_chunks
 from backend.knowledge.documents.loader import build_document_id, load_document_records
@@ -14,22 +14,24 @@ from backend.knowledge.documents.validators import validate_chunking, validate_n
 
 
 DocumentStatus = Literal["active", "failed", "deleted"]
+MANAGED_FILE_EXTENSIONS = {".json", ".txt", ".md", ".csv", ".pdf", ".docx", ".xlsx"}
+INDEXABLE_FILE_EXTENSIONS = {".json", ".txt", ".md", ".csv"}
 
 
 class KnowledgeDocumentError(RuntimeError):
-    """文档管理服务的基础异常，便于 API 层统一转换响应。"""
+    """文档管理服务基础异常。"""
 
 
 class KnowledgeDocumentNotFoundError(KnowledgeDocumentError):
-    """表示文档不存在或已删除。"""
+    """文档不存在或已删除。"""
 
 
 class KnowledgeDocumentStoreError(KnowledgeDocumentError):
-    """表示写入或更新向量存储失败。"""
+    """向量库读写失败。"""
 
 
 class KnowledgeDocumentVersionSummary(BaseModel):
-    """描述单个文档版本的分块参数和状态。"""
+    """单个文档版本摘要。"""
 
     document_version: int
     status: DocumentStatus
@@ -41,7 +43,7 @@ class KnowledgeDocumentVersionSummary(BaseModel):
 
 
 class KnowledgeDocumentSummary(BaseModel):
-    """列表页所需的文档最小摘要。"""
+    """文档列表摘要。"""
 
     document_id: str
     namespace: str
@@ -53,7 +55,7 @@ class KnowledgeDocumentSummary(BaseModel):
 
 
 class KnowledgeDocumentDetail(KnowledgeDocumentSummary):
-    """详情页所需的主记录、当前分块参数和版本摘要。"""
+    """文档详情。"""
 
     source_type: str
     chunk_size: int
@@ -63,13 +65,31 @@ class KnowledgeDocumentDetail(KnowledgeDocumentSummary):
 
 
 class KnowledgeDocumentOperationResult(KnowledgeDocumentDetail):
-    """注册、删除和重新分块操作的返回结构。"""
+    """文档写操作结果。"""
 
     document_version: int
 
 
+class KnowledgeFileIndexSummary(BaseModel):
+    """按上传文件聚合的索引状态摘要。"""
+
+    filename: str
+    source_path: str
+    file_size: int | None = None
+    created_at: str | None = None
+    namespace: str | None = None
+    document_id: str | None = None
+    indexed: bool
+    status: str
+    active_version: int | None = None
+    chunk_count: int | None = None
+    updated_at: str | None = None
+    last_error: str | None = None
+    can_index: bool = True
+
+
 class KnowledgeDocumentService:
-    """编排知识文档注册、查询、删除和重新分块生命周期。"""
+    """编排知识文档注册、查询、删除与重建。"""
 
     def __init__(
         self,
@@ -77,10 +97,10 @@ class KnowledgeDocumentService:
         store: VectorStore | None = None,
         files_root: str | Path | None = None,
     ) -> None:
-        """初始化服务依赖；测试可注入 files_root 和 store。"""
+        """初始化依赖；默认从上传文件目录读取源文件。"""
         self.app_settings = app_settings or settings
         self.store = store or VectorStoreFactory.create(self.app_settings)
-        self.files_root = Path(files_root) if files_root is not None else self.app_settings.data_dir
+        self.files_root = Path(files_root) if files_root is not None else FILES_DIR
         self._call_store("ensure document indexes", self.store.ensure_document_indexes)
 
     def register_document(
@@ -91,7 +111,7 @@ class KnowledgeDocumentService:
         chunk_overlap: int,
         keep_version: bool = False,
     ) -> KnowledgeDocumentOperationResult:
-        """加载 JSON 源文件并写入文档记录与当前活跃分块。"""
+        """加载源文件并写入新版本索引。"""
         return self._write_new_version(
             namespace=namespace,
             source_path=source_path,
@@ -102,19 +122,84 @@ class KnowledgeDocumentService:
         )
 
     def list_documents(self, namespace: str | None = None) -> list[KnowledgeDocumentSummary]:
-        """列出未删除文档，可按命名空间过滤。"""
+        """列出未删除文档。"""
         if namespace is not None:
             validate_namespace(namespace)
         records = self._call_store("list document records", self.store.list_document_records, namespace)
         return [self._to_summary(record) for record in records]
 
+    def list_file_indexes(self, namespace: str | None = None) -> list[KnowledgeFileIndexSummary]:
+        """按文件聚合当前索引状态。"""
+        if namespace is not None:
+            validate_namespace(namespace)
+
+        records = self._call_store("list document records", self.store.list_document_records, namespace)
+        document_by_path = {
+            str(record["source_path"]): record
+            for record in records
+            if isinstance(record, dict)
+        }
+
+        summaries: list[KnowledgeFileIndexSummary] = []
+        if not self.files_root.exists():
+            return summaries
+
+        file_paths = sorted(
+            (
+                path
+                for path in self.files_root.iterdir()
+                if path.is_file() and path.suffix.lower() in MANAGED_FILE_EXTENSIONS
+            ),
+            key=lambda path: path.stat().st_ctime,
+            reverse=True,
+        )
+        for file_path in file_paths:
+            relative_path = file_path.relative_to(self.files_root).as_posix()
+            record = document_by_path.get(relative_path)
+            stat = file_path.stat()
+            can_index = file_path.suffix.lower() in INDEXABLE_FILE_EXTENSIONS
+
+            if record is None:
+                summaries.append(
+                    KnowledgeFileIndexSummary(
+                        filename=file_path.name,
+                        source_path=relative_path,
+                        file_size=stat.st_size,
+                        created_at=datetime.fromtimestamp(stat.st_ctime, UTC).isoformat(),
+                        indexed=False,
+                        status="unindexed" if can_index else "unsupported",
+                        last_error=None if can_index else "当前后端仅支持对 JSON、TXT、MD、CSV 文件构建索引。",
+                        can_index=can_index,
+                    )
+                )
+                continue
+
+            summaries.append(
+                KnowledgeFileIndexSummary(
+                    filename=file_path.name,
+                    source_path=relative_path,
+                    file_size=stat.st_size,
+                    created_at=datetime.fromtimestamp(stat.st_ctime, UTC).isoformat(),
+                    namespace=str(record["namespace"]),
+                    document_id=str(record["document_id"]),
+                    indexed=True,
+                    status=str(record["status"]),
+                    active_version=int(record["active_version"]),
+                    chunk_count=int(record["chunk_count"]),
+                    updated_at=str(record["updated_at"]),
+                    last_error=str(record["last_error"]) if record.get("last_error") else None,
+                    can_index=can_index,
+                )
+            )
+        return summaries
+
     def get_document(self, document_id: str) -> KnowledgeDocumentDetail:
-        """读取文档详情；缺失或已删除时抛出服务级 404 异常。"""
+        """读取文档详情。"""
         record = self._get_existing_record(document_id)
         return self._to_detail(record)
 
     def delete_document(self, document_id: str) -> KnowledgeDocumentOperationResult:
-        """软删除文档记录并停用该文档所有活跃分块，不删除源 JSON 文件。"""
+        """软删除文档记录并停用对应分块。"""
         record = self._get_existing_record(document_id)
         self._call_store("deactivate document chunks", self.store.deactivate_document_chunks, document_id)
         self._call_store("delete document record", self.store.delete_document_record, document_id)
@@ -128,7 +213,7 @@ class KnowledgeDocumentService:
         chunk_overlap: int,
         keep_version: bool = False,
     ) -> KnowledgeDocumentOperationResult:
-        """基于原始 JSON 文件重新生成分块并切换活跃版本。"""
+        """基于源文件重建分块并切换版本。"""
         record = self._get_existing_record(document_id)
         return self._write_new_version(
             namespace=str(record["namespace"]),
@@ -347,21 +432,21 @@ class KnowledgeDocumentService:
         return datetime.now(UTC).isoformat()
 
     def _cleanup_new_chunks(self, chunk_ids: list[str]) -> None:
-        """失败回滚时尽力清理新分块，不影响主异常返回。"""
+        """失败回滚时尽力清理新分块。"""
         try:
             self._call_store("delete document chunks", self.store.delete_document_chunks, chunk_ids)
         except Exception:
             return None
 
     def _restore_current_record(self, current_record: dict[str, object]) -> None:
-        """发布后失败时尽力恢复旧主记录，保持 active_version 与旧分块一致。"""
+        """切换失败时尽力恢复旧记录。"""
         try:
             self._call_store("restore document record", self.store.upsert_document_record, current_record)
         except KnowledgeDocumentStoreError:
             return None
 
     def _restore_current_chunks(self, current_record: dict[str, object]) -> None:
-        """停用旧分块失败时尽力恢复旧版本分块活跃状态。"""
+        """切换失败时尽力恢复旧分块激活状态。"""
         try:
             self._call_store(
                 "restore document chunks",
@@ -373,7 +458,7 @@ class KnowledgeDocumentService:
             return None
 
     def _call_store(self, operation: str, method: object, *args: object) -> object:
-        """将后端不支持能力转换为服务级错误，避免泄露原始实现异常。"""
+        """将后端能力异常转换为服务层错误。"""
         try:
             return method(*args)  # type: ignore[operator]
         except NotImplementedError as exc:

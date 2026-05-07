@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import re
 from typing import Any
 from uuid import uuid4
 
@@ -138,9 +139,12 @@ class FakeElasticsearchClient:
             return documents
 
         filters = base_query.get("bool", {}).get("filter", [])
+        must_clauses = base_query.get("bool", {}).get("must", [])
         results: list[tuple[str, dict[str, Any]]] = []
         for document_id, document in documents:
-            if all(self._matches_filter(document, filter_clause) for filter_clause in filters):
+            if all(self._matches_filter(document, filter_clause) for filter_clause in filters) and all(
+                self._matches_must(document, clause) for clause in must_clauses
+            ):
                 results.append((document_id, document))
         return results
 
@@ -156,6 +160,22 @@ class FakeElasticsearchClient:
             return document.get(field) == expected
         metadata_key = field.removeprefix("metadata.")
         return document.get("metadata", {}).get(metadata_key) == expected
+
+    def _matches_must(self, document: dict[str, Any], clause: dict[str, Any]) -> bool:
+        if "match" not in clause:
+            return True
+        field, payload = next(iter(clause["match"].items()))
+        query_text = payload["query"] if isinstance(payload, dict) else str(payload)
+        if field != "content":
+            return True
+        return self._keyword_score(str(document.get("content", "")), query_text) > 0
+
+    def _keyword_score(self, content: str, query: str) -> float:
+        query_tokens = [token for token in re.findall(r"[\u4e00-\u9fff]+|[a-z0-9]+", query.lower()) if token]
+        if not query_tokens:
+            return 0.0
+        normalized_content = content.lower()
+        return float(sum(1 for token in query_tokens if token in normalized_content))
 
     def _cosine_similarity(self, left: list[float], right: list[float]) -> float:
         numerator = sum(left_value * right_value for left_value, right_value in zip(left, right))
@@ -321,6 +341,36 @@ def test_elasticsearch_store_supports_document_management_operations() -> None:
     store.delete_document_record("doc-1")
     assert store.get_document_record("doc-1") is None
     assert store.list_document_records() == []
+
+
+def test_elasticsearch_document_chunk_search_supports_hybrid_keyword_recall() -> None:
+    app_settings = build_elasticsearch_settings()
+    fake_client = FakeElasticsearchClient()
+    store = ElasticsearchVectorStore(app_settings, client=fake_client)
+    store.upsert_document_chunks(
+        [
+            VectorStoreDocument(
+                id="chunk-doc-1",
+                content="我是Ai Agent的文档：我叫zzy",
+                metadata={
+                    "document_id": "doc-1",
+                    "document_version": 1,
+                    "namespace": "faq",
+                    "source_type": "txt",
+                    "source_path": "doc.txt",
+                    "chunk_id": "chunk-doc-1",
+                    "chunk_index": 0,
+                    "updated_at": "2026-05-07T12:00:00Z",
+                    "is_active": True,
+                },
+            )
+        ]
+    )
+
+    results = store.search_document_chunks("你叫什么", top_k=3, namespace="faq")
+    assert results
+    assert results[0].document.id == "chunk-doc-1"
+    assert "zzy" in results[0].document.content
 
 
 def test_elasticsearch_store_supports_upsert_search_filter_and_delete(

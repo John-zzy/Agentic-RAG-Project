@@ -23,7 +23,7 @@ class KnowledgeUpsertSummary(BaseModel):
 
 
 class KnowledgeService:
-    """封装电商商品与评论知识库的业务入口。"""
+    """封装电商知识库与扩展知识文档的业务入口。"""
 
     def __init__(
         self,
@@ -61,7 +61,7 @@ class KnowledgeService:
         top_k: int | None = None,
         filters: dict[str, Any] | None = None,
     ) -> list[VectorSearchResult]:
-        """在评论知识库中执行检索。"""
+        """在评价知识库中执行检索。"""
         return self.search(namespace="reviews", query=query, top_k=top_k, filters=filters)
 
     def search_orders(
@@ -73,13 +73,24 @@ class KnowledgeService:
         """在订单知识库中执行检索。"""
         return self.search(namespace="orders", query=query, top_k=top_k, filters=filters)
 
+    def search_document_chunks(
+        self,
+        query: str,
+        top_k: int | None = None,
+        namespace: str | None = None,
+    ) -> list[VectorSearchResult]:
+        """在用户上传知识文档的分块索引中执行检索。"""
+        if namespace is not None:
+            self._validate_document_namespace(namespace)
+        return self.store.search_document_chunks(query=query, top_k=top_k, namespace=namespace)
+
     def upsert_products(self, products: list[dict[str, Any]]) -> KnowledgeUpsertSummary:
         """批量写入或更新商品数据。"""
         documents = [build_product_document(product) for product in products]
         return self._upsert_documents("products", documents)
 
     def upsert_reviews(self, reviews: list[dict[str, Any]]) -> KnowledgeUpsertSummary:
-        """批量写入或更新评论数据。"""
+        """批量写入或更新评价数据。"""
         documents = [build_review_document(review) for review in reviews]
         return self._upsert_documents("reviews", documents)
 
@@ -104,12 +115,17 @@ class KnowledgeService:
         return KnowledgeUpsertSummary(namespace=namespace, upserted=len(documents))
 
     def _validate_namespace(self, namespace: str) -> None:
-        """校验命名空间是否合法。"""
+        """校验内置命名空间是否合法。"""
         if namespace not in SUPPORTED_NAMESPACES:
             raise ValueError(
                 f"Unsupported namespace '{namespace}'. "
                 f"Expected one of: {', '.join(SUPPORTED_NAMESPACES)}."
             )
+
+    def _validate_document_namespace(self, namespace: str) -> None:
+        """校验知识文档命名空间格式。"""
+        if not namespace or namespace.strip() != namespace:
+            raise ValueError("namespace must be a non-empty slug.")
 
 
 def create_knowledge_service(
