@@ -92,6 +92,64 @@ def test_chroma_store_supports_filters_and_consistent_result_shape() -> None:
     assert isinstance(results[0].document.content, str)
 
 
+def test_chroma_store_supports_document_management_operations() -> None:
+    tmp_path = make_test_runtime_dir("knowledge-chroma-document-management")
+    app_settings = build_test_settings(tmp_path)
+    store = ChromaVectorStore(app_settings)
+    store.ensure_document_indexes()
+
+    record = {
+        "document_id": "doc-1",
+        "namespace": "faq",
+        "source_type": "json",
+        "source_path": "orders.json",
+        "status": "active",
+        "active_version": 1,
+        "chunk_count": 1,
+        "chunk_size": 120,
+        "chunk_overlap": 20,
+        "created_at": "2026-05-06T12:00:00Z",
+        "updated_at": "2026-05-06T12:00:00Z",
+        "last_error": None,
+        "versions": [],
+    }
+    store.upsert_document_record(record)
+    store.upsert_document_chunks(
+        [
+            VectorStoreDocument(
+                id="chunk-1",
+                content="订单状态：已付款",
+                metadata={
+                    "document_id": "doc-1",
+                    "document_version": 1,
+                    "namespace": "faq",
+                    "source_type": "json",
+                    "source_path": "orders.json",
+                    "chunk_id": "chunk-1",
+                    "chunk_index": 0,
+                    "updated_at": "2026-05-06T12:00:00Z",
+                    "is_active": True,
+                },
+            )
+        ]
+    )
+
+    assert store.get_document_record("doc-1")["source_path"] == "orders.json"
+    assert [document["document_id"] for document in store.list_document_records(namespace="faq")] == ["doc-1"]
+
+    store.deactivate_document_chunks("doc-1", document_version=1)
+    chunks = store._get_document_collection("chunks").get(ids=["chunk-1"])
+    assert chunks["metadatas"][0]["is_active"] is False
+
+    store.activate_document_chunks("doc-1", document_version=1)
+    chunks = store._get_document_collection("chunks").get(ids=["chunk-1"])
+    assert chunks["metadatas"][0]["is_active"] is True
+
+    store.delete_document_record("doc-1")
+    assert store.get_document_record("doc-1") is None
+    assert store.list_document_records() == []
+
+
 def test_preload_knowledge_base_uses_factory_and_loads_json_data() -> None:
     tmp_path = make_test_runtime_dir("knowledge-preload")
     app_settings = build_test_settings(tmp_path)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import math
 import re
 from abc import ABC, abstractmethod
@@ -279,46 +280,155 @@ class ChromaVectorStore(VectorStore):
         return VectorStoreHealth(provider="chroma", available=True)
 
     def ensure_document_indexes(self) -> None:
-        """Chroma 后端当前不承担文档管理索引初始化。"""
-        return None
+        """确保 Chroma 中存在文档管理主记录和分块集合。"""
+        for kind in DOCUMENT_INDEX_KINDS:
+            self._collections[self.resolve_document_collection_name(kind)] = self._client.get_or_create_collection(
+                name=self.resolve_document_collection_name(kind)
+            )
 
     def upsert_document_record(self, record: dict[str, Any]) -> None:
-        """Chroma MVP 暂不持久化文档管理记录。"""
-        raise NotImplementedError("Chroma document management records are not implemented.")
+        """将文档管理主记录以 JSON 文档形式写入 Chroma。"""
+        collection = self._get_document_collection("documents")
+        document_id = str(record["document_id"])
+        collection.upsert(
+            ids=[document_id],
+            documents=[json.dumps(record, ensure_ascii=False, sort_keys=True)],
+            metadatas=[self.normalize_metadata(self._record_metadata(record))],
+            embeddings=[self.build_embedding(str(record.get("source_path", document_id)))],
+        )
 
     def get_document_record(self, document_id: str) -> dict[str, Any] | None:
-        """Chroma MVP 暂不支持读取文档管理记录。"""
-        raise NotImplementedError("Chroma document management records are not implemented.")
+        """按文档 ID 读取未删除的文档管理主记录。"""
+        collection = self._get_document_collection("documents")
+        result = collection.get(ids=[document_id], include=["documents"])
+        documents = result.get("documents") or []
+        if not documents:
+            return None
+        record = cast(dict[str, Any], json.loads(str(documents[0])))
+        if record.get("status") == "deleted":
+            return None
+        return record
 
     def list_document_records(self, namespace: str | None = None) -> list[dict[str, Any]]:
-        """Chroma MVP 暂不支持列出文档管理记录。"""
-        raise NotImplementedError("Chroma document management records are not implemented.")
+        """列出 Chroma 中未删除的文档管理主记录，可按命名空间过滤。"""
+        collection = self._get_document_collection("documents")
+        where = {"namespace": namespace} if namespace is not None else None
+        result = collection.get(where=where, include=["documents"])
+        records: list[dict[str, Any]] = []
+        for document in result.get("documents") or []:
+            record = cast(dict[str, Any], json.loads(str(document)))
+            if record.get("status") != "deleted":
+                records.append(record)
+        return sorted(records, key=lambda record: str(record.get("source_path", "")))
 
     def delete_document_record(self, document_id: str) -> None:
-        """Chroma MVP 暂不支持删除文档管理记录。"""
-        raise NotImplementedError("Chroma document management records are not implemented.")
+        """软删除 Chroma 中的文档管理主记录。"""
+        record = self.get_document_record(document_id)
+        if record is None:
+            return
+        record["status"] = "deleted"
+        self.upsert_document_record(record)
 
     def upsert_document_chunks(self, chunks: list[VectorStoreDocument]) -> None:
-        """Chroma MVP 暂不支持写入文档管理分块。"""
-        raise NotImplementedError("Chroma document management chunks are not implemented.")
+        """批量写入文档管理分块到 Chroma。"""
+        if not chunks:
+            return
+        collection = self._get_document_collection("chunks")
+        collection.upsert(
+            ids=[chunk.id for chunk in chunks],
+            documents=[chunk.content for chunk in chunks],
+            metadatas=[self.normalize_metadata(chunk.metadata) for chunk in chunks],
+            embeddings=[
+                chunk.embedding if chunk.embedding is not None else self.build_embedding(chunk.content)
+                for chunk in chunks
+            ],
+        )
 
     def deactivate_document_chunks(self, document_id: str, document_version: int | None = None) -> None:
-        """Chroma MVP 暂不支持停用文档管理分块。"""
-        raise NotImplementedError("Chroma document management chunks are not implemented.")
+        """按文档 ID 停用分块，可限定具体版本。"""
+        self._set_document_chunks_active(
+            document_id=document_id,
+            document_version=document_version,
+            is_active=False,
+        )
 
     def activate_document_chunks(self, document_id: str, document_version: int) -> None:
-        """Chroma MVP 暂不支持恢复文档管理分块。"""
-        raise NotImplementedError("Chroma document management chunks are not implemented.")
+        """按文档 ID 和版本恢复分块为活跃状态。"""
+        self._set_document_chunks_active(
+            document_id=document_id,
+            document_version=document_version,
+            is_active=True,
+        )
 
     def delete_document_chunks(self, chunk_ids: list[str]) -> None:
-        """Chroma MVP 暂不支持删除文档管理分块。"""
-        raise NotImplementedError("Chroma document management chunks are not implemented.")
+        """按分块 ID 删除未发布成功的新分块。"""
+        if not chunk_ids:
+            return
+        collection = self._get_document_collection("chunks")
+        collection.delete(ids=chunk_ids)
 
     def _get_collection(self, namespace: str) -> Collection:
         """获取集合实例，不存在时自动初始化。"""
         if namespace not in self._collections:
             self.ensure_collections()
         return self._collections[namespace]
+
+    def resolve_document_collection_name(self, kind: str) -> str:
+        """计算 Chroma 文档管理集合名，避免与商品和评价集合冲突。"""
+        if kind not in DOCUMENT_INDEX_KINDS:
+            raise ValueError(f"Unsupported document collection kind '{kind}'. Expected one of: documents, chunks.")
+        configured_name = str(getattr(self.config, kind).index_name).strip()
+        return f"knowledge_{configured_name}"
+
+    def _get_document_collection(self, kind: str) -> Collection:
+        """获取 Chroma 文档管理集合，不存在时自动创建。"""
+        collection_name = self.resolve_document_collection_name(kind)
+        if collection_name not in self._collections:
+            self.ensure_document_indexes()
+        return self._collections[collection_name]
+
+    def _record_metadata(self, record: dict[str, Any]) -> dict[str, Any]:
+        """抽取主记录列表查询所需的标量元数据。"""
+        return {
+            "document_id": str(record["document_id"]),
+            "namespace": str(record["namespace"]),
+            "source_path": str(record["source_path"]),
+            "status": str(record["status"]),
+            "active_version": int(record["active_version"]),
+            "chunk_count": int(record["chunk_count"]),
+            "updated_at": str(record["updated_at"]),
+        }
+
+    def _set_document_chunks_active(
+        self,
+        *,
+        document_id: str,
+        document_version: int | None,
+        is_active: bool,
+    ) -> None:
+        """读取匹配分块并回写 is_active 状态。"""
+        collection = self._get_document_collection("chunks")
+        where: dict[str, Any] = {"document_id": document_id}
+        if document_version is not None:
+            where = {"$and": [where, {"document_version": document_version}]}
+        result = collection.get(where=where, include=["documents", "metadatas", "embeddings"])
+        ids = result.get("ids") or []
+        if not ids:
+            return
+        documents = result.get("documents") or []
+        metadatas = result.get("metadatas") or []
+        embeddings = result.get("embeddings")
+        updated_metadatas = []
+        for metadata in metadatas:
+            next_metadata = dict(metadata or {})
+            next_metadata["is_active"] = is_active
+            updated_metadatas.append(self.normalize_metadata(next_metadata))
+        collection.upsert(
+            ids=ids,
+            documents=[str(document) for document in documents],
+            metadatas=updated_metadatas,
+            embeddings=embeddings,
+        )
 
 
 class ElasticsearchVectorStore(VectorStore):

@@ -360,6 +360,23 @@ def test_register_document_persists_document_record_and_chunks(
     assert detail.chunk_overlap == 2
 
 
+def test_default_service_reads_json_files_from_data_dir(document_app_settings: AppSettings) -> None:
+    (document_app_settings.data_dir / "orders.json").write_text(
+        '[{"order_id":"O1","status":"paid","total_amount":100}]',
+        encoding="utf-8",
+    )
+    store = InMemoryDocumentStore(document_app_settings)
+    service = KnowledgeDocumentService(
+        app_settings=document_app_settings,
+        store=store,
+    )
+
+    result = service.register_document("faq", "orders.json", 12, 2, False)
+
+    assert result.source_path == "orders.json"
+    assert result.chunk_count > 0
+
+
 def test_repeated_register_reuses_document_id_and_overwrites_active_version_by_default(
     service: KnowledgeDocumentService,
     store: InMemoryDocumentStore,

@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>智能客服</title>
+  <title>智能客服 API 测试台</title>
   <style>
     :root {
       --bg: #f4f7fb;
@@ -20,9 +20,7 @@
       --danger: #dc2626;
       --shadow: 0 24px 70px rgba(26, 37, 63, 0.12);
       --shadow-soft: 0 12px 30px rgba(26, 37, 63, 0.08);
-      --radius: 24px;
       --radius-sm: 16px;
-      --radius-xs: 12px;
       --body: "Microsoft YaHei", "PingFang SC", "Segoe UI", sans-serif;
     }
 
@@ -74,7 +72,6 @@
     }
 
     .service-panel {
-      position: relative;
       padding: 34px;
       display: flex;
       flex-direction: column;
@@ -135,7 +132,8 @@
       box-shadow: 0 0 0 6px rgba(16, 185, 129, 0.12);
     }
 
-    .quick-area {
+    .quick-area,
+    .trust-list {
       display: grid;
       gap: 12px;
     }
@@ -146,7 +144,6 @@
       font-size: 12px;
       font-weight: 800;
       letter-spacing: 0;
-      text-transform: uppercase;
     }
 
     .quick-card {
@@ -166,13 +163,15 @@
       box-shadow: var(--shadow-soft);
     }
 
-    .quick-card strong {
+    .quick-card strong,
+    .trust-item strong {
       display: block;
       margin-bottom: 6px;
       font-size: 15px;
     }
 
-    .quick-card span {
+    .quick-card span,
+    .trust-item span {
       display: block;
       color: var(--muted);
       font-size: 13px;
@@ -180,8 +179,6 @@
     }
 
     .trust-list {
-      display: grid;
-      gap: 12px;
       margin-top: auto;
     }
 
@@ -204,18 +201,6 @@
       color: var(--brand);
       background: #eff6ff;
       font-weight: 900;
-    }
-
-    .trust-item strong {
-      display: block;
-      margin-bottom: 4px;
-      font-size: 14px;
-    }
-
-    .trust-item span {
-      color: var(--muted);
-      font-size: 12px;
-      line-height: 1.5;
     }
 
     .chat-panel {
@@ -381,6 +366,70 @@
       background: #ffffff;
     }
 
+    .composer-box {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 12px;
+      align-items: end;
+      padding: 10px;
+      border: 1px solid var(--line);
+      border-radius: 22px;
+      background: var(--panel-soft);
+    }
+
+    textarea {
+      min-height: 54px;
+      max-height: 160px;
+      resize: vertical;
+      padding: 14px;
+      border: 0;
+      outline: none;
+      border-radius: 16px;
+      color: var(--text);
+      background: transparent;
+      font-size: 15px;
+      line-height: 1.55;
+    }
+
+    .send-button {
+      width: 54px;
+      height: 54px;
+      border-radius: 18px;
+      color: #ffffff;
+      background: var(--brand);
+      font-size: 20px;
+      font-weight: 900;
+      box-shadow: 0 12px 24px rgba(37, 99, 235, 0.22);
+      transition: transform 160ms ease, background 160ms ease;
+    }
+
+    .send-button:hover {
+      transform: translateY(-1px);
+      background: var(--brand-deep);
+    }
+
+    .send-button:disabled,
+    .knowledge-button:disabled {
+      cursor: not-allowed;
+      opacity: 0.55;
+      transform: none;
+    }
+
+    .error-toast {
+      display: none;
+      margin-top: 12px;
+      padding: 12px 14px;
+      border-radius: 14px;
+      color: #b91c1c;
+      background: #fef2f2;
+      border: 1px solid #fecaca;
+      font-size: 13px;
+    }
+
+    .error-toast.show {
+      display: block;
+    }
+
     .knowledge-panel {
       min-width: 0;
       display: flex;
@@ -399,11 +448,21 @@
       font-size: 20px;
     }
 
-    .knowledge-head p {
+    .knowledge-head p,
+    .knowledge-help {
       margin: 8px 0 0;
       color: var(--muted);
       font-size: 13px;
       line-height: 1.6;
+    }
+
+    .knowledge-help {
+      margin: 0;
+      padding: 12px;
+      border-radius: 13px;
+      color: #92400e;
+      background: #fffbeb;
+      border: 1px solid #fde68a;
     }
 
     .knowledge-form,
@@ -482,11 +541,6 @@
       background: #fef2f2;
     }
 
-    .knowledge-button:disabled {
-      cursor: not-allowed;
-      opacity: 0.55;
-    }
-
     .knowledge-status {
       min-height: 38px;
       padding: 10px 12px;
@@ -556,69 +610,6 @@
       line-height: 1.6;
     }
 
-    .composer-box {
-      display: grid;
-      grid-template-columns: minmax(0, 1fr) auto;
-      gap: 12px;
-      align-items: end;
-      padding: 10px;
-      border: 1px solid var(--line);
-      border-radius: 22px;
-      background: var(--panel-soft);
-    }
-
-    textarea {
-      min-height: 54px;
-      max-height: 160px;
-      resize: vertical;
-      padding: 14px;
-      border: 0;
-      outline: none;
-      border-radius: 16px;
-      color: var(--text);
-      background: transparent;
-      font-size: 15px;
-      line-height: 1.55;
-    }
-
-    .send-button {
-      width: 54px;
-      height: 54px;
-      border-radius: 18px;
-      color: #ffffff;
-      background: var(--brand);
-      font-size: 20px;
-      font-weight: 900;
-      box-shadow: 0 12px 24px rgba(37, 99, 235, 0.22);
-      transition: transform 160ms ease, background 160ms ease;
-    }
-
-    .send-button:hover {
-      transform: translateY(-1px);
-      background: var(--brand-deep);
-    }
-
-    .send-button:disabled {
-      cursor: not-allowed;
-      opacity: 0.55;
-      transform: none;
-    }
-
-    .error-toast {
-      display: none;
-      margin-top: 12px;
-      padding: 12px 14px;
-      border-radius: 14px;
-      color: #b91c1c;
-      background: #fef2f2;
-      border: 1px solid #fecaca;
-      font-size: 13px;
-    }
-
-    .error-toast.show {
-      display: block;
-    }
-
     @keyframes message-in {
       from {
         opacity: 0;
@@ -686,16 +677,13 @@
         border-radius: 0;
       }
 
-      .service-panel {
+      .service-panel,
+      .knowledge-panel {
         padding: 22px;
       }
 
       .hero h1 {
         font-size: 28px;
-      }
-
-      .quick-area {
-        grid-template-columns: 1fr;
       }
 
       .chat-topbar {
@@ -712,10 +700,6 @@
 
       .composer {
         padding: 14px;
-      }
-
-      .knowledge-panel {
-        padding: 18px 16px 24px;
       }
 
       .form-grid,
@@ -768,7 +752,7 @@
           <div class="trust-icon">2</div>
           <div>
             <strong>支持连续追问</strong>
-            <span>你可以直接说“再便宜点”“和上一款比呢”。</span>
+            <span>可以直接说“再便宜点”“和上一款比呢”。</span>
           </div>
         </div>
       </section>
@@ -791,57 +775,60 @@
       <footer class="composer">
         <div class="composer-box">
           <textarea id="messageInput" placeholder="输入你的问题，例如：预算 3000，想要续航好一点的手机"></textarea>
-          <button id="sendButton" class="send-button" type="button" aria-label="发送">↑</button>
+          <button id="sendButton" class="send-button" type="button" aria-label="发送">→</button>
         </div>
         <div id="errorToast" class="error-toast"></div>
       </footer>
     </section>
 
-    <aside class="knowledge-panel" aria-label="Knowledge document management">
+    <aside class="knowledge-panel" aria-label="知识库文档管理">
       <section class="knowledge-head">
-        <p class="section-label">Knowledge Ops</p>
-        <h2>Document Management</h2>
-        <p>Register JSON knowledge files, inspect active chunks, and trigger maintenance calls without leaving this test page.</p>
+        <p class="section-label">知识库运维</p>
+        <h2>文档管理</h2>
+        <p>登记后端数据目录里的 JSON 知识文件，查看已生效分块，并触发重切分或删除。</p>
       </section>
 
       <section class="knowledge-form">
+        <p class="knowledge-help">
+          当前页面不是文件上传器。请先把 JSON 文件放到 backend/data 目录下，再在“文件路径”里填写相对路径，例如 products.json、reviews.json、orders.json。
+        </p>
         <div class="field">
-          <label for="docNamespace">namespace</label>
+          <label for="docNamespace">命名空间</label>
           <input id="docNamespace" type="text" value="faq" autocomplete="off" />
         </div>
         <div class="field">
-          <label for="docSourcePath">source_path</label>
-          <input id="docSourcePath" type="text" placeholder="faq/returns.json" autocomplete="off" />
+          <label for="docSourcePath">文件路径</label>
+          <input id="docSourcePath" type="text" placeholder="products.json" autocomplete="off" />
         </div>
         <div class="form-grid">
           <div class="field">
-            <label for="docChunkSize">chunk_size</label>
+            <label for="docChunkSize">分块大小</label>
             <input id="docChunkSize" type="number" min="1" step="1" value="500" />
           </div>
           <div class="field">
-            <label for="docChunkOverlap">chunk_overlap</label>
+            <label for="docChunkOverlap">重叠长度</label>
             <input id="docChunkOverlap" type="number" min="0" step="1" value="80" />
           </div>
         </div>
         <label class="checkbox-field" for="docKeepVersion">
           <input id="docKeepVersion" type="checkbox" />
-          keep_version
+          保留旧版本
         </label>
         <div class="knowledge-actions">
-          <button id="registerDocument" class="knowledge-button" type="button">Register</button>
-          <button id="refreshDocuments" class="knowledge-button secondary" type="button">Refresh/List</button>
+          <button id="registerDocument" class="knowledge-button" type="button">登记文档</button>
+          <button id="refreshDocuments" class="knowledge-button secondary" type="button">刷新列表</button>
         </div>
-        <div id="knowledgeStatus" class="knowledge-status">Ready.</div>
+        <div id="knowledgeStatus" class="knowledge-status">就绪。</div>
       </section>
 
       <section class="knowledge-list">
-        <p class="section-label">Documents</p>
-        <div id="documentList" class="empty-documents">No documents loaded yet. Click Refresh/List.</div>
+        <p class="section-label">文档列表</p>
+        <div id="documentList" class="empty-documents">还没有加载文档。点击“刷新列表”查看。</div>
       </section>
 
       <section class="knowledge-detail">
-        <p class="section-label">Detail</p>
-        <div id="documentDetail" class="empty-documents">Select Detail on a document to inspect versions and errors.</div>
+        <p class="section-label">文档详情</p>
+        <div id="documentDetail" class="empty-documents">点击文档卡片上的“详情”查看版本和错误信息。</div>
       </section>
     </aside>
   </main>
@@ -924,7 +911,7 @@
           '<article class="message assistant">' +
             '<div class="message-avatar">客</div>' +
             '<div class="bubble">' +
-              '<p>欢迎来咨询。你可以直接告诉我预算、用途和在意的点，我会帮你一步步筛选。</p>' +
+              '<p>欢迎咨询。你可以直接告诉我预算、用途和在意的点，我会帮你一步步筛选。</p>' +
             '</div>' +
           '</article>';
         return;
@@ -996,7 +983,7 @@
         }
         return JSON.stringify(parsed);
       } catch (_) {
-        return error.message || "Request failed";
+        return error.message || "请求失败";
       }
     }
 
@@ -1020,19 +1007,19 @@
       const chunkSize = Number(refs.docChunkSize.value);
       const chunkOverlap = Number(refs.docChunkOverlap.value);
       if (!namespace) {
-        throw new Error("namespace is required.");
+        throw new Error("请填写命名空间。");
       }
       if (requireSourcePath && !sourcePath) {
-        throw new Error("source_path is required.");
+        throw new Error("请填写文件路径。");
       }
       if (!Number.isInteger(chunkSize) || chunkSize <= 0) {
-        throw new Error("chunk_size must be a positive integer.");
+        throw new Error("分块大小必须是正整数。");
       }
       if (!Number.isInteger(chunkOverlap) || chunkOverlap < 0) {
-        throw new Error("chunk_overlap must be a non-negative integer.");
+        throw new Error("重叠长度必须是非负整数。");
       }
       if (chunkOverlap >= chunkSize) {
-        throw new Error("chunk_overlap must be smaller than chunk_size.");
+        throw new Error("重叠长度必须小于分块大小。");
       }
       return {
         namespace,
@@ -1048,16 +1035,16 @@
         '<article class="document-card">' +
           '<strong title="' + escapeHtml(document.document_id) + '">' + escapeHtml(document.source_path || document.document_id) + '</strong>' +
           '<div class="document-meta">' +
-            '<span>status: ' + escapeHtml(document.status) + '</span>' +
-            '<span>namespace: ' + escapeHtml(document.namespace) + '</span>' +
-            '<span>active_version: ' + escapeHtml(document.active_version) + '</span>' +
-            '<span>chunk_count: ' + escapeHtml(document.chunk_count) + '</span>' +
-            '<span>updated_at: ' + escapeHtml(document.updated_at) + '</span>' +
+            '<span>状态：' + escapeHtml(document.status) + '</span>' +
+            '<span>命名空间：' + escapeHtml(document.namespace) + '</span>' +
+            '<span>生效版本：' + escapeHtml(document.active_version) + '</span>' +
+            '<span>分块数量：' + escapeHtml(document.chunk_count) + '</span>' +
+            '<span>更新时间：' + escapeHtml(document.updated_at) + '</span>' +
           '</div>' +
           '<div class="document-actions">' +
-            '<button class="knowledge-button secondary" type="button" data-doc-action="detail" data-document-id="' + escapeHtml(document.document_id) + '">Detail</button>' +
-            '<button class="knowledge-button secondary" type="button" data-doc-action="rechunk" data-document-id="' + escapeHtml(document.document_id) + '">Rechunk</button>' +
-            '<button class="knowledge-button danger" type="button" data-doc-action="delete" data-document-id="' + escapeHtml(document.document_id) + '">Delete</button>' +
+            '<button class="knowledge-button secondary" type="button" data-doc-action="detail" data-document-id="' + escapeHtml(document.document_id) + '">详情</button>' +
+            '<button class="knowledge-button secondary" type="button" data-doc-action="rechunk" data-document-id="' + escapeHtml(document.document_id) + '">重切分</button>' +
+            '<button class="knowledge-button danger" type="button" data-doc-action="delete" data-document-id="' + escapeHtml(document.document_id) + '">删除</button>' +
           '</div>' +
         '</article>'
       );
@@ -1067,7 +1054,7 @@
       state.documents = Array.isArray(documents) ? documents : [];
       if (!state.documents.length) {
         refs.documentList.className = "empty-documents";
-        refs.documentList.textContent = "No documents found for this namespace.";
+        refs.documentList.textContent = "当前命名空间下没有文档。";
         return;
       }
       refs.documentList.className = "";
@@ -1078,32 +1065,32 @@
       const versions = Array.isArray(document.versions) && document.versions.length
         ? document.versions.map(function (version) {
             return (
-              '<span>version ' + escapeHtml(version.document_version) +
+              '<span>版本 ' + escapeHtml(version.document_version) +
               ' - ' + escapeHtml(version.status) +
-              ' - chunks ' + escapeHtml(version.chunk_count) +
-              ' - size ' + escapeHtml(version.chunk_size) +
+              ' - 分块 ' + escapeHtml(version.chunk_count) +
+              ' - 参数 ' + escapeHtml(version.chunk_size) +
               '/' + escapeHtml(version.chunk_overlap) +
               ' - ' + escapeHtml(version.created_at) +
-              (version.last_error ? ' - error: ' + escapeHtml(version.last_error) : '') +
+              (version.last_error ? ' - 错误：' + escapeHtml(version.last_error) : '') +
               '</span>'
             );
           }).join("")
-        : '<span>versions: none</span>';
+        : '<span>版本：无</span>';
 
       refs.documentDetail.className = "";
       refs.documentDetail.innerHTML =
         '<div class="detail-grid">' +
-          '<span>document_id: ' + escapeHtml(document.document_id) + '</span>' +
-          '<span>namespace: ' + escapeHtml(document.namespace) + '</span>' +
-          '<span>source_path: ' + escapeHtml(document.source_path) + '</span>' +
-          '<span>source_type: ' + escapeHtml(document.source_type || "") + '</span>' +
-          '<span>status: ' + escapeHtml(document.status) + '</span>' +
-          '<span>active_version: ' + escapeHtml(document.active_version) + '</span>' +
-          '<span>chunk_count: ' + escapeHtml(document.chunk_count) + '</span>' +
-          '<span>chunk_size: ' + escapeHtml(document.chunk_size) + '</span>' +
-          '<span>chunk_overlap: ' + escapeHtml(document.chunk_overlap) + '</span>' +
-          '<span>updated_at: ' + escapeHtml(document.updated_at) + '</span>' +
-          '<span>last_error: ' + escapeHtml(document.last_error || "none") + '</span>' +
+          '<span>文档 ID：' + escapeHtml(document.document_id) + '</span>' +
+          '<span>命名空间：' + escapeHtml(document.namespace) + '</span>' +
+          '<span>文件路径：' + escapeHtml(document.source_path) + '</span>' +
+          '<span>来源类型：' + escapeHtml(document.source_type || "") + '</span>' +
+          '<span>状态：' + escapeHtml(document.status) + '</span>' +
+          '<span>生效版本：' + escapeHtml(document.active_version) + '</span>' +
+          '<span>分块数量：' + escapeHtml(document.chunk_count) + '</span>' +
+          '<span>分块大小：' + escapeHtml(document.chunk_size) + '</span>' +
+          '<span>重叠长度：' + escapeHtml(document.chunk_overlap) + '</span>' +
+          '<span>更新时间：' + escapeHtml(document.updated_at) + '</span>' +
+          '<span>最后错误：' + escapeHtml(document.last_error || "无") + '</span>' +
           versions +
         '</div>';
     }
@@ -1112,14 +1099,14 @@
       try {
         const payload = readDocumentPayload(true);
         setKnowledgeBusy(true);
-        setKnowledgeStatus("Registering document...", "");
+        setKnowledgeStatus("正在登记文档...", "");
         const document = await apiRequest("/knowledge/documents", {
           method: "POST",
           body: JSON.stringify(payload)
         });
         renderDocumentDetail(document);
         await refreshKnowledgeDocuments(false);
-        setKnowledgeStatus("Registered document. active_version=" + document.active_version + ", chunk_count=" + document.chunk_count, "ok");
+        setKnowledgeStatus("登记成功。生效版本=" + document.active_version + "，分块数量=" + document.chunk_count, "ok");
       } catch (error) {
         setKnowledgeStatus(formatApiError(error), "error");
       } finally {
@@ -1132,13 +1119,13 @@
       const query = namespace ? "?namespace=" + encodeURIComponent(namespace) : "";
       if (showBusy !== false) {
         setKnowledgeBusy(true);
-        setKnowledgeStatus("Loading documents...", "");
+        setKnowledgeStatus("正在加载文档列表...", "");
       }
       try {
         const data = await apiRequest("/knowledge/documents" + query);
         renderDocumentList(data && data.documents);
         if (showBusy !== false) {
-          setKnowledgeStatus("Loaded " + state.documents.length + " document(s).", "ok");
+          setKnowledgeStatus("已加载 " + state.documents.length + " 个文档。", "ok");
         }
       } catch (error) {
         setKnowledgeStatus(formatApiError(error), "error");
@@ -1152,10 +1139,10 @@
     async function loadKnowledgeDocumentDetail(documentId) {
       try {
         setKnowledgeBusy(true);
-        setKnowledgeStatus("Loading document detail...", "");
+        setKnowledgeStatus("正在加载文档详情...", "");
         const document = await apiRequest("/knowledge/documents/" + encodeURIComponent(documentId));
         renderDocumentDetail(document);
-        setKnowledgeStatus("Detail loaded for " + documentId + ".", "ok");
+        setKnowledgeStatus("已加载文档详情：" + documentId, "ok");
       } catch (error) {
         setKnowledgeStatus(formatApiError(error), "error");
       } finally {
@@ -1164,18 +1151,18 @@
     }
 
     async function deleteKnowledgeDocument(documentId) {
-      if (!window.confirm("Delete knowledge document " + documentId + "?")) {
+      if (!window.confirm("确认删除知识库文档 " + documentId + "？")) {
         return;
       }
       try {
         setKnowledgeBusy(true);
-        setKnowledgeStatus("Deleting document...", "");
+        setKnowledgeStatus("正在删除文档...", "");
         const document = await apiRequest("/knowledge/documents/" + encodeURIComponent(documentId), {
           method: "DELETE"
         });
         renderDocumentDetail(document);
         await refreshKnowledgeDocuments(false);
-        setKnowledgeStatus("Deleted document. status=" + document.status + ".", "ok");
+        setKnowledgeStatus("已删除文档。当前状态=" + document.status + "。", "ok");
       } catch (error) {
         setKnowledgeStatus(formatApiError(error), "error");
       } finally {
@@ -1187,7 +1174,7 @@
       try {
         const payload = readDocumentPayload(false);
         setKnowledgeBusy(true);
-        setKnowledgeStatus("Rechunking document...", "");
+        setKnowledgeStatus("正在重新切分文档...", "");
         const document = await apiRequest("/knowledge/documents/" + encodeURIComponent(documentId) + "/rechunk", {
           method: "POST",
           body: JSON.stringify({
@@ -1198,7 +1185,7 @@
         });
         renderDocumentDetail(document);
         await refreshKnowledgeDocuments(false);
-        setKnowledgeStatus("Rechunked document. active_version=" + document.active_version + ", chunk_count=" + document.chunk_count, "ok");
+        setKnowledgeStatus("重切分完成。生效版本=" + document.active_version + "，分块数量=" + document.chunk_count, "ok");
       } catch (error) {
         setKnowledgeStatus(formatApiError(error), "error");
       } finally {

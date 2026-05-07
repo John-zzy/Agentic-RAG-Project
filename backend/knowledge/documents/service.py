@@ -80,7 +80,7 @@ class KnowledgeDocumentService:
         """初始化服务依赖；测试可注入 files_root 和 store。"""
         self.app_settings = app_settings or settings
         self.store = store or VectorStoreFactory.create(self.app_settings)
-        self.files_root = Path(files_root) if files_root is not None else self.app_settings.data_dir / "files"
+        self.files_root = Path(files_root) if files_root is not None else self.app_settings.data_dir
         self._call_store("ensure document indexes", self.store.ensure_document_indexes)
 
     def register_document(
