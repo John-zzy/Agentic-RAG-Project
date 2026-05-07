@@ -14,6 +14,7 @@ from backend.api.knowledge.schemas import (
     KnowledgeDocumentSummaryResponse,
 )
 from backend.knowledge.documents.service import (
+    KnowledgeDocumentService,
     KnowledgeDocumentError,
     KnowledgeDocumentNotFoundError,
     KnowledgeDocumentStoreError,
@@ -130,17 +131,22 @@ def rechunk_knowledge_document(
 
 
 def _get_document_service(request: Request) -> KnowledgeDocumentServiceProtocol:
-    """从应用状态读取知识文档服务，缺失时返回 500。"""
+    """从应用状态读取知识文档服务，首次访问知识路由时惰性创建。"""
     service = getattr(request.app.state, "knowledge_document_service", None)
     if service is not None:
         return service
-    raise HTTPException(
-        status_code=500,
-        detail={
-            "code": "SERVICE_NOT_INITIALIZED",
-            "message": "Knowledge document service is not initialized.",
-        },
-    )
+    try:
+        service = KnowledgeDocumentService()
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "code": "KNOWLEDGE_DOCUMENT_STORE_ERROR",
+                "message": "Knowledge document backend is unavailable.",
+            },
+        ) from exc
+    request.app.state.knowledge_document_service = service
+    return service
 
 
 def _raise_document_http_error(exc: Exception) -> None:
@@ -166,7 +172,7 @@ def _raise_document_http_error(exc: Exception) -> None:
             status_code=500,
             detail={
                 "code": "KNOWLEDGE_DOCUMENT_STORE_ERROR",
-                "message": str(exc),
+                "message": "Knowledge document backend is unavailable.",
             },
         ) from exc
     if isinstance(exc, KnowledgeDocumentError):
@@ -177,7 +183,13 @@ def _raise_document_http_error(exc: Exception) -> None:
                 "message": str(exc),
             },
         ) from exc
-    raise exc
+    raise HTTPException(
+        status_code=500,
+        detail={
+            "code": "KNOWLEDGE_DOCUMENT_INTERNAL_ERROR",
+            "message": "Knowledge document operation failed.",
+        },
+    ) from exc
 
 
 def _to_response_data(payload: object) -> object:

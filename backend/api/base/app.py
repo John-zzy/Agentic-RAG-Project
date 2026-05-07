@@ -11,12 +11,11 @@ from backend.api.chat.routes import router as api_router
 from backend.api.chat.service import ChatService, create_chat_service
 from backend.api.knowledge.routes import router as knowledge_document_router
 from backend.config.settings import settings
-from backend.knowledge.documents.service import KnowledgeDocumentService
 
 
 def create_app(
     chat_service: ChatService | None = None,
-    knowledge_document_service: KnowledgeDocumentService | None = None,
+    knowledge_document_service: object | None = None,
 ) -> FastAPI:
     """创建并配置 FastAPI 应用。"""
 
@@ -25,7 +24,8 @@ def create_app(
         """应用生命周期：注入配置与 ChatService。"""
         app.state.settings = settings
         app.state.chat_service = chat_service or create_chat_service()
-        app.state.knowledge_document_service = knowledge_document_service or KnowledgeDocumentService()
+        if knowledge_document_service is not None:
+            app.state.knowledge_document_service = knowledge_document_service
         yield
 
     app = FastAPI(

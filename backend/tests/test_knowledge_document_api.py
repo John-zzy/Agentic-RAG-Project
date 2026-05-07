@@ -21,6 +21,7 @@ class FakeKnowledgeDocumentService:
         self.last_register: dict[str, Any] | None = None
         self.last_rechunk: dict[str, Any] | None = None
         self.fail_store = False
+        self.fail_unknown_methods: set[str] = set()
 
     def register_document(
         self,
@@ -39,6 +40,8 @@ class FakeKnowledgeDocumentService:
         }
         if self.fail_store:
             raise KnowledgeDocumentStoreError("store unavailable")
+        if "register" in self.fail_unknown_methods:
+            raise RuntimeError("secret backend register failure")
         document_id = f"{namespace}:returns"
         current = self.documents.get(document_id)
         document_version = 1 if current is None else current.document_version + 1
@@ -57,6 +60,8 @@ class FakeKnowledgeDocumentService:
         return result
 
     def list_documents(self, namespace: str | None = None) -> list[KnowledgeDocumentSummary]:
+        if "list" in self.fail_unknown_methods:
+            raise RuntimeError("secret backend list failure")
         documents = list(self.documents.values())
         if namespace is not None:
             documents = [document for document in documents if document.namespace == namespace]
@@ -74,12 +79,16 @@ class FakeKnowledgeDocumentService:
         ]
 
     def get_document(self, document_id: str) -> KnowledgeDocumentDetail:
+        if "detail" in self.fail_unknown_methods:
+            raise RuntimeError("secret backend detail failure")
         document = self.documents.get(document_id)
         if document is None:
             raise KnowledgeDocumentNotFoundError(document_id)
         return KnowledgeDocumentDetail(**document.model_dump(exclude={"document_version"}))
 
     def delete_document(self, document_id: str) -> KnowledgeDocumentOperationResult:
+        if "delete" in self.fail_unknown_methods:
+            raise RuntimeError("secret backend delete failure")
         document = self.documents.pop(document_id, None)
         if document is None:
             raise KnowledgeDocumentNotFoundError(document_id)
@@ -98,6 +107,8 @@ class FakeKnowledgeDocumentService:
             "chunk_overlap": chunk_overlap,
             "keep_version": keep_version,
         }
+        if "rechunk" in self.fail_unknown_methods:
+            raise RuntimeError("secret backend rechunk failure")
         current = self.documents.get(document_id)
         if current is None:
             raise KnowledgeDocumentNotFoundError(document_id)
@@ -161,6 +172,21 @@ def _operation_result(
 
 def _client(service: FakeKnowledgeDocumentService) -> TestClient:
     return TestClient(create_app(knowledge_document_service=service))
+
+
+class FailingChatOnlyService:
+    def chat(self, payload: object) -> object:
+        raise AssertionError("chat should not be called")
+
+
+def test_create_app_with_chat_service_does_not_create_document_service() -> None:
+    app = create_app(chat_service=FailingChatOnlyService())  # type: ignore[arg-type]
+
+    with TestClient(app) as client:
+        response = client.get("/health")
+
+    assert response.status_code == 200
+    assert not hasattr(app.state, "knowledge_document_service")
 
 
 def test_register_knowledge_document_returns_document_payload() -> None:
@@ -310,4 +336,56 @@ def test_store_errors_return_500_with_structured_detail() -> None:
         )
 
     assert response.status_code == 500
-    assert response.json()["detail"]["code"] == "KNOWLEDGE_DOCUMENT_STORE_ERROR"
+    assert response.json()["detail"] == {
+        "code": "KNOWLEDGE_DOCUMENT_STORE_ERROR",
+        "message": "Knowledge document backend is unavailable.",
+    }
+
+
+def test_unknown_register_error_returns_structured_safe_500() -> None:
+    service = FakeKnowledgeDocumentService()
+    service.fail_unknown_methods.add("register")
+
+    with _client(service) as client:
+        response = client.post(
+            "/knowledge/documents",
+            json={
+                "namespace": "faq",
+                "source_path": "faq/returns.json",
+                "chunk_size": 120,
+                "chunk_overlap": 20,
+            },
+        )
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == {
+        "code": "KNOWLEDGE_DOCUMENT_INTERNAL_ERROR",
+        "message": "Knowledge document operation failed.",
+    }
+
+
+def test_unknown_errors_return_structured_safe_500_for_read_write_routes() -> None:
+    cases = [
+        ("list", "get", "/knowledge/documents", None),
+        ("detail", "get", "/knowledge/documents/faq:returns", None),
+        ("delete", "delete", "/knowledge/documents/faq:returns", None),
+        (
+            "rechunk",
+            "post",
+            "/knowledge/documents/faq:returns/rechunk",
+            {"chunk_size": 80, "chunk_overlap": 10},
+        ),
+    ]
+
+    for method_name, http_method, url, json_body in cases:
+        service = FakeKnowledgeDocumentService()
+        service.register_document("faq", "faq/returns.json", 120, 20, False)
+        service.fail_unknown_methods.add(method_name)
+        with _client(service) as client:
+            response = client.request(http_method, url, json=json_body)
+
+        assert response.status_code == 500
+        assert response.json()["detail"] == {
+            "code": "KNOWLEDGE_DOCUMENT_INTERNAL_ERROR",
+            "message": "Knowledge document operation failed.",
+        }
