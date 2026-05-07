@@ -77,6 +77,13 @@ class FakeElasticsearchClient:
         source: list[str] | None = None,
     ) -> dict[str, Any]:
         del source
+        if "script_score" not in query:
+            hits = [
+                {"_id": document_id, "_source": document}
+                for document_id, document in self._filter_documents(index, query)
+            ]
+            return {"hits": {"hits": hits[:size]}}
+
         script_score = query["script_score"]
         query_vector = script_score["script"]["params"]["query_vector"]
         filtered_documents = self._filter_documents(index, script_score["query"])
@@ -104,6 +111,23 @@ class FakeElasticsearchClient:
         self.documents.setdefault(index, {}).pop(id, None)
         return {"result": "deleted"}
 
+    def update_by_query(
+        self,
+        *,
+        index: str,
+        query: dict[str, Any],
+        script: dict[str, Any],
+        refresh: bool = True,
+    ) -> dict[str, Any]:
+        assert refresh is True
+        active_value = "true" in script.get("source", "").lower()
+        updated = 0
+        for _, document in self._filter_documents(index, query):
+            document["is_active"] = active_value
+            document.setdefault("metadata", {})["is_active"] = active_value
+            updated += 1
+        return {"updated": updated, "failures": []}
+
     def _filter_documents(
         self,
         index: str,
@@ -116,17 +140,22 @@ class FakeElasticsearchClient:
         filters = base_query.get("bool", {}).get("filter", [])
         results: list[tuple[str, dict[str, Any]]] = []
         for document_id, document in documents:
-            metadata = document.get("metadata", {})
-            if all(self._matches_filter(metadata, filter_clause) for filter_clause in filters):
+            if all(self._matches_filter(document, filter_clause) for filter_clause in filters):
                 results.append((document_id, document))
         return results
 
-    def _matches_filter(self, metadata: dict[str, Any], filter_clause: dict[str, Any]) -> bool:
+    def _matches_filter(self, document: dict[str, Any], filter_clause: dict[str, Any]) -> bool:
+        if "bool" in filter_clause:
+            must_not = filter_clause["bool"].get("must_not", [])
+            return not any(self._matches_document_filter(document, clause) for clause in must_not)
+        return self._matches_document_filter(document, filter_clause)
+
+    def _matches_document_filter(self, document: dict[str, Any], filter_clause: dict[str, Any]) -> bool:
         field, expected = next(iter(filter_clause["term"].items()))
         if not field.startswith("metadata."):
-            return False
+            return document.get(field) == expected
         metadata_key = field.removeprefix("metadata.")
-        return metadata.get(metadata_key) == expected
+        return document.get("metadata", {}).get(metadata_key) == expected
 
     def _cosine_similarity(self, left: list[float], right: list[float]) -> float:
         numerator = sum(left_value * right_value for left_value, right_value in zip(left, right))
@@ -201,6 +230,97 @@ def test_elasticsearch_store_initializes_indexes_and_healthcheck(monkeypatch: py
         fake_client.indices.mappings["ai-rag-products"]["properties"]["embedding"]["type"]
         == "dense_vector"
     )
+
+
+def test_elasticsearch_store_initializes_document_management_indexes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_factory = FakeElasticsearchFactory()
+    monkeypatch.setattr(store_module, "Elasticsearch", fake_factory)
+
+    app_settings = AppSettings(
+        data_dir=DATA_DIR,
+        vector_store=VectorStoreConfig(
+            provider="elasticsearch",
+            elasticsearch={"url": "http://localhost:9200", "index_prefix": "ai-rag"},
+        ),
+    )
+
+    store = ElasticsearchVectorStore(app_settings)
+    store.ensure_document_indexes()
+
+    fake_client = fake_factory.instances[-1]
+    assert fake_client.indices.exists(index="ai-rag-documents")
+    assert fake_client.indices.exists(index="ai-rag-chunks")
+    assert fake_client.indices.mappings["ai-rag-documents"]["properties"]["document_id"]["type"] == "keyword"
+    versions_mapping = fake_client.indices.mappings["ai-rag-documents"]["properties"]["versions"]
+    assert versions_mapping["type"] == "nested"
+    assert "enabled" not in versions_mapping
+    assert fake_client.indices.mappings["ai-rag-chunks"]["properties"]["embedding"]["dims"] == 256
+
+
+def test_elasticsearch_store_rejects_unknown_document_index_kind() -> None:
+    app_settings = build_elasticsearch_settings()
+    store = ElasticsearchVectorStore(app_settings, client=FakeElasticsearchClient())
+
+    with pytest.raises(ValueError, match="Unsupported document index kind"):
+        store.resolve_document_index_name("unknown")
+
+
+def test_elasticsearch_store_supports_document_management_operations() -> None:
+    app_settings = build_elasticsearch_settings()
+    fake_client = FakeElasticsearchClient()
+    store = ElasticsearchVectorStore(app_settings, client=fake_client)
+
+    record = {
+        "document_id": "doc-1",
+        "namespace": "faq",
+        "source_type": "json",
+        "source_path": "faq/returns.json",
+        "status": "active",
+        "active_version": 1,
+        "chunk_count": 1,
+        "chunk_size": 120,
+        "chunk_overlap": 20,
+        "created_at": "2026-05-06T12:00:00Z",
+        "updated_at": "2026-05-06T12:00:00Z",
+        "last_error": None,
+        "versions": [],
+    }
+    store.upsert_document_record(record)
+    store.upsert_document_chunks(
+        [
+            VectorStoreDocument(
+                id="chunk-1",
+                content="退货政策",
+                metadata={
+                    "document_id": "doc-1",
+                    "document_version": 1,
+                    "namespace": "faq",
+                    "source_type": "json",
+                    "source_path": "faq/returns.json",
+                    "chunk_id": "chunk-1",
+                    "chunk_index": 0,
+                    "updated_at": "2026-05-06T12:00:00Z",
+                    "is_active": True,
+                },
+            )
+        ]
+    )
+
+    assert store.get_document_record("doc-1")["source_path"] == "faq/returns.json"
+    assert [document["document_id"] for document in store.list_document_records(namespace="faq")] == ["doc-1"]
+
+    store.deactivate_document_chunks("doc-1", document_version=1)
+    chunks_index = store.resolve_document_index_name("chunks")
+    assert fake_client.documents[chunks_index]["chunk-1"]["is_active"] is False
+
+    store.activate_document_chunks("doc-1", document_version=1)
+    assert fake_client.documents[chunks_index]["chunk-1"]["is_active"] is True
+
+    store.delete_document_record("doc-1")
+    assert store.get_document_record("doc-1") is None
+    assert store.list_document_records() == []
 
 
 def test_elasticsearch_store_supports_upsert_search_filter_and_delete(
