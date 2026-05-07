@@ -187,6 +187,12 @@ class VectorStoreConfig(BaseModel):
             index_name="ai-rag-reviews",
         )
     )
+    orders: VectorNamespaceConfig = Field(
+        default_factory=lambda: VectorNamespaceConfig(
+            collection_name="orders",
+            index_name="ai-rag-orders",
+        )
+    )
     documents: DocumentIndexConfig = Field(
         default_factory=lambda: DocumentIndexConfig(index_name="documents")
     )

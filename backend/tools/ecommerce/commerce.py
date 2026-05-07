@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -11,7 +10,7 @@ from langchain_core.tools import BaseTool
 from pydantic import BaseModel, Field
 
 from backend.config.settings import AppSettings, settings
-from backend.tools.base import ToolResult, build_structured_tool
+from backend.tools.base import BaseJsonStore, ToolResult, build_structured_tool
 
 
 ORDERS_FILE_NAME = "orders.json"
@@ -48,44 +47,46 @@ class ComplaintTicketCreateInput(BaseModel):
 
 
 @dataclass
-class CommerceDataStore:
-    """封装订单与售后工单的本地 JSON 读写，隔离工具层的数据访问细节。"""
+class CommerceDataStore(BaseJsonStore):
+    """封装订单与售后工单的本地 JSON 读写，隔离工具层的数据访问细节。
 
-    data_dir: Path
-
-    @property
-    def orders_path(self) -> Path:
-        return self.data_dir / ORDERS_FILE_NAME
-
-    @property
-    def service_tickets_path(self) -> Path:
-        return self.data_dir / SERVICE_TICKETS_FILE_NAME
+    继承 BaseJsonStore 复用 JSON 文件读写能力，专注于订单和工单的业务操作。
+    数据存储在本地 JSON 文件中（orders.json / service_tickets.json），
+    适用于中小规模数据量和开发测试场景。
+    """
 
     def load_orders(self) -> list[dict[str, Any]]:
         """读取订单列表；若文件不存在则返回空列表。"""
-        return self._load_json_list(self.orders_path)
+        return self._load_json_list(ORDERS_FILE_NAME)
 
     def save_orders(self, orders: list[dict[str, Any]]) -> None:
-        """持久化订单列表。"""
-        self._write_json_list(self.orders_path, orders)
+        """持久化订单列表到本地 JSON 文件。"""
+        self._save_json_list(ORDERS_FILE_NAME, orders)
 
     def load_service_tickets(self) -> list[dict[str, Any]]:
-        """读取售后工单列表。"""
-        return self._load_json_list(self.service_tickets_path)
+        """读取售后工单列表；若文件不存在则返回空列表。"""
+        return self._load_json_list(SERVICE_TICKETS_FILE_NAME)
 
     def save_service_tickets(self, tickets: list[dict[str, Any]]) -> None:
-        """持久化售后工单列表。"""
-        self._write_json_list(self.service_tickets_path, tickets)
+        """持久化售后工单列表到本地 JSON 文件。"""
+        self._save_json_list(SERVICE_TICKETS_FILE_NAME, tickets)
 
     def find_order(self, order_id: str) -> dict[str, Any] | None:
-        """按订单号查找订单，不存在时返回 None。"""
+        """按订单号精确查找订单，不存在时返回 None。
+
+        遍历订单列表进行线性查找，适用于数据量较小的场景。
+        """
         for order in self.load_orders():
             if order.get("order_id") == order_id:
                 return order
         return None
 
     def update_order_address(self, order_id: str, new_address: str) -> dict[str, Any] | None:
-        """更新订单收货地址，并在命中时补充更新时间。"""
+        """更新指定订单的收货地址，并在命中时补充更新时间戳。
+
+        先加载全部订单，修改匹配项后整体写回文件。
+        返回更新后的订单字典，未找到时返回 None。
+        """
         orders = self.load_orders()
         for order in orders:
             if order.get("order_id") == order_id:
@@ -96,23 +97,15 @@ class CommerceDataStore:
         return None
 
     def create_service_ticket(self, payload: dict[str, Any]) -> dict[str, Any]:
-        """追加一条售后工单记录并返回该记录。"""
+        """追加一条售后工单记录并返回该记录。
+
+        工单类型包括退货（return）和投诉（complaint），
+        由调用方在 payload 中指定 ticket_type。
+        """
         tickets = self.load_service_tickets()
         tickets.append(payload)
         self.save_service_tickets(tickets)
         return payload
-
-    def _load_json_list(self, path: Path) -> list[dict[str, Any]]:
-        if not path.exists():
-            return []
-        return json.loads(path.read_text(encoding="utf-8"))
-
-    def _write_json_list(self, path: Path, payload: list[dict[str, Any]]) -> None:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
-            json.dumps(payload, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
 
 
 def _build_order_status_lookup_tool(store: CommerceDataStore) -> BaseTool:

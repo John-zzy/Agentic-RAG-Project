@@ -8,14 +8,15 @@ from pydantic import BaseModel
 
 from backend.config.settings import AppSettings, settings
 from backend.knowledge.base.store import VectorStore, VectorStoreFactory
-from backend.knowledge.ecommerce.extractor import build_product_document, build_review_document
+from backend.knowledge.ecommerce.extractor import build_order_document, build_product_document, build_review_document
 
 
 class KnowledgeLoadSummary(BaseModel):
-    """描述商品与评论预加载的数量结果。"""
+    """描述商品、评论与订单预加载的数量结果。"""
 
     products_loaded: int
     reviews_loaded: int
+    orders_loaded: int
 
 
 def load_json_records(path: Path) -> list[dict[str, Any]]:
@@ -34,14 +35,18 @@ def preload_knowledge_base(
 
     products = load_json_records(resolved_settings.data_dir / "products.json")
     reviews = load_json_records(resolved_settings.data_dir / "reviews.json")
+    orders = load_json_records(resolved_settings.data_dir / "orders.json")
     product_documents = [build_product_document(product) for product in products]
     review_documents = [build_review_document(review) for review in reviews]
+    order_documents = [build_order_document(order) for order in orders]
 
     resolved_store.ensure_collections()
     resolved_store.upsert_documents("products", product_documents)
     resolved_store.upsert_documents("reviews", review_documents)
+    resolved_store.upsert_documents("orders", order_documents)
 
     return KnowledgeLoadSummary(
         products_loaded=len(product_documents),
         reviews_loaded=len(review_documents),
+        orders_loaded=len(order_documents),
     )

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -15,7 +14,7 @@ from backend.knowledge.base.text import truncate_snippet
 from backend.knowledge.ecommerce.loader import preload_knowledge_base
 from backend.knowledge.ecommerce.service import KnowledgeService, create_knowledge_service
 from backend.knowledge.rag.core import RetrievalCitation, RetrievalResult, RetrievalTool
-from backend.tools.base import ToolResult, build_structured_tool
+from backend.tools.base import BaseJsonStore, ToolResult, build_structured_tool
 
 
 PRODUCTS_FILE_NAME = "products.json"
@@ -41,28 +40,37 @@ class ProductLookupInput(BaseModel):
 
 
 @dataclass
-class ProductCatalogStore:
-    """封装本地商品目录读取，供库存与详情工具复用。"""
+class ProductCatalogStore(BaseJsonStore):
+    """封装本地商品目录读取，供库存与详情工具复用。
 
-    data_dir: Path
+    继承 BaseJsonStore 复用 JSON 文件读写能力，专注于商品数据的业务操作。
+    数据存储在本地 JSON 文件（products.json）中，提供精确查询能力。
 
-    @property
-    def products_path(self) -> Path:
-        return self.data_dir / PRODUCTS_FILE_NAME
+    与 KnowledgeService 的区别：
+    - ProductCatalogStore：基于 JSON 文件的精确查询，适合库存、价格等结构化数据
+    - KnowledgeService：基于向量库的语义检索，适合模糊匹配、相似搜索
+    """
 
     def load_products(self) -> list[dict[str, Any]]:
-        """读取商品列表。"""
-        return json.loads(self.products_path.read_text(encoding="utf-8"))
+        """读取商品列表；若文件不存在则返回空列表。"""
+        return self._load_json_list(PRODUCTS_FILE_NAME)
 
     def find_product(self, product_id: str) -> dict[str, Any] | None:
-        """按商品 ID 查询结构化商品数据。"""
+        """按商品 ID 精确查询结构化商品数据，不存在时返回 None。
+
+        遍历商品列表进行线性查找，适用于数据量较小的场景。
+        """
         for product in self.load_products():
             if str(product.get("product_id")) == product_id:
                 return product
         return None
 
     def find_product_by_query(self, query: str) -> dict[str, Any] | None:
-        """在 query 中出现明确商品名时，直接解析对应商品。"""
+        """在 query 中出现明确商品名时，直接解析对应商品。
+
+        用于将用户自然语言中的商品名映射到具体商品，
+        例如 "iPhone 16 有货吗" → 匹配到 iPhone 16 商品记录。
+        """
         normalized_query = query.lower()
         for product in self.load_products():
             name = str(product.get("name", "")).lower()
@@ -84,55 +92,78 @@ def build_retrieval_tools(
     if hasattr(resolved_knowledge_service, "store"):
         preload_knowledge_base(current_settings, store=resolved_knowledge_service.store)
     return (
-        _build_product_semantic_search_tool(resolved_knowledge_service, resolved_product_store),
-        _build_review_semantic_search_tool(resolved_knowledge_service),
+        _build_semantic_search_tool(
+            resolved_knowledge_service,
+            namespace="products",
+            tool_name="product_semantic_search",
+            description="Search semantically similar products for the user's shopping question.",
+            product_store=resolved_product_store,
+        ),
+        _build_semantic_search_tool(
+            resolved_knowledge_service,
+            namespace="reviews",
+            tool_name="review_semantic_search",
+            description="Search review evidence and recommendation reasons related to the query.",
+            args_schema=ReviewSemanticSearchInput,
+            supports_filter=True,
+        ),
+        _build_semantic_search_tool(
+            resolved_knowledge_service,
+            namespace="orders",
+            tool_name="order_semantic_search",
+            description="Search order information semantically for order tracking or status inquiries.",
+        ),
         _build_inventory_lookup_tool(resolved_product_store),
         _build_product_detail_lookup_tool(resolved_product_store),
     )
 
 
-class ProductSemanticRetrievalTool(RetrievalTool):
-    """商品语义检索工具，供 Agentic RAG 编排器直接调用。"""
+class SemanticRetrievalTool(RetrievalTool):
+    """通用语义检索工具基类，支持商品、评价、订单的统一召回。"""
 
-    name: str = "product_semantic_search"
-    description: str = "Search semantically similar products for the user's shopping intent."
+    name: str
+    description: str
+    namespace: str
     knowledge_service: Any = Field(exclude=True)
-    product_store: Any = Field(exclude=True)
+    product_store: Any | None = Field(default=None, exclude=True)
+    search_method: str = Field(exclude=True)  # "search_products", "search_reviews", "search_orders"
     default_top_k: int = 5
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     def retrieve(self, query: str, *, run_manager: Any | None = None) -> RetrievalResult:
-        """从商品知识库执行语义检索并返回标准化结果。"""
-        vector_results = self.knowledge_service.search_products(query=query, top_k=self.default_top_k)
-        vector_results = _inject_named_product_match(query, vector_results, self.product_store)
+        """从指定知识库执行语义检索并返回标准化结果。"""
+        search_func = getattr(self.knowledge_service, self.search_method)
+        vector_results = search_func(query=query, top_k=self.default_top_k)
+        
+        if self.namespace == "products" and self.product_store:
+            vector_results = _inject_named_product_match(query, vector_results, self.product_store)
+        
         return build_retrieval_result(
             tool_name=self.name,
-            namespace="products",
+            namespace=self.namespace,
             query=query,
             vector_results=vector_results,
         )
 
 
-class ReviewSemanticRetrievalTool(RetrievalTool):
-    """评价语义检索工具，用于补充推荐理由和口碑证据。"""
-
-    name: str = "review_semantic_search"
-    description: str = "Search review evidence related to the user's shopping question."
-    knowledge_service: Any = Field(exclude=True)
-    default_top_k: int = 5
-
-    model_config = ConfigDict(arbitrary_types_allowed=True)
-
-    def retrieve(self, query: str, *, run_manager: Any | None = None) -> RetrievalResult:
-        """从评价知识库执行语义检索并返回标准化结果。"""
-        vector_results = self.knowledge_service.search_reviews(query=query, top_k=self.default_top_k)
-        return build_retrieval_result(
-            tool_name=self.name,
-            namespace="reviews",
-            query=query,
-            vector_results=vector_results,
-        )
+def build_semantic_retrieval_tool(
+    knowledge_service: KnowledgeService,
+    *,
+    namespace: str,
+    tool_name: str,
+    description: str,
+    product_store: ProductCatalogStore | None = None,
+) -> SemanticRetrievalTool:
+    """构建通用语义检索工具的工厂函数。"""
+    return SemanticRetrievalTool(
+        name=tool_name,
+        description=description,
+        namespace=namespace,
+        knowledge_service=knowledge_service,
+        product_store=product_store,
+        search_method=f"search_{namespace}",
+    )
 
 
 class InventoryLookupRetrievalTool(RetrievalTool):
@@ -247,11 +278,25 @@ def build_agentic_retrieval_tools(
     if hasattr(resolved_knowledge_service, "store"):
         preload_knowledge_base(current_settings, store=resolved_knowledge_service.store)
     return (
-        ProductSemanticRetrievalTool(
-            knowledge_service=resolved_knowledge_service,
+        build_semantic_retrieval_tool(
+            resolved_knowledge_service,
+            namespace="products",
+            tool_name="product_semantic_search",
+            description="Search semantically similar products for the user's shopping intent.",
             product_store=resolved_product_store,
         ),
-        ReviewSemanticRetrievalTool(knowledge_service=resolved_knowledge_service),
+        build_semantic_retrieval_tool(
+            resolved_knowledge_service,
+            namespace="reviews",
+            tool_name="review_semantic_search",
+            description="Search review evidence related to the user's shopping question.",
+        ),
+        build_semantic_retrieval_tool(
+            resolved_knowledge_service,
+            namespace="orders",
+            tool_name="order_semantic_search",
+            description="Search order information semantically for order tracking or status inquiries.",
+        ),
         InventoryLookupRetrievalTool(product_store=resolved_product_store),
         ProductDetailLookupRetrievalTool(product_store=resolved_product_store),
     )
@@ -297,57 +342,42 @@ def build_retrieval_result(
     )
 
 
-def _build_product_semantic_search_tool(
+def _build_semantic_search_tool(
     knowledge_service: KnowledgeService,
-    product_store: ProductCatalogStore,
+    *,
+    namespace: str,
+    tool_name: str,
+    description: str,
+    args_schema: type[BaseModel] = SemanticSearchInput,
+    product_store: ProductCatalogStore | None = None,
+    supports_filter: bool = False,
 ) -> BaseTool:
-    """构建商品语义检索 StructuredTool。"""
+    """构建通用语义检索 StructuredTool 的工厂函数。"""
+    search_method = getattr(knowledge_service, f"search_{namespace}")
 
-    def product_semantic_search(query: str, top_k: int = 5) -> ToolResult:
-        vector_results = knowledge_service.search_products(query=query, top_k=top_k)
-        vector_results = _inject_named_product_match(query, vector_results, product_store)
+    def semantic_search(query: str, top_k: int = 5, product_id: str | None = None) -> ToolResult:
+        filters = {"product_id": product_id} if supports_filter and product_id else None
+        vector_results = search_method(query=query, top_k=top_k, filters=filters)
+        
+        if namespace == "products" and product_store:
+            vector_results = _inject_named_product_match(query, vector_results, product_store)
+        
         retrieval_result = build_retrieval_result(
-            tool_name="product_semantic_search",
-            namespace="products",
+            tool_name=tool_name,
+            namespace=namespace,
             query=query,
             vector_results=vector_results,
         )
+        if filters:
+            retrieval_result.metadata["filters"] = filters
         return _to_tool_result(retrieval_result)
 
     return build_structured_tool(
-        name="product_semantic_search",
-        description="Search semantically similar products for the user's shopping question.",
+        name=tool_name,
+        description=description,
         capability_type="retrieval",
-        args_schema=SemanticSearchInput,
-        func=product_semantic_search,
-    )
-
-
-def _build_review_semantic_search_tool(knowledge_service: KnowledgeService) -> BaseTool:
-    """构建评价语义检索 StructuredTool。"""
-
-    def review_semantic_search(query: str, top_k: int = 5, product_id: str | None = None) -> ToolResult:
-        vector_results = knowledge_service.search_reviews(
-            query=query,
-            top_k=top_k,
-            filters={"product_id": product_id} if product_id else None,
-        )
-        retrieval_result = build_retrieval_result(
-            tool_name="review_semantic_search",
-            namespace="reviews",
-            query=query,
-            vector_results=vector_results,
-        )
-        if product_id:
-            retrieval_result.metadata["filters"] = {"product_id": product_id}
-        return _to_tool_result(retrieval_result)
-
-    return build_structured_tool(
-        name="review_semantic_search",
-        description="Search review evidence and recommendation reasons related to the query.",
-        capability_type="retrieval",
-        args_schema=ReviewSemanticSearchInput,
-        func=review_semantic_search,
+        args_schema=args_schema,
+        func=semantic_search,
     )
 
 
@@ -426,11 +456,12 @@ def _build_product_detail_lookup_tool(product_store: ProductCatalogStore) -> Bas
 
 
 def _build_semantic_record(namespace: str, result: VectorSearchResult) -> dict[str, Any]:
-    """将商品/评价向量结果映射为统一 record。"""
+    """将商品/评价/订单向量结果映射为统一 record。"""
     metadata = result.document.metadata
     citation_id = str(
         metadata.get("review_id")
         or metadata.get("product_id")
+        or metadata.get("order_id")
         or metadata.get("id")
         or result.document.id
     )
@@ -440,7 +471,7 @@ def _build_semantic_record(namespace: str, result: VectorSearchResult) -> dict[s
         "namespace": namespace,
         "citation_id": citation_id,
         "product_id": metadata.get("product_id") or citation_id,
-        "title": metadata.get("title") or metadata.get("name") or citation_id,
+        "title": metadata.get("title") or metadata.get("name") or metadata.get("order_id") or citation_id,
         "snippet": truncate_snippet(result.document.content),
         "score": score,
         "metadata": metadata,

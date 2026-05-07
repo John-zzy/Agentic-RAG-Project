@@ -11,7 +11,14 @@ from backend.tools.ecommerce.retrieval import build_retrieval_tools
 
 @dataclass(frozen=True)
 class ToolRegistration:
-    """描述一个工具在注册表中的分组、白名单和暴露方式。"""
+    """描述一个工具在注册表中的分组、白名单和暴露方式。
+
+    属性说明：
+    - tool: LangChain 工具实例
+    - group: 工具分组（如 retrieval, commerce_order）
+    - allowed_agents: 允许使用该工具的 Agent 角色列表
+    - expose_via_mcp: 是否通过 MCP（Model Context Protocol）远程暴露
+    """
 
     tool: BaseTool
     group: str
@@ -20,7 +27,17 @@ class ToolRegistration:
 
 
 class ToolRegistry:
-    """集中维护工具注册、查询和按 Agent 过滤的注册表。"""
+    """集中维护工具注册、查询和按 Agent 过滤的注册表。
+
+    职责：
+    1. 统一管理所有工具的注册和查询
+    2. 支持按 Agent 角色过滤工具（权限控制）
+    3. 支持标记需要 MCP 远程暴露的工具
+
+    使用场景：
+    - 不同 Agent（shopping_agent, order_agent）只能访问授权的工具
+    - MCP 服务器只暴露标记为 expose_via_mcp=True 的工具
+    """
 
     def __init__(self) -> None:
         self._registrations: dict[str, ToolRegistration] = {}
@@ -38,7 +55,10 @@ class ToolRegistry:
         return list(self._registrations.values())
 
     def list_tools_for_agent(self, agent_name: str) -> list[ToolRegistration]:
-        """按 Agent 白名单过滤可使用的工具。"""
+        """按 Agent 白名单过滤可使用的工具。
+
+        用于为特定 Agent 角色提供可用的工具列表，实现权限隔离。
+        """
         return [
             registration
             for registration in self._registrations.values()
@@ -46,7 +66,10 @@ class ToolRegistry:
         ]
 
     def list_mcp_tools(self) -> list[ToolRegistration]:
-        """返回需要通过 MCP 远程暴露的工具集合。"""
+        """返回需要通过 MCP 远程暴露的工具集合。
+
+        MCP（Model Context Protocol）用于将工具暴露给远程客户端调用。
+        """
         return [
             registration
             for registration in self._registrations.values()

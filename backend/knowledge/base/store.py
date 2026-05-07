@@ -21,7 +21,7 @@ except ModuleNotFoundError:  # pragma: no cover
 
 VectorMetadata = dict[str, Any]
 MetadataValue = str | int | float | bool
-SUPPORTED_NAMESPACES = ("products", "reviews")
+SUPPORTED_NAMESPACES = ("products", "reviews", "orders")
 DOCUMENT_INDEX_KINDS = ("documents", "chunks")
 
 
@@ -205,7 +205,7 @@ class ChromaVectorStore(VectorStore):
         self._collections: dict[str, Collection] = {}
 
     def ensure_collections(self) -> None:
-        """确保 Chroma 中存在 products/reviews 集合。"""
+        """确保 Chroma 中存在 products/reviews/orders 集合。"""
         for namespace in SUPPORTED_NAMESPACES:
             namespace_config = self.resolve_namespace_config(namespace)
             self._collections[namespace] = self._client.get_or_create_collection(

@@ -25,6 +25,7 @@ class BootstrapSummary:
     sqlite_path: Path
     products_loaded: int
     reviews_loaded: int
+    orders_loaded: int
 
 
 def bootstrap_runtime(app_settings: AppSettings | None = None) -> tuple[ChatService, BootstrapSummary]:
@@ -33,10 +34,14 @@ def bootstrap_runtime(app_settings: AppSettings | None = None) -> tuple[ChatServ
 
     session_store = SQLiteSessionStore(app_settings=resolved_settings)
     knowledge_service = create_knowledge_service(app_settings=resolved_settings)
+
+    # 将知识预加载到向量数据库中
     load_summary = preload_knowledge_base(
         app_settings=resolved_settings,
         store=knowledge_service.store,
     )
+
+    # 加载对话服务
     chat_service = create_chat_service(
         app_settings=resolved_settings,
         knowledge_service=knowledge_service,
@@ -47,7 +52,9 @@ def bootstrap_runtime(app_settings: AppSettings | None = None) -> tuple[ChatServ
         sqlite_path=resolved_settings.session.sqlite_path,
         products_loaded=load_summary.products_loaded,
         reviews_loaded=load_summary.reviews_loaded,
+        orders_loaded=load_summary.orders_loaded,
     )
+
     return chat_service, summary
 
 
@@ -72,7 +79,8 @@ def main() -> None:
         "Bootstrap complete: "
         f"sqlite={summary.sqlite_path}, "
         f"products={summary.products_loaded}, "
-        f"reviews={summary.reviews_loaded} \n"
+        f"reviews={summary.reviews_loaded}, "
+        f"orders={summary.orders_loaded} \n"
         f"running on host {host}: {port}"
     )
     uvicorn.run(app=app, host=host, port=port)

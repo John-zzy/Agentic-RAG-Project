@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Literal
 
 from langchain_core.tools import BaseTool, StructuredTool
@@ -98,3 +101,26 @@ def get_tool_definition(tool: BaseTool) -> dict[str, Any]:
         "capability_type": (tool.metadata or {}).get("capability_type"),
         "input_schema": input_schema,
     }
+
+
+@dataclass
+class BaseJsonStore:
+    """基础 JSON 文件存储类，提供通用读写能力，供各业务存储类复用。"""
+
+    data_dir: Path
+
+    def _load_json_list(self, filename: str) -> list[dict[str, Any]]:
+        """读取 JSON 文件内容，文件不存在时返回空列表。"""
+        path = self.data_dir / filename
+        if not path.exists():
+            return []
+        return json.loads(path.read_text(encoding="utf-8"))
+
+    def _save_json_list(self, filename: str, data: list[dict[str, Any]]) -> None:
+        """持久化数据到 JSON 文件，自动创建父目录。"""
+        path = self.data_dir / filename
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(data, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )

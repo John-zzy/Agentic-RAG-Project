@@ -12,7 +12,7 @@ from backend.knowledge.base.store import (
     VectorStoreDocument,
     VectorStoreFactory,
 )
-from backend.knowledge.ecommerce.extractor import build_product_document, build_review_document
+from backend.knowledge.ecommerce.extractor import build_order_document, build_product_document, build_review_document
 
 
 class KnowledgeUpsertSummary(BaseModel):
@@ -64,6 +64,15 @@ class KnowledgeService:
         """在评论知识库中执行检索。"""
         return self.search(namespace="reviews", query=query, top_k=top_k, filters=filters)
 
+    def search_orders(
+        self,
+        query: str,
+        top_k: int | None = None,
+        filters: dict[str, Any] | None = None,
+    ) -> list[VectorSearchResult]:
+        """在订单知识库中执行检索。"""
+        return self.search(namespace="orders", query=query, top_k=top_k, filters=filters)
+
     def upsert_products(self, products: list[dict[str, Any]]) -> KnowledgeUpsertSummary:
         """批量写入或更新商品数据。"""
         documents = [build_product_document(product) for product in products]
@@ -73,6 +82,11 @@ class KnowledgeService:
         """批量写入或更新评论数据。"""
         documents = [build_review_document(review) for review in reviews]
         return self._upsert_documents("reviews", documents)
+
+    def upsert_orders(self, orders: list[dict[str, Any]]) -> KnowledgeUpsertSummary:
+        """批量写入或更新订单数据。"""
+        documents = [build_order_document(order) for order in orders]
+        return self._upsert_documents("orders", documents)
 
     def delete_documents(self, namespace: str, ids: list[str]) -> None:
         """按命名空间与文档 ID 删除向量文档。"""

@@ -64,3 +64,41 @@ def build_review_document(review: dict[str, Any]) -> VectorStoreDocument:
             "created_at": str(review["created_at"]),
         },
     )
+
+
+def build_order_document(order: dict[str, Any]) -> VectorStoreDocument:
+    """将订单结构化数据转换为向量库订单文档。"""
+    order_id = str(order["order_id"])
+    items_text = "；".join(
+        f"{item['name']}(商品ID:{item['product_id']}) x{item['quantity']} 单价{item['unit_price']}"
+        for item in order.get("items", [])
+    )
+    content = (
+        f"订单编号：{order_id}\n"
+        f"用户ID：{order.get('user_id', '')}\n"
+        f"订单状态：{order.get('status', '')}\n"
+        f"创建时间：{order.get('created_at', '')}\n"
+        f"收货地址：{order.get('shipping_address', '')}\n"
+        f"订单商品：{items_text}\n"
+        f"订单金额：{order.get('total_amount', 0)} {order.get('currency', '')}"
+    )
+
+    return VectorStoreDocument(
+        id=order_id,
+        content=content,
+        metadata={
+            "source": "order",
+            "order_id": order_id,
+            "user_id": str(order.get("user_id", "")),
+            "status": str(order.get("status", "")),
+            "created_at": str(order.get("created_at", "")),
+            "paid_at": str(order.get("paid_at", "")),
+            "shipped_at": str(order.get("shipped_at", "")),
+            "delivered_at": str(order.get("delivered_at", "")),
+            "total_amount": float(order.get("total_amount", 0)),
+            "currency": str(order.get("currency", "")),
+            "carrier": str(order.get("carrier", "")),
+            "tracking_no": str(order.get("tracking_no", "")),
+            "shipping_address": str(order.get("shipping_address", "")),
+        },
+    )
