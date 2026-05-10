@@ -1,50 +1,56 @@
 # AI RAG Project Agent Guide
 
-本文件约束后续在本仓库内工作的智能体行为。若与用户当前指令冲突，以用户指令为准。
+本文件用于帮助 AI 快速理解仓库结构与修改入口。若与用户当前指令冲突，以用户指令为准。
 
-## 项目现状
+## 项目概览
 
-仓库已经完成三层架构收口，`backend` 顶层只保留：
+这是一个多场景智能助手 / RAG 示例项目，后端当前采用三层结构：
 
-- `application`
-- `platform`
-- `scenes`
-- `tests`
-- `data`
-- 运行入口与环境文件
+- `platform`：平台级通用能力
+- `application`：运行时装配与 API
+- `scenes`：场景实现
 
-不要再把代码放回旧目录，不要再创建这些旧顶层包：
+默认场景是 `generic_assistant`，同时保留 `ecommerce` 作为电商演示场景。
 
-- `backend/api`
-- `backend/config`
-- `backend/knowledge`
-- `backend/tools`
-- `backend/models`
-- `backend/memory`
-- `backend/agents`
-- `backend/mcp`
-- `backend/monitoring`
+## 目录速查
 
-## 当前职责边界
+### `backend/application/runtime`
 
-- `backend/platform`
-  - 通用配置
-  - 模型路由
-  - 会话记忆
-  - 通用知识文档能力
-  - RAG 协议
-  - 通用工具协议
-- `backend/application/runtime`
-  - API 路由
-  - 运行时装配
-  - active scene 选择
-  - 启动引导
-- `backend/scenes`
-  - `generic_assistant`
-  - `ecommerce`
-  - 场景提示词、检索策略、场景工具、场景知识模型
+负责运行时装配与 API 暴露，优先在这些场景下查看这里：
 
-## 正确命令
+- 启动流程、依赖装配：`bootstrap.py`、`service.py`
+- FastAPI 应用与路由注册：`api/app.py`
+- 聊天与会话接口：`api/chat/`
+- 文件接口：`api/file/`
+- 知识文档接口：`api/knowledge/`
+
+### `backend/platform`
+
+负责通用基础能力，优先按职责定位：
+
+- 配置与环境变量：`config/`
+- 模型路由与 LLM 客户端：`models/`
+- 会话记忆与上下文：`memory/`
+- 通用知识文档处理：`knowledge/`
+- RAG 核心逻辑：`rag/`
+- 通用工具协议：`tools/`
+
+### `backend/scenes`
+
+负责具体场景能力：
+
+- `generic_assistant/`：通用助手定义
+- `ecommerce/`：电商场景定义、知识服务、检索工具、业务工具
+- `base.py`：场景基础抽象
+
+### 其他常用目录
+
+- `backend/tests/`：后端测试
+- `backend/data/`：本地数据与持久化目录
+- `frontend/`：调试页面
+- `backend/run.py`：后端启动入口
+
+## 常用命令
 
 所有命令默认在仓库根目录执行。
 
@@ -65,67 +71,39 @@ backend\.venv\Scripts\python.exe backend\run.py
 
 ### 运行测试
 
+全量：
+
 ```powershell
 backend\.venv\Scripts\python.exe -m pytest backend\tests -q -c backend\tests\pytest.ini
 ```
 
-不要直接运行：
+单文件：
 
 ```powershell
-python backend\run.py
-python -m pytest ...
+backend\.venv\Scripts\python.exe -m pytest backend\tests\test_chat_api.py -q -c backend\tests\pytest.ini
 ```
 
-本仓库开发过程中，裸 `python` 可能不是 `backend/.venv`，直接使用是错误的。
+## 环境变量
 
-## 环境变量约定
-
-优先使用：
+优先关注：
 
 ```env
 AI_RAG_APP__ACTIVE_SCENE=generic_assistant
 ```
 
-该变量当前表示“新会话默认场景”。
-如果实现前端/API 场景切换，优先走会话级切换，不要再把它当作日常手工切换场景的唯一入口。
+这个变量当前表示“新会话默认场景”，不是日常切换场景的唯一入口。场景切换优先走会话级 API 或前端选择。
 
-## 编码与改动约束
+## 修改时的注意事项
 
 - 使用 `apply_patch` 做手工文件修改
-- 不要用 Python 脚本或 shell 重定向粗暴覆盖文件，除非明确必要
-- 不要制造大面积无关格式化 diff
-- 不要保留“兼容层假迁移”
-- 做目录迁移时要同步修正导入、测试和启动链路
-- 修改 `__init__.py` 时保持最小化，避免在包初始化阶段引入重量依赖
-- 对运行时/API 代码尤其注意循环导入
+- 避免大面积无关格式化 diff
+- 修改 `__init__.py` 时保持最小化，避免引入运行时依赖导致循环导入
+- 如果改动了架构、启动方式、环境变量或测试命令，要同步检查 `README.md`、`AGENTS.md`、`backend/.env.example`
 
-## 文档与命令维护
+## 高频错误
 
-如果你修改了架构、目录、启动方式、环境变量或测试命令，必须同步检查并更新：
-
-- `README.md`
-- `AGENTS.md`
-- `backend/.env.example`
-
-不要让文档继续引用旧目录、旧命令、旧环境变量。
-
-## 测试要求
-
-- 功能改动后至少运行受影响测试
-- 架构迁移、导入调整、启动链路调整后必须跑全量后端测试
-- 在声明完成前，必须给出真实执行过的命令与结果
-
-标准全量命令：
-
-```powershell
-backend\.venv\Scripts\python.exe -m pytest backend\tests -q -c backend\tests\pytest.ini
-```
-
-## 本项目的高频错误，后续不要再犯
-
-- 把代码放回旧顶层目录
-- 使用错误的 Python 解释器
-- 改完架构不改文档
-- 用兼容 re-export 冒充真实迁移
-- 在 `__init__.py` 里引入运行时装配导致循环导入
-- 用不精确的写文件方式覆盖内容，导致文件损坏或自引用错误
+- 使用了错误的 Python 解释器，而不是 `backend\.venv\Scripts\python.exe`
+- 改完实际代码后，没有同步更新文档和环境样例
+- 在 `__init__.py` 中引入运行时装配，导致循环导入
+- 用不精确的覆盖式写文件方式修改内容，导致文件损坏或内容串乱
+- 架构相关改动后，没有补跑受影响测试或全量测试
