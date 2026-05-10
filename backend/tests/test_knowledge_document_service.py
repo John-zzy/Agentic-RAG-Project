@@ -5,15 +5,15 @@ from typing import Any
 
 import pytest
 
-from backend.config.settings import AppSettings, VectorStoreConfig
-from backend.knowledge.base.store import VectorStore, VectorStoreDocument, VectorStoreHealth
-from backend.knowledge.documents.service import (
+from backend.platform.config.settings import AppSettings, VectorStoreConfig
+from backend.platform.knowledge.base.store import VectorStore, VectorStoreDocument, VectorStoreHealth
+from backend.platform.knowledge.documents.service import (
     KnowledgeDocumentNotFoundError,
     KnowledgeDocumentService,
     KnowledgeDocumentStoreError,
 )
 from backend.tests.test_support import tmp_path
-from backend.knowledge.documents import (
+from backend.platform.knowledge.documents import (
     build_document_chunks,
     build_document_id,
     build_source_record_id,
@@ -48,6 +48,15 @@ class InMemoryDocumentStore(VectorStore):
 
     def delete_documents(self, namespace: str, ids: list[str]) -> None:
         return None
+
+    def search_document_chunks(
+        self,
+        query: str,
+        top_k: int | None = None,
+        namespace: str | None = None,
+    ) -> list[Any]:
+        del query, top_k, namespace
+        return []
 
     def healthcheck(self) -> VectorStoreHealth:
         return VectorStoreHealth(provider="memory", available=True)

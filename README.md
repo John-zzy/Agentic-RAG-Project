@@ -1,210 +1,178 @@
 # AI RAG Project
 
-一个面向电商客服场景的 AI RAG 项目，用于演示“知识库检索 + 会话记忆 + 大模型回答”这一条最小可运行链路。当前仓库以后端 MVP 为主，覆盖商品导购、评价检索、多轮对话、会话管理等基础能力，适合作为面试展示、RAG 工程练习和后续多 Agent 扩展的起点。
+一个通用智能体 / RAG 平台示例项目。当前代码已经从“电商客服 MVP”重构为三层架构：
 
-## 项目亮点
+- `platform`：通用平台能力
+- `application`：运行时装配与 API 挂载
+- `scenes`：具体场景实现
 
-- 基于 `FastAPI` 提供可直接联调的对话 API
-- 支持商品与评价知识的 RAG 检索增强回答
-- 支持上传本地知识文件并通过独立管理页完成建索引、重建和删除
-- 内置 `Chroma` 与 `Elasticsearch` 两种向量存储后端
-- 使用 `SQLite` 持久化会话上下文，支持多轮对话
-- 提供静态 API 测试页，便于本地快速验证接口
-- 代码结构清晰，已拆分为 API、知识库、记忆、模型路由、配置等模块
+默认场景是 `generic_assistant`，同时保留 `ecommerce` 作为电商演示场景。
 
-## 当前功能
+## 当前能力
 
-目前已经实现的能力：
-
-- `POST /chat`：接收用户问题，执行检索并返回回答
-- `GET /health`：健康检查
-- `POST /sessions`：创建会话
-- `GET /sessions/{session_id}`：查看会话历史
-- `DELETE /sessions/{session_id}`：删除会话
-- 启动时自动预加载本地商品与评价数据到知识库
-- `POST /files/upload`、`GET /files`、`DELETE /files/{filename}`：上传和管理本地知识文件
-- `POST /knowledge/documents`、`GET /knowledge/documents`、`GET /knowledge/documents/files`：注册知识文档、查看文档列表和按文件聚合索引状态
-- `GET /knowledge/documents/{document_id}`、`POST /knowledge/documents/{document_id}/rechunk`、`DELETE /knowledge/documents/{document_id}`：查看详情、重建切分和删除知识文档
-- 本地挂载前端测试页：`/frontend/api-tester.html`
-- 本地挂载知识库管理页：`/frontend/knowledge-manager.html`
-
-当前尚未完成的部分：
-
-- 多 Agent 协同路由
-- MCP 工具调用链
-- 完整监控与生产化部署流程
-
-## 技术栈
-
-- Python 3.11+
-- FastAPI
-- LangChain / LangGraph
-- ChromaDB / Elasticsearch
-- SQLite
-- DashScope 兼容模型接口
-- Pytest
+- 基于 `FastAPI` 提供 `/chat`、`/sessions/*`、`/files/*`、`/knowledge/documents/*` 接口
+- 支持上传本地知识文件，并管理文档索引
+- 支持 `Chroma` 与 `Elasticsearch` 两种向量存储
+- 支持 `SQLite` 会话记忆
+- 支持场景切换：
+  - `generic_assistant`：仅依赖上传文档与会话记忆
+  - `ecommerce`：包含商品、评价、订单、库存与客服工具链
 
 ## 目录结构
 
 ```text
 .
-├── backend/                # 后端主代码
-│   ├── api/                # 路由、Schema、聊天服务
-│   ├── config/             # 应用配置
-│   ├── knowledge/          # 知识库、向量检索、预加载
-│   ├── memory/             # 会话存储与上下文构建
-│   ├── models/             # 模型路由与客户端封装
-│   ├── tests/              # pytest 测试
-│   ├── .env.example        # 环境变量示例
-│   └── run.py              # 启动入口
-├── frontend/               # 对话测试页与知识库管理页
-├── docs/elasticsearch/     # 本地 Elasticsearch docker compose
-├── openspec/               # 需求变更与实现任务文档
+├── backend/
+│   ├── application/
+│   │   └── runtime/            # 运行时装配、API、启动引导
+│   ├── platform/               # 平台通用能力：config / models / memory / knowledge / rag / tools
+│   ├── scenes/                 # 场景实现：generic_assistant / ecommerce
+│   ├── tests/
+│   ├── data/
+│   ├── .env
+│   ├── .env.example
+│   ├── requirements.txt
+│   └── run.py
+├── frontend/
+├── docs/elasticsearch/
+├── openspec/
+├── AGENTS.md
 └── README.md
 ```
 
-## 快速开始
+## 环境准备
 
-### 1. 克隆项目
-
-```bash
-git clone <your-repo-url>
-cd ai-rag-project
-```
-
-### 2. 创建虚拟环境并安装依赖
+以下命令默认在仓库根目录执行：
 
 ```powershell
-python -m venv .venv
-.venv\Scripts\Activate.ps1
+python -m venv backend\.venv
+backend\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
 python -m pip install -r backend\requirements.txt
-```
-
-如果你使用 Git Bash 或 macOS / Linux：
-
-```bash
-python -m venv .venv
-source .venv/bin/activate
-python -m pip install --upgrade pip
-python -m pip install -r backend/requirements.txt
-```
-
-### 3. 配置环境变量
-
-复制示例文件并填写模型 API Key：
-
-```powershell
 Copy-Item backend\.env.example backend\.env
 ```
 
-至少需要配置：
+## 启动后端
 
-```env
-AI_RAG_MODELS__SIMPLE__API_KEY=your-dashscope-api-key
-AI_RAG_MODELS__MODERATE__API_KEY=your-dashscope-api-key
-AI_RAG_MODELS__COMPLEX__API_KEY=your-dashscope-api-key
-AI_RAG_VECTOR_STORE__PROVIDER=chroma
+不要直接运行裸 `python`。本项目开发与测试统一使用 `backend\.venv\Scripts\python.exe`。
+
+```powershell
+backend\.venv\Scripts\python.exe backend\run.py
 ```
 
-默认使用 `chroma`。如果要切换到 Elasticsearch，请改为：
+默认地址：
+
+- API: `http://127.0.0.1:8000`
+- Swagger: `http://127.0.0.1:8000/docs`
+- 对话测试页: `http://127.0.0.1:8000/frontend/api-tester.html`
+- 知识库管理页: `http://127.0.0.1:8000/frontend/knowledge-manager.html`
+
+## 场景切换
+
+推荐使用：
+
+```env
+AI_RAG_APP__ACTIVE_SCENE=generic_assistant
+```
+
+可选值：
+
+- `generic_assistant`
+- `ecommerce`
+
+PowerShell 临时切换示例：
+
+```powershell
+$env:AI_RAG_APP__ACTIVE_SCENE = "ecommerce"  # 仅修改新会话默认场景
+backend\.venv\Scripts\python.exe backend\run.py
+```
+
+> 当前推荐通过前端对话页下拉框，或调用 `GET /scenes` 与 `POST /sessions` 来切换会话场景。`AI_RAG_APP__ACTIVE_SCENE` 现在用于设置“新会话默认场景”，不再是日常切换场景的主要方式。
+
+## 向量存储
+
+默认使用 `chroma`：
+
+```env
+AI_RAG_VECTOR_STORE__PROVIDER=chroma
+AI_RAG_VECTOR_STORE__CHROMA__PERSIST_DIRECTORY=backend/data/.chroma
+```
+
+切换到 Elasticsearch：
 
 ```env
 AI_RAG_VECTOR_STORE__PROVIDER=elasticsearch
 AI_RAG_VECTOR_STORE__ELASTICSEARCH__URL=http://127.0.0.1:9200
 ```
 
-### 4. 启动项目
-
-```powershell
-python backend\run.py
-```
-
-启动后默认监听：
-
-- API: `http://127.0.0.1:8000`
-- Swagger 文档: `http://127.0.0.1:8000/docs`
-- 对话测试页: `http://127.0.0.1:8000/frontend/api-tester.html`
-- 知识库管理页: `http://127.0.0.1:8000/frontend/knowledge-manager.html`
-
-## 知识文档管理
-
-项目当前支持把上传到 `backend/data/files` 的文本类文件注册到“我的文档知识库”，并通过独立管理页完成索引管理。
-
-- 支持上传的文件类型：`.json`、`.txt`、`.md`、`.csv`、`.pdf`、`.docx`、`.xlsx`
-- 当前支持建索引的文件类型：`.json`、`.txt`、`.md`、`.csv`
-- 上传文件和建索引是两步操作：先通过 `/files/upload` 上传，再通过 `/knowledge/documents` 注册入库
-- 文档管理接口默认懒加载，单独访问聊天 API 时不会因为文档索引初始化失败而阻塞启动
-
-一个典型流程如下：
-
-1. 打开 `http://127.0.0.1:8000/frontend/knowledge-manager.html`
-2. 上传知识文件到 `backend/data/files`
-3. 在文件列表中选择可索引文件，填写 `namespace`、`chunk_size`、`chunk_overlap`
-4. 点击“建索引”或对已有文档执行“重建”
-
-`namespace` 需要使用仅包含小写字母、数字和下划线的 slug，例如 `faq`、`manual_v2`。
-
-## 可选：启动 Elasticsearch
-
-如果你想验证 Elasticsearch 向量检索后端，可以先启动本地容器：
+本地启动 Elasticsearch：
 
 ```powershell
 docker compose -f docs\elasticsearch\docker-compose.yml up -d
 ```
 
-停止容器：
+## 知识文档管理
 
-```powershell
-docker compose -f docs\elasticsearch\docker-compose.yml down
-```
+支持上传的文件类型：
 
-## API 示例
+- `.json`
+- `.txt`
+- `.md`
+- `.csv`
+- `.pdf`
+- `.docx`
+- `.xlsx`
 
-请求：
+当前支持建索引的文件类型：
 
-```http
-POST /chat
-Content-Type: application/json
-```
+- `.json`
+- `.txt`
+- `.md`
+- `.csv`
 
-```json
-{
-  "message": "推荐一款续航好的安卓手机",
-  "session_id": "optional-session-id",
-  "stream": false
-}
-```
+相关接口：
 
-响应：
-
-```json
-{
-  "session_id": "6b4d3d6d5e3947d49e3d5e2ed5b1b0f1",
-  "request_id": "4b2b8b471a9f4f0ea1f6fe8b74a9194a",
-  "answer": "推荐 P001，续航表现较好。",
-  "knowledge_used": true,
-  "citations": [
-    {
-      "citation_id": "P001",
-      "namespace": "products",
-      "snippet": "P001 手机，续航强，电池 5000mAh。",
-      "score": 0.92
-    }
-  ]
-}
-```
+- `POST /files/upload`
+- `GET /files`
+- `DELETE /files/{filename}`
+- `POST /knowledge/documents`
+- `GET /knowledge/documents`
+- `GET /knowledge/documents/files`
+- `GET /knowledge/documents/{document_id}`
+- `POST /knowledge/documents/{document_id}/rechunk`
+- `DELETE /knowledge/documents/{document_id}`
 
 ## 测试
 
-运行单元测试：
-
 ```powershell
-python -m pytest backend\tests -q -c backend\tests\pytest.ini
+backend\.venv\Scripts\python.exe -m pytest backend\tests -q -c backend\tests\pytest.ini
 ```
 
-## 项目状态
+如果只跑单个文件：
 
-这是一个正在持续补齐功能的 MVP。当前重点是把单体 RAG 闭环打稳，包括知识检索、会话记忆和接口联调；多 Agent、MCP 工具层、监控与更完整的工程化能力仍在后续规划中。
+```powershell
+backend\.venv\Scripts\python.exe -m pytest backend\tests\test_chat_api.py -q -c backend\tests\pytest.ini
+```
 
-如果你想继续了解后端实现细节，可以查看 [backend/README.md](backend/README.md)。
+## 开发约束
+
+- 不要重新引入旧顶层代码包：`backend/api`、`backend/config`、`backend/knowledge`、`backend/tools`、`backend/models`、`backend/memory`
+- 后端顶层业务结构保持为：`application`、`platform`、`scenes`
+- 修改文件时优先做真实迁移，不要保留兼容 re-export 壳
+- Windows 下不要假设 `python` 指向正确环境；统一用 `backend\.venv\Scripts\python.exe`
+- 写文件时不要用临时重定向或脚本覆盖导致内容损坏；小中型改动统一走精确 patch
+- `__init__.py` 保持最小导出，避免把运行时、API、scene 装配耦合进包初始化里，防止循环导入
+
+## 当前验证状态
+
+本次三层架构收口后已验证：
+
+```powershell
+backend\.venv\Scripts\python.exe -m pytest backend\tests -q -c backend\tests\pytest.ini
+```
+
+结果：
+
+```text
+86 passed, 3 skipped, 4 deselected
+```

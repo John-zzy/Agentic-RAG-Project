@@ -1,0 +1,54 @@
+from __future__ import annotations
+
+from contextlib import asynccontextmanager
+from pathlib import Path
+
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+
+from backend.application.runtime.api.chat.routes import router as api_router
+from backend.application.runtime.api.file.routes import router as file_router
+from backend.application.runtime.api.knowledge.routes import router as knowledge_document_router
+from backend.application.runtime.service import SceneChatService, create_chat_service
+from backend.platform.config.settings import settings
+
+
+def create_app(
+    chat_service: SceneChatService | None = None,
+    knowledge_document_service: object | None = None,
+) -> FastAPI:
+    """创建并配置 FastAPI 应用。"""
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        """应用生命周期：注入配置与运行时服务。"""
+        app.state.settings = settings
+        app.state.chat_service = chat_service or create_chat_service()
+        if knowledge_document_service is not None:
+            app.state.knowledge_document_service = knowledge_document_service
+        yield
+
+    app = FastAPI(
+        title=settings.app_name,
+        version="0.1.0",
+        description="Scene-based AI RAG backend API.",
+        debug=settings.debug,
+        lifespan=lifespan,
+    )
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+    app.include_router(api_router)
+    app.include_router(knowledge_document_router)
+    app.include_router(file_router)
+    frontend_dir = Path(__file__).resolve().parents[4] / "frontend"
+    if frontend_dir.exists():
+        app.mount("/frontend", StaticFiles(directory=str(frontend_dir)), name="frontend")
+    return app
+
+
+app = create_app()

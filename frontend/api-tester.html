@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>智能客服 API 测试台</title>
+  <title>知识助手 API 测试台</title>
   <style>
     :root {
       --bg: #f4f7fb;
@@ -278,6 +278,26 @@
       font-weight: 800;
     }
 
+    .topbar-actions {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    .scene-select {
+      min-height: 42px;
+      min-width: 210px;
+      padding: 0 16px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      color: var(--text);
+      background: #ffffff;
+      font-size: 14px;
+      font-weight: 700;
+    }
+
     .chat-feed {
       min-height: 0;
       overflow-y: auto;
@@ -531,13 +551,13 @@
     <aside class="service-panel">
       <section class="hero">
         <div class="brand-mark">AI</div>
-        <h1>你好，我是你的智能购物客服</h1>
-        <p>可以帮你推荐商品、解释参数、对比选择，也可以根据你的预算和使用场景继续追问。</p>
+        <h1>你好，我是你的通用知识助手</h1>
+        <p>你可以围绕已上传文档提问，我会结合检索结果给出尽量清晰、可追溯的回答。</p>
       </section>
 
       <div class="service-status" id="serviceStatus">
         <span class="status-dot"></span>
-        <span>正在连接客服服务</span>
+        <span>正在连接知识助手服务</span>
       </div>
 
       <section class="nav-card" aria-label="页面导航">
@@ -548,17 +568,17 @@
 
       <section class="quick-area" aria-label="常见问题">
         <p class="section-label">猜你想问</p>
-        <button class="quick-card" type="button" data-message="帮我推荐一款续航强、适合日常通勤的手机。">
-          <strong>推荐通勤手机</strong>
-          <span>我在意续航、稳定和日常使用体验。</span>
+        <button class="quick-card" type="button" data-message="总结一下这份文档里关于退换货规则的关键信息。">
+          <strong>总结文档规则</strong>
+          <span>适合快速验证文档型知识问答链路。</span>
         </button>
-        <button class="quick-card" type="button" data-message="预算 3500 左右，更在意拍照和夜景，有什么推荐？">
-          <strong>按预算挑选</strong>
-          <span>告诉我预算和偏好，帮你缩小选择范围。</span>
+        <button class="quick-card" type="button" data-message="对比文档中提到的两个方案，它们的差异是什么？">
+          <strong>对比两个方案</strong>
+          <span>适合验证多片段检索和归纳回答。</span>
         </button>
-        <button class="quick-card" type="button" data-message="和刚才推荐的那款相比，哪一个更适合我？">
-          <strong>继续对比</strong>
-          <span>支持围绕上一轮推荐继续追问。</span>
+        <button class="quick-card" type="button" data-message="如果文档证据不够，请告诉我还需要补充什么信息。">
+          <strong>测试兜底回复</strong>
+          <span>适合验证证据不足时的提示是否清晰。</span>
         </button>
       </section>
 
@@ -566,15 +586,15 @@
         <div class="trust-item">
           <div class="trust-icon">1</div>
           <div>
-            <strong>结合商品知识库</strong>
-            <span>回答会优先参考商品资料和用户评价。</span>
+            <strong>结合上传文档知识</strong>
+            <span>回答会优先参考已注册文档及其检索片段。</span>
           </div>
         </div>
         <div class="trust-item">
           <div class="trust-icon">2</div>
           <div>
             <strong>支持连续追问</strong>
-            <span>可以直接说“再便宜点”“和上一款比呢”。</span>
+            <span>可以围绕同一主题连续追问、补充上下文。</span>
           </div>
         </div>
       </section>
@@ -583,20 +603,23 @@
     <section class="chat-panel">
       <header class="chat-topbar">
         <div class="agent-info">
-          <div class="agent-avatar">客</div>
+          <div class="agent-avatar">知</div>
           <div>
-            <h2>在线智能客服</h2>
-            <p id="chatSubtitle">请描述你的需求，我会尽量给出清晰建议。</p>
+            <h2>在线知识助手</h2>
+            <p id="chatSubtitle">请描述你的问题，我会结合当前知识库尽量给出清晰回答。</p>
           </div>
         </div>
-        <button id="newChat" class="new-chat" type="button">新对话</button>
+        <div class="topbar-actions">
+          <select id="sceneSelect" class="scene-select" aria-label="选择场景"></select>
+          <button id="newChat" class="new-chat" type="button">新对话</button>
+        </div>
       </header>
 
       <div id="chatFeed" class="chat-feed" aria-live="polite"></div>
 
       <footer class="composer">
         <div class="composer-box">
-          <textarea id="messageInput" placeholder="输入你的问题，例如：预算 3000，想要续航好一点的手机"></textarea>
+          <textarea id="messageInput" placeholder="输入你的问题，例如：请总结员工手册里关于请假的规则"></textarea>
           <button id="sendButton" class="send-button" type="button" aria-label="发送">→</button>
         </div>
         <div id="errorToast" class="error-toast"></div>
@@ -610,13 +633,17 @@
     const state = {
       sessionId: "",
       messages: [],
-      sending: false
+      sending: false,
+      scenes: [],
+      activeScene: "",
+      sceneLoading: false
     };
 
     const refs = {
       serviceStatus: document.getElementById("serviceStatus"),
       chatSubtitle: document.getElementById("chatSubtitle"),
       chatFeed: document.getElementById("chatFeed"),
+      sceneSelect: document.getElementById("sceneSelect"),
       input: document.getElementById("messageInput"),
       sendButton: document.getElementById("sendButton"),
       newChat: document.getElementById("newChat"),
@@ -642,13 +669,42 @@
       refs.errorToast.classList.remove("show");
     }
 
+    function getSceneMeta(scene) {
+      return state.scenes.find(function (item) {
+        return item.scene === scene;
+      }) || null;
+    }
+
+    function updateSubtitle(message) {
+      if (message) {
+        refs.chatSubtitle.textContent = message;
+        return;
+      }
+
+      const activeScene = getSceneMeta(state.activeScene);
+      if (activeScene) {
+        refs.chatSubtitle.textContent = "当前场景：" + activeScene.name + "。切换场景会自动开始新对话。";
+        return;
+      }
+
+      refs.chatSubtitle.textContent = "请描述你的问题，我会结合当前知识库尽量给出清晰回答。";
+    }
+
     function setServiceStatus(ok) {
       refs.serviceStatus.innerHTML = ok
-        ? '<span class="status-dot"></span><span>客服服务已连接</span>'
-        : '<span class="status-dot"></span><span>客服服务暂不可用</span>';
+        ? '<span class="status-dot"></span><span>知识助手服务已连接</span>'
+        : '<span class="status-dot"></span><span>知识助手服务暂不可用</span>';
       refs.serviceStatus.style.color = ok ? "#047857" : "#b91c1c";
       refs.serviceStatus.style.background = ok ? "#ecfdf5" : "#fef2f2";
       refs.serviceStatus.style.borderColor = ok ? "#bbf7d0" : "#fecaca";
+    }
+
+    function setInteractiveState() {
+      const disabled = state.sending || state.sceneLoading || !state.activeScene || !state.sessionId;
+      refs.sendButton.disabled = disabled;
+      refs.input.disabled = state.sceneLoading || !state.activeScene;
+      refs.sceneSelect.disabled = state.sceneLoading || !state.scenes.length;
+      refs.newChat.disabled = state.sceneLoading || !state.activeScene;
     }
 
     function scrollToBottom() {
@@ -668,9 +724,9 @@
       if (!state.messages.length) {
         refs.chatFeed.innerHTML =
           '<article class="message assistant">' +
-            '<div class="message-avatar">客</div>' +
+            '<div class="message-avatar">知</div>' +
             '<div class="bubble">' +
-              '<p>欢迎咨询。你可以直接告诉我预算、用途和在意的点，我会帮你一步步筛选。</p>' +
+              '<p>欢迎咨询。你可以直接提问文档内容、让系统做总结，或者继续追问某个细节。</p>' +
             '</div>' +
           '</article>';
         return;
@@ -680,13 +736,13 @@
         const isUser = message.role === "user";
         const sources = message.citations.length
           ? '<div class="sources">' + message.citations.map(function (citation) {
-              return '<span class="source-chip">' + escapeHtml(citation.snippet || citation.citation_id || "参考了商品资料") + '</span>';
+              return '<span class="source-chip">' + escapeHtml(citation.snippet || citation.citation_id || "参考了知识库片段") + '</span>';
             }).join("") + '</div>'
           : "";
 
         return (
           '<article class="message ' + (isUser ? "user" : "assistant") + '">' +
-            '<div class="message-avatar">' + (isUser ? "我" : "客") + '</div>' +
+            '<div class="message-avatar">' + (isUser ? "我" : "知") + '</div>' +
             '<div class="bubble">' +
               '<p>' + escapeHtml(message.text) + '</p>' +
               sources +
@@ -697,11 +753,19 @@
       scrollToBottom();
     }
 
+    function renderSceneOptions() {
+      refs.sceneSelect.innerHTML = state.scenes.map(function (scene) {
+        return '<option value="' + escapeHtml(scene.scene) + '">' + escapeHtml(scene.name) + '</option>';
+      }).join("");
+      refs.sceneSelect.value = state.activeScene;
+      setInteractiveState();
+    }
+
     function renderTyping() {
       refs.chatFeed.insertAdjacentHTML(
         "beforeend",
         '<article id="typingMessage" class="message assistant">' +
-          '<div class="message-avatar">客</div>' +
+          '<div class="message-avatar">知</div>' +
           '<div class="bubble">' +
             '<div class="typing"><span></span><span></span><span></span></div>' +
           '</div>' +
@@ -743,6 +807,49 @@
       }
     }
 
+    async function loadScenes() {
+      state.sceneLoading = true;
+      setInteractiveState();
+      updateSubtitle("正在加载可用场景...");
+
+      const data = await apiRequest("/scenes");
+      state.scenes = Array.isArray(data.scenes) ? data.scenes : [];
+      state.activeScene = data.default_scene || (state.scenes[0] && state.scenes[0].scene) || "";
+      renderSceneOptions();
+    }
+
+    async function createSessionForScene(scene, options) {
+      const keepMessages = options && options.keepMessages;
+      state.sceneLoading = true;
+      clearError();
+      if (!keepMessages) {
+        state.messages = [];
+        renderMessages();
+      }
+      setInteractiveState();
+      updateSubtitle("正在切换场景并创建新会话...");
+
+      try {
+        const data = await apiRequest("/sessions", {
+          method: "POST",
+          body: JSON.stringify({ scene: scene })
+        });
+        state.sessionId = data.session_id || "";
+        state.activeScene = data.scene || scene;
+        refs.sceneSelect.value = state.activeScene;
+        updateSubtitle();
+        setServiceStatus(true);
+      } catch (_) {
+        state.sessionId = "";
+        updateSubtitle("场景切换失败，请稍后重试。");
+        setServiceStatus(false);
+        showError("场景切换失败，请稍后重试。");
+      } finally {
+        state.sceneLoading = false;
+        setInteractiveState();
+      }
+    }
+
     async function sendMessage() {
       const text = refs.input.value.trim();
       if (!text || state.sending) {
@@ -754,8 +861,8 @@
       addMessage("user", text);
       renderTyping();
       state.sending = true;
-      refs.sendButton.disabled = true;
-      refs.chatSubtitle.textContent = "正在为你查询合适的回答...";
+      setInteractiveState();
+      updateSubtitle("正在为你查询合适的回答...");
 
       try {
         const payload = {
@@ -771,27 +878,32 @@
         state.sessionId = data.session_id || state.sessionId;
         removeTyping();
         addMessage("assistant", data.answer || "我暂时没有找到合适的回答。", data.citations);
-        refs.chatSubtitle.textContent = state.sessionId ? "我会继续记住这次对话上下文。" : "请继续描述你的需求。";
+        updateSubtitle(state.sessionId ? "我会在当前场景里继续记住这次对话上下文。" : "");
         setServiceStatus(true);
       } catch (error) {
         removeTyping();
         showError("客服服务暂时没有响应，请稍后再试。");
         addMessage("assistant", "抱歉，我这边暂时连接不上服务。你可以稍后再发送一次。");
-        refs.chatSubtitle.textContent = "服务连接失败，请稍后重试。";
+        updateSubtitle("服务连接失败，请稍后重试。");
         setServiceStatus(false);
       } finally {
         state.sending = false;
-        refs.sendButton.disabled = false;
+        setInteractiveState();
         refs.input.focus();
       }
     }
 
-    function newConversation() {
-      state.sessionId = "";
-      state.messages = [];
-      clearError();
-      refs.chatSubtitle.textContent = "新的对话已开始。";
-      renderMessages();
+    async function newConversation() {
+      await createSessionForScene(state.activeScene);
+      refs.input.focus();
+    }
+
+    async function handleSceneChange() {
+      const nextScene = refs.sceneSelect.value;
+      if (!nextScene || nextScene === state.activeScene) {
+        return;
+      }
+      await createSessionForScene(nextScene);
       refs.input.focus();
     }
 
@@ -804,12 +916,20 @@
       });
     }
 
-    function init() {
+    async function init() {
       renderMessages();
       initQuickCards();
+      setInteractiveState();
       checkHealth();
+      await loadScenes();
+      await createSessionForScene(state.activeScene, { keepMessages: true });
       refs.sendButton.addEventListener("click", sendMessage);
-      refs.newChat.addEventListener("click", newConversation);
+      refs.newChat.addEventListener("click", function () {
+        newConversation();
+      });
+      refs.sceneSelect.addEventListener("change", function () {
+        handleSceneChange();
+      });
       refs.input.addEventListener("keydown", function (event) {
         if (event.key === "Enter" && !event.shiftKey) {
           event.preventDefault();

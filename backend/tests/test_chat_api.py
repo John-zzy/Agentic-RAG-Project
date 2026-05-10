@@ -3,12 +3,12 @@ from typing import Any
 from fastapi.testclient import TestClient
 from langchain_core.runnables import RunnableLambda
 
-from backend.api.base.app import create_app
-from backend.api.chat.service import ChatService
-from backend.config.settings import AppSettings
-from backend.knowledge.base.store import VectorSearchResult, VectorStoreDocument
-from backend.memory.base.session_store import SQLiteSessionStore
-from backend.memory.chat.prompt_context import PromptContextBuilder
+from backend.application.runtime.api.app import create_app
+from backend.application.runtime import SceneChatService, build_default_scene_registry
+from backend.platform.config.settings import AppSettings
+from backend.platform.knowledge.base.store import VectorSearchResult, VectorStoreDocument
+from backend.platform.memory.base.session_store import SQLiteSessionStore
+from backend.platform.memory.chat.prompt_context import PromptContextBuilder
 from backend.tests.test_support import make_test_runtime_dir
 
 
@@ -48,7 +48,12 @@ class FakeKnowledgeService:
     def search_orders(self, query: str, top_k: int | None = None) -> list[VectorSearchResult]:
         return []
 
-    def search_document_chunks(self, query: str, top_k: int | None = None, namespace: str | None = None) -> list[VectorSearchResult]:
+    def search_document_chunks(
+        self,
+        query: str,
+        top_k: int | None = None,
+        namespace: str | None = None,
+    ) -> list[VectorSearchResult]:
         return self._documents
 
 
@@ -66,16 +71,23 @@ def _build_chat_service(
     test_name: str,
     knowledge_service: FakeKnowledgeService,
     model: FakeModel,
-) -> ChatService:
+) -> SceneChatService:
     runtime_dir = make_test_runtime_dir(test_name)
     sqlite_path = runtime_dir / "chat-sessions.db"
     app_settings = AppSettings(
+        app={
+            "active_scene": "generic_assistant",
+        },
         session={
             "sqlite_path": sqlite_path,
             "window_size": 3,
         }
     )
-    return ChatService(
+    return SceneChatService(
+        scene_registry=build_default_scene_registry(
+            app_settings=app_settings,
+            knowledge_service=knowledge_service,  # type: ignore[arg-type]
+        ),
         app_settings=app_settings,
         knowledge_service=knowledge_service,  # type: ignore[arg-type]
         session_store=SQLiteSessionStore(sqlite_path=sqlite_path),
@@ -86,12 +98,12 @@ def _build_chat_service(
 
 def test_chat_api_success_path() -> None:
     knowledge = FakeKnowledgeService(
-        products=[
+        documents=[
             _result(
-                doc_id="P001",
+                doc_id="doc-1",
                 content="P001 手机，续航强，电池 5000mAh。",
                 score=0.92,
-                metadata={"product_id": "P001"},
+                metadata={"document_id": "doc-1", "source_path": "doc.txt", "namespace": "documents"},
             )
         ]
     )
@@ -108,6 +120,8 @@ def test_chat_api_success_path() -> None:
     assert payload["request_id"]
     assert payload["answer"] == "推荐 P001，续航表现较好。"
     assert payload["knowledge_used"] is True
+    assert payload["scene"] == "generic_assistant"
+    assert payload["agent"] is None
     assert len(payload["citations"]) == 1
     assert model.chat_model_calls
 
@@ -133,7 +147,9 @@ def test_chat_api_no_hit_fallback_sets_knowledge_used_false() -> None:
     payload = response.json()
     assert payload["knowledge_used"] is False
     assert payload["citations"] == []
-    assert "暂时没有检索到足够相关的商品知识" in payload["answer"]
+    assert "暂时没有检索到足够相关的文档知识" in payload["answer"]
+    assert payload["scene"] == "generic_assistant"
+    assert payload["agent"] is None
     assert model.chat_model_calls == []
 
 
@@ -144,12 +160,15 @@ def test_session_management_endpoints() -> None:
     with TestClient(app) as client:
         create_response = client.post("/sessions")
         assert create_response.status_code == 200
-        session_id = create_response.json()["session_id"]
+        create_payload = create_response.json()
+        session_id = create_payload["session_id"]
         assert session_id
+        assert create_payload["scene"] == "generic_assistant"
         assert service.session_store.get_session(session_id) is not None
 
         empty_session_response = client.get(f"/sessions/{session_id}")
         assert empty_session_response.status_code == 200
+        assert empty_session_response.json()["scene"] == "generic_assistant"
         assert empty_session_response.json()["total_turns"] == 0
         assert empty_session_response.json()["turns"] == []
 
@@ -192,3 +211,65 @@ def test_chat_api_rejects_expired_session() -> None:
     assert response.status_code == 409
     payload = response.json()
     assert payload["detail"]["code"] == "SESSION_EXPIRED"
+
+
+def test_chat_api_rejects_unknown_session_id() -> None:
+    service = _build_chat_service("chat-api-missing-session", FakeKnowledgeService(), FakeModel())
+    app = create_app(chat_service=service)
+
+    with TestClient(app) as client:
+        response = client.post("/chat", json={"message": "你好", "session_id": "missing-session"})
+
+    assert response.status_code == 404
+    payload = response.json()
+    assert payload["detail"]["code"] == "SESSION_NOT_FOUND"
+
+
+def test_list_scenes_endpoint_returns_available_scene_metadata() -> None:
+    service = _build_chat_service("chat-api-list-scenes", FakeKnowledgeService(), FakeModel())
+    app = create_app(chat_service=service)
+
+    with TestClient(app) as client:
+        response = client.get("/scenes")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["default_scene"] == "generic_assistant"
+    assert [scene["scene"] for scene in payload["scenes"]] == [
+        "generic_assistant",
+        "ecommerce",
+    ]
+    assert payload["scenes"][0]["is_default"] is True
+    assert payload["scenes"][1]["is_default"] is False
+
+
+def test_create_session_rejects_unknown_scene() -> None:
+    service = _build_chat_service("chat-api-unknown-scene", FakeKnowledgeService(), FakeModel())
+    app = create_app(chat_service=service)
+
+    with TestClient(app) as client:
+        response = client.post("/sessions", json={"scene": "unknown_scene"})
+
+    assert response.status_code == 400
+    payload = response.json()
+    assert payload["detail"]["code"] == "UNKNOWN_SCENE"
+
+
+def test_chat_routes_by_session_scene_instead_of_global_default() -> None:
+    service = _build_chat_service("chat-api-session-scene-routing", FakeKnowledgeService(), FakeModel())
+    app = create_app(chat_service=service)
+
+    with TestClient(app) as client:
+        create_response = client.post("/sessions", json={"scene": "ecommerce"})
+        assert create_response.status_code == 200
+        session_id = create_response.json()["session_id"]
+
+        chat_response = client.post(
+            "/chat",
+            json={"message": "Where is my order?", "session_id": session_id},
+        )
+
+    assert chat_response.status_code == 200
+    payload = chat_response.json()
+    assert payload["scene"] == "ecommerce"
+    assert payload["agent"] == "shopping_agent"

@@ -4,8 +4,8 @@ from typing import Any
 
 from fastapi.testclient import TestClient
 
-from backend.api.base.app import create_app
-from backend.knowledge.documents.service import (
+from backend.application.runtime.api.app import create_app
+from backend.platform.knowledge.documents.service import (
     KnowledgeDocumentDetail,
     KnowledgeDocumentNotFoundError,
     KnowledgeDocumentOperationResult,

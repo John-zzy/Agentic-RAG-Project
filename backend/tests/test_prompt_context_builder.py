@@ -1,5 +1,5 @@
-from backend.memory.base.session_store import SessionTurn
-from backend.memory.chat.prompt_context import PromptContextBuilder
+from backend.platform.memory.base.session_store import SessionTurn
+from backend.platform.memory.chat.prompt_context import PromptContextBuilder
 
 
 def _turn(index: int) -> SessionTurn:

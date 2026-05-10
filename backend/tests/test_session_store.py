@@ -1,7 +1,7 @@
 import sqlite3
 
-import backend.memory.base.session_store as session_store_module
-from backend.memory.base.session_store import SQLiteSessionStore
+import backend.platform.memory.base.session_store as session_store_module
+from backend.platform.memory.base.session_store import SQLiteSessionStore
 from backend.tests.test_support import make_test_runtime_dir
 
 
@@ -31,6 +31,7 @@ def test_session_store_creates_and_updates_session_metadata() -> None:
     store = _build_store("session-store-metadata")
     created = store.create_session(
         session_id="session-meta",
+        scene="ecommerce",
         now="2026-04-23T00:00:00+00:00",
     )
     touched = store.touch_session(
@@ -39,8 +40,10 @@ def test_session_store_creates_and_updates_session_metadata() -> None:
     )
 
     assert created.status == "active"
+    assert created.scene == "ecommerce"
     assert created.created_at == "2026-04-23T00:00:00+00:00"
     assert touched is not None
+    assert touched.scene == "ecommerce"
     assert touched.last_active_at == "2026-04-23T00:05:00+00:00"
     assert touched.updated_at == "2026-04-23T00:05:00+00:00"
 

@@ -12,50 +12,9 @@ if __package__ in {None, ""}:
 
 import uvicorn
 
-from backend.api.base.app import create_app
-from backend.api.chat.service import ChatService, create_chat_service
-from backend.config.settings import AppSettings, settings
-from backend.knowledge.ecommerce.loader import preload_knowledge_base
-from backend.knowledge.ecommerce.service import create_knowledge_service
-from backend.memory.base.session_store import SQLiteSessionStore
-
-
-@dataclass(frozen=True)
-class BootstrapSummary:
-    sqlite_path: Path
-    products_loaded: int
-    reviews_loaded: int
-    orders_loaded: int
-
-
-def bootstrap_runtime(app_settings: AppSettings | None = None) -> tuple[ChatService, BootstrapSummary]:
-    """初始化会话存储、知识库与聊天服务，并返回启动摘要。"""
-    resolved_settings = app_settings or settings
-
-    session_store = SQLiteSessionStore(app_settings=resolved_settings)
-    knowledge_service = create_knowledge_service(app_settings=resolved_settings)
-
-    # 将知识预加载到向量数据库中
-    load_summary = preload_knowledge_base(
-        app_settings=resolved_settings,
-        store=knowledge_service.store,
-    )
-
-    # 加载对话服务
-    chat_service = create_chat_service(
-        app_settings=resolved_settings,
-        knowledge_service=knowledge_service,
-        session_store=session_store,
-    )
-
-    summary = BootstrapSummary(
-        sqlite_path=resolved_settings.session.sqlite_path,
-        products_loaded=load_summary.products_loaded,
-        reviews_loaded=load_summary.reviews_loaded,
-        orders_loaded=load_summary.orders_loaded,
-    )
-
-    return chat_service, summary
+from backend.application.runtime.api.app import create_app
+from backend.application.runtime import BootstrapSummary, SceneChatService, bootstrap_runtime
+from backend.platform.config.settings import AppSettings, settings
 
 
 def parse_args() -> argparse.Namespace:
@@ -67,7 +26,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
-    """服务启动入口：完成引导并启动 Uvicorn。"""
+    """服务启动入口。"""
     args = parse_args()
     chat_service, summary = bootstrap_runtime(settings)
     app = create_app(chat_service=chat_service)
@@ -77,10 +36,9 @@ def main() -> None:
 
     print(
         "Bootstrap complete: "
+        f"scene={summary.active_scene}, "
         f"sqlite={summary.sqlite_path}, "
-        f"products={summary.products_loaded}, "
-        f"reviews={summary.reviews_loaded}, "
-        f"orders={summary.orders_loaded} \n"
+        f"metrics={summary.scene_bootstrap_metrics}\n"
         f"running on host {host}: {port}"
     )
     uvicorn.run(app=app, host=host, port=port)

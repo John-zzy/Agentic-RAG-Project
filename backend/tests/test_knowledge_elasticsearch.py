@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import math
 import re
 from typing import Any
@@ -7,11 +8,10 @@ from uuid import uuid4
 
 import pytest
 
-from backend.config.settings import AppSettings, VectorStoreConfig
-from backend.knowledge.base.store import ElasticsearchVectorStore, VectorStoreDocument, VectorStoreFactory
-from backend.knowledge.ecommerce.loader import preload_knowledge_base
+from backend.platform.config.settings import AppSettings, VectorStoreConfig
+from backend.platform.knowledge.base.store import ElasticsearchVectorStore, VectorStoreDocument, VectorStoreFactory
 from backend.tests.test_support import DATA_DIR
-import backend.knowledge.base.store as store_module
+import backend.platform.knowledge.base.store as store_module
 
 
 class FakeElasticsearchIndicesClient:
@@ -209,6 +209,29 @@ def build_elasticsearch_settings() -> AppSettings:
     )
 
 
+def build_dynamic_elasticsearch_settings() -> AppSettings:
+    return AppSettings(
+        data_dir=DATA_DIR,
+        vector_store=VectorStoreConfig(
+            provider="elasticsearch",
+            knowledge_sources={
+                "catalog": {
+                    "collection_name": "scene_catalog",
+                    "index_name": "catalog",
+                },
+                "feedback": {
+                    "collection_name": "scene_feedback",
+                    "index_name": "feedback",
+                },
+            },
+            elasticsearch={
+                "url": "http://localhost:9200",
+                "index_prefix": "ai-rag",
+            },
+        ),
+    )
+
+
 def build_live_elasticsearch_settings(index_prefix: str) -> AppSettings:
     return AppSettings(
         data_dir=DATA_DIR,
@@ -250,6 +273,33 @@ def test_elasticsearch_store_initializes_indexes_and_healthcheck(monkeypatch: py
         fake_client.indices.mappings["ai-rag-products"]["properties"]["embedding"]["type"]
         == "dense_vector"
     )
+
+
+def test_elasticsearch_store_supports_dynamic_knowledge_source_namespaces() -> None:
+    app_settings = build_dynamic_elasticsearch_settings()
+    fake_client = FakeElasticsearchClient()
+    store = ElasticsearchVectorStore(app_settings, client=fake_client)
+
+    store.ensure_collections()
+
+    assert store.resolve_namespace_config("catalog").index_name == "catalog"
+    assert fake_client.indices.exists(index="ai-rag-catalog")
+    assert fake_client.indices.exists(index="ai-rag-feedback")
+
+    store.upsert_documents(
+        "catalog",
+        [
+            VectorStoreDocument(
+                id="item-1",
+                content="通用知识助理可以检索场景知识源",
+                metadata={"source_id": "item-1", "kind": "guide"},
+            )
+        ],
+    )
+
+    results = store.search("catalog", "检索 知识源", top_k=3)
+    assert results
+    assert results[0].document.id == "item-1"
 
 
 def test_elasticsearch_store_initializes_document_management_indexes(
@@ -437,7 +487,7 @@ def test_preload_knowledge_base_supports_elasticsearch_provider_switch(
     monkeypatch.setattr(store_module, "Elasticsearch", fake_factory)
 
     app_settings = build_elasticsearch_settings()
-    summary = preload_knowledge_base(app_settings=app_settings)
+    summary = _preload_test_knowledge(app_settings)
 
     assert summary.products_loaded == 20
     assert summary.reviews_loaded == 21
@@ -547,3 +597,45 @@ def test_elasticsearch_store_live_roundtrip() -> None:
     finally:
         store._client.indices.delete(index=product_index, ignore_unavailable=True)
         store._client.indices.delete(index=review_index, ignore_unavailable=True)
+
+
+def _preload_test_knowledge(app_settings: AppSettings):
+    store = VectorStoreFactory.create(app_settings)
+    store.ensure_collections()
+    products = json.loads((DATA_DIR / "products.json").read_text(encoding="utf-8"))
+    reviews = json.loads((DATA_DIR / "reviews.json").read_text(encoding="utf-8"))
+    orders = json.loads((DATA_DIR / "orders.json").read_text(encoding="utf-8"))
+    store.upsert_documents("products", [_product_document(product) for product in products])
+    store.upsert_documents("reviews", [_review_document(review) for review in reviews])
+    store.upsert_documents("orders", [_order_document(order) for order in orders])
+
+    class _Summary:
+        products_loaded = len(products)
+        reviews_loaded = len(reviews)
+        orders_loaded = len(orders)
+
+    return _Summary()
+
+
+def _product_document(product: dict[str, object]) -> VectorStoreDocument:
+    return VectorStoreDocument(
+        id=str(product["product_id"]),
+        content=f'{product.get("name", "")} {product.get("description", "")}',
+        metadata={"product_id": product["product_id"]},
+    )
+
+
+def _review_document(review: dict[str, object]) -> VectorStoreDocument:
+    return VectorStoreDocument(
+        id=str(review["review_id"]),
+        content=f'{review.get("title", "")} {review.get("content", "")}',
+        metadata={"product_id": review["product_id"], "review_id": review["review_id"]},
+    )
+
+
+def _order_document(order: dict[str, object]) -> VectorStoreDocument:
+    return VectorStoreDocument(
+        id=str(order["order_id"]),
+        content=f'{order.get("status", "")} {order.get("shipping_address", "")}',
+        metadata={"order_id": order["order_id"]},
+    )

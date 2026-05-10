@@ -1,6 +1,7 @@
-from backend.config.settings import AppSettings, VectorStoreConfig
-from backend.knowledge.base.store import ChromaVectorStore, VectorStoreDocument, VectorStoreFactory
-from backend.knowledge.ecommerce.loader import preload_knowledge_base
+import json
+
+from backend.platform.config.settings import AppSettings, VectorStoreConfig
+from backend.platform.knowledge.base.store import ChromaVectorStore, VectorStoreDocument, VectorStoreFactory
 from backend.tests.test_support import DATA_DIR, make_test_runtime_dir
 
 
@@ -9,6 +10,26 @@ def build_test_settings(tmp_path) -> AppSettings:
         data_dir=DATA_DIR,
         vector_store=VectorStoreConfig(
             provider="chroma",
+            chroma={"persist_directory": tmp_path / ".chroma"},
+        ),
+    )
+
+
+def build_dynamic_test_settings(tmp_path) -> AppSettings:
+    return AppSettings(
+        data_dir=DATA_DIR,
+        vector_store=VectorStoreConfig(
+            provider="chroma",
+            knowledge_sources={
+                "catalog": {
+                    "collection_name": "scene_catalog",
+                    "index_name": "scene-catalog",
+                },
+                "feedback": {
+                    "collection_name": "scene_feedback",
+                    "index_name": "scene-feedback",
+                },
+            },
             chroma={"persist_directory": tmp_path / ".chroma"},
         ),
     )
@@ -90,6 +111,34 @@ def test_chroma_store_supports_filters_and_consistent_result_shape() -> None:
     assert results[0].document.id == "R001"
     assert results[0].document.metadata["product_id"] == "P007"
     assert isinstance(results[0].document.content, str)
+
+
+def test_chroma_store_supports_dynamic_knowledge_source_namespaces() -> None:
+    tmp_path = make_test_runtime_dir("knowledge-dynamic-chroma-namespaces")
+    app_settings = build_dynamic_test_settings(tmp_path)
+    store = ChromaVectorStore(app_settings)
+
+    store.ensure_collections()
+
+    resolved = store.resolve_namespace_config("catalog")
+    assert resolved.collection_name == "scene_catalog"
+    assert "catalog" in store._collections
+    assert "feedback" in store._collections
+
+    store.upsert_documents(
+        "catalog",
+        [
+            VectorStoreDocument(
+                id="item-1",
+                content="通用知识助理的入门说明文档",
+                metadata={"source_id": "item-1", "kind": "guide"},
+            )
+        ],
+    )
+
+    results = store.search("catalog", "入门 说明", top_k=3)
+    assert results
+    assert results[0].document.id == "item-1"
 
 
 def test_chroma_store_supports_document_management_operations() -> None:
@@ -184,7 +233,7 @@ def test_chroma_document_chunk_search_supports_hybrid_keyword_recall() -> None:
 def test_preload_knowledge_base_uses_factory_and_loads_json_data() -> None:
     tmp_path = make_test_runtime_dir("knowledge-preload")
     app_settings = build_test_settings(tmp_path)
-    summary = preload_knowledge_base(app_settings=app_settings)
+    summary = _preload_test_knowledge(app_settings)
 
     assert summary.products_loaded == 20
     assert summary.reviews_loaded == 21
@@ -196,3 +245,45 @@ def test_preload_knowledge_base_uses_factory_and_loads_json_data() -> None:
     assert product_results
     assert any(result.document.id == "P001" for result in product_results)
     assert any(result.document.metadata["product_id"] == "P007" for result in review_results)
+
+
+def _preload_test_knowledge(app_settings: AppSettings):
+    store = VectorStoreFactory.create(app_settings)
+    store.ensure_collections()
+    products = json.loads((DATA_DIR / "products.json").read_text(encoding="utf-8"))
+    reviews = json.loads((DATA_DIR / "reviews.json").read_text(encoding="utf-8"))
+    orders = json.loads((DATA_DIR / "orders.json").read_text(encoding="utf-8"))
+    store.upsert_documents("products", [_product_document(product) for product in products])
+    store.upsert_documents("reviews", [_review_document(review) for review in reviews])
+    store.upsert_documents("orders", [_order_document(order) for order in orders])
+
+    class _Summary:
+        products_loaded = len(products)
+        reviews_loaded = len(reviews)
+        orders_loaded = len(orders)
+
+    return _Summary()
+
+
+def _product_document(product: dict[str, object]) -> VectorStoreDocument:
+    return VectorStoreDocument(
+        id=str(product["product_id"]),
+        content=f'{product.get("name", "")} {product.get("description", "")}',
+        metadata={"product_id": product["product_id"]},
+    )
+
+
+def _review_document(review: dict[str, object]) -> VectorStoreDocument:
+    return VectorStoreDocument(
+        id=str(review["review_id"]),
+        content=f'{review.get("title", "")} {review.get("content", "")}',
+        metadata={"product_id": review["product_id"], "review_id": review["review_id"]},
+    )
+
+
+def _order_document(order: dict[str, object]) -> VectorStoreDocument:
+    return VectorStoreDocument(
+        id=str(order["order_id"]),
+        content=f'{order.get("status", "")} {order.get("shipping_address", "")}',
+        metadata={"order_id": order["order_id"]},
+    )

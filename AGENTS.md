@@ -1,127 +1,131 @@
-# AI RAG Project
+# AI RAG Project Agent Guide
 
-一个面向电商客服场景的 AI RAG 项目，用于演示“知识库检索 + 会话记忆 + 大模型回答”这一条最小可运行链路。当前仓库以后端 MVP 为主，覆盖商品导购、评价检索、多轮对话、会话管理等基础能力，适合作为面试展示、RAG 工程练习和后续多 Agent 扩展的起点。
+本文件约束后续在本仓库内工作的智能体行为。若与用户当前指令冲突，以用户指令为准。
 
-## 项目亮点
+## 项目现状
 
-- 基于 `FastAPI` 提供可直接联调的对话 API
-- 支持商品与评价知识的 RAG 检索增强回答
-- 支持上传本地知识文件，并通过独立知识库管理页完成文档注册、列表、重建与删除
-- 内置 `Chroma` 与 `Elasticsearch` 两种向量存储后端
-- 使用 `SQLite` 持久化会话上下文，支持多轮对话
-- 提供静态 API 测试页，便于本地快速验证接口
-- 代码结构清晰，已拆分为 API、知识库、记忆、模型路由、配置等模块
+仓库已经完成三层架构收口，`backend` 顶层只保留：
 
-## 技术栈
+- `application`
+- `platform`
+- `scenes`
+- `tests`
+- `data`
+- 运行入口与环境文件
 
-- Python 3.11+
-- FastAPI
-- LangChain / LangGraph
-- ChromaDB / Elasticsearch
-- SQLite
-- DashScope 兼容模型接口
-- Pytest
+不要再把代码放回旧目录，不要再创建这些旧顶层包：
 
-## 目录结构
+- `backend/api`
+- `backend/config`
+- `backend/knowledge`
+- `backend/tools`
+- `backend/models`
+- `backend/memory`
+- `backend/agents`
+- `backend/mcp`
+- `backend/monitoring`
 
-```text
-.
-├── backend/                # 后端主代码
-│   ├── api/                # 路由、Schema、聊天服务
-│   ├── config/             # 应用配置
-│   ├── knowledge/          # 知识库、向量检索、预加载
-│   ├── memory/             # 会话存储与上下文构建
-│   ├── models/             # 模型路由与客户端封装
-│   ├── tests/              # pytest 测试
-│   ├── .env.example        # 环境变量示例
-│   └── run.py              # 启动入口
-├── frontend/               # 对话测试页与知识库管理页
-├── docs/elasticsearch/     # 本地 Elasticsearch docker compose
-├── openspec/               # 需求变更与实现任务文档
-└── README.md
-```
+## 当前职责边界
 
-## 构建、测试与开发命令
-先创建虚拟环境并安装后端依赖：
+- `backend/platform`
+  - 通用配置
+  - 模型路由
+  - 会话记忆
+  - 通用知识文档能力
+  - RAG 协议
+  - 通用工具协议
+- `backend/application/runtime`
+  - API 路由
+  - 运行时装配
+  - active scene 选择
+  - 启动引导
+- `backend/scenes`
+  - `generic_assistant`
+  - `ecommerce`
+  - 场景提示词、检索策略、场景工具、场景知识模型
+
+## 正确命令
+
+所有命令默认在仓库根目录执行。
+
+### 安装依赖
 
 ```powershell
-python -m venv .venv
-.venv\Scripts\Activate.ps1
+python -m venv backend\.venv
+backend\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
 python -m pip install -r backend\requirements.txt
 ```
 
-本地启动 API：
+### 启动后端
+
+```powershell
+backend\.venv\Scripts\python.exe backend\run.py
+```
+
+### 运行测试
+
+```powershell
+backend\.venv\Scripts\python.exe -m pytest backend\tests -q -c backend\tests\pytest.ini
+```
+
+不要直接运行：
 
 ```powershell
 python backend\run.py
+python -m pytest ...
 ```
 
-知识文档管理相关页面与接口：
+本仓库开发过程中，裸 `python` 可能不是 `backend/.venv`，直接使用是错误的。
 
-```text
-/frontend/api-tester.html                  # 对话测试页
-/frontend/knowledge-manager.html           # 知识库管理页
-POST   /files/upload                       # 上传原始知识文件
-GET    /files                              # 列出已上传文件
-DELETE /files/{filename}                   # 删除已上传文件
-POST   /knowledge/documents                # 注册知识文档并建索引
-GET    /knowledge/documents                # 列出知识文档
-GET    /knowledge/documents/files          # 按文件聚合索引状态
-GET    /knowledge/documents/{document_id}  # 查看文档详情
-POST   /knowledge/documents/{document_id}/rechunk
-DELETE /knowledge/documents/{document_id}
+## 环境变量约定
+
+优先使用：
+
+```env
+AI_RAG_APP__ACTIVE_SCENE=generic_assistant
 ```
 
-运行测试：
+该变量当前表示“新会话默认场景”。
+如果实现前端/API 场景切换，优先走会话级切换，不要再把它当作日常手工切换场景的唯一入口。
+
+## 编码与改动约束
+
+- 使用 `apply_patch` 做手工文件修改
+- 不要用 Python 脚本或 shell 重定向粗暴覆盖文件，除非明确必要
+- 不要制造大面积无关格式化 diff
+- 不要保留“兼容层假迁移”
+- 做目录迁移时要同步修正导入、测试和启动链路
+- 修改 `__init__.py` 时保持最小化，避免在包初始化阶段引入重量依赖
+- 对运行时/API 代码尤其注意循环导入
+
+## 文档与命令维护
+
+如果你修改了架构、目录、启动方式、环境变量或测试命令，必须同步检查并更新：
+
+- `README.md`
+- `AGENTS.md`
+- `backend/.env.example`
+
+不要让文档继续引用旧目录、旧命令、旧环境变量。
+
+## 测试要求
+
+- 功能改动后至少运行受影响测试
+- 架构迁移、导入调整、启动链路调整后必须跑全量后端测试
+- 在声明完成前，必须给出真实执行过的命令与结果
+
+标准全量命令：
 
 ```powershell
-python -m pytest backend\tests -q -c backend\tests\pytest.ini
+backend\.venv\Scripts\python.exe -m pytest backend\tests -q -c backend\tests\pytest.ini
 ```
 
-如需启用 Elasticsearch，本地启动命令如下：
+## 本项目的高频错误，后续不要再犯
 
-```powershell
-docker compose -f docs\elasticsearch\docker-compose.yml up -d
-```
-
-# 代码风格约束
-## 代码风格与命名约定
-沿用当前 Python 风格：4 空格缩进、补全类型标注、函数和模块使用 `snake_case`、类使用 `PascalCase`。优先写职责单一的小函数，导入保持显式，路径处理优先使用 `Path`，不要硬编码字符串路径。仓库当前未提交格式化或 lint 配置，新增代码时以相邻文件风格为准。
-新增或修改类、方法时，应补充简洁明确的中文注释或 docstring，说明该类/方法的职责、使用场景或关键输入输出；避免只写重复代码字面的无效注释。目标是让后续阅读者不需要反推实现细节，也能快速理解“这个类/方法是干什么的”。
-
-## 测试规范
-使用 `pytest`，测试文件统一放在 `backend/tests/` 下，命名采用 `test_*.py`，例如 `test_chat_api.py`、`test_session_store.py`。测试文件名应尽量对应被测模块。调用外部服务的用例请标记 `@pytest.mark.integration`；默认测试配置会跳过这类用例。
-
-## 安全与配置提示
-敏感配置放在 `backend/.env`，不要提交 API Key。开发环境默认使用 `chroma`；切换到 Elasticsearch 时，设置 `AI_RAG_VECTOR_STORE__PROVIDER=elasticsearch`，并同时配置 `AI_RAG_VECTOR_STORE__ELASTICSEARCH__URL`。
-知识文档源文件默认写入 `backend/data/files`。仅 `.json`、`.txt`、`.md`、`.csv` 当前支持建索引；`.pdf`、`.docx`、`.xlsx` 当前仅支持上传和文件层管理，不支持注册入库。
-
-## LLM 编码行为约束
-以下约束来自 `CLAUDE.md`，用于降低常见 LLM 编码错误。与项目特定说明冲突时，优先遵守本文件中更具体的项目规则。
-
-### 先思考再编码
-不要假设，不要隐藏困惑，明确暴露权衡。实现前应显式说明假设；如果存在多种解释，应先列出而不是静默选择；如果有更简单的方案，应主动说明；如果需求不清楚，应停下来指出不清楚之处并询问。
-
-### 简单优先
-只写解决问题所需的最少代码，不做推测性扩展。不要添加未被要求的功能，不要为一次性代码抽象，不要加入未被要求的灵活性或配置能力，不要为不可能发生的场景添加复杂错误处理。如果代码明显可以从 200 行简化到 50 行，应重写为更简单的实现。
-
-### 外科手术式修改
-只修改必须修改的内容，只清理自己造成的问题。编辑现有代码时，不要顺手改进相邻代码、注释或格式；不要重构未损坏的代码；保持现有风格，即使个人偏好不同；发现无关死代码时，只说明，不要删除。若本次修改导致导入、变量或函数变为未使用，应清理这些由本次修改造成的孤儿代码。
-
-每一行变更都应能直接追溯到用户请求。
-
-### 目标驱动执行
-把任务转换为可验证目标并循环到验证完成。例如，“添加校验”应对应“为非法输入写测试，然后让测试通过”；“修复 bug”应对应“写出能复现问题的测试，然后让测试通过”；“重构 X”应对应“确保重构前后测试通过”。
-
-多步骤任务应给出简短计划：
-
-```text
-1. [步骤] -> verify: [检查]
-2. [步骤] -> verify: [检查]
-3. [步骤] -> verify: [检查]
-```
-
-强成功标准能支持独立迭代；弱标准，例如“让它能工作”，需要先澄清。
-
-这些约束的目标是减少不必要 diff、避免过度复杂实现，并让澄清问题发生在实现前而不是返工后。
+- 把代码放回旧顶层目录
+- 使用错误的 Python 解释器
+- 改完架构不改文档
+- 用兼容 re-export 冒充真实迁移
+- 在 `__init__.py` 里引入运行时装配导致循环导入
+- 用不精确的写文件方式覆盖内容，导致文件损坏或自引用错误

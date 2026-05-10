@@ -4,14 +4,14 @@ from uuid import uuid4
 
 import pytest
 
-from backend.config.settings import AppSettings, VectorStoreConfig
-from backend.knowledge.base.store import ElasticsearchVectorStore
-from backend.knowledge.ecommerce.service import KnowledgeService
+from backend.platform.config.settings import AppSettings, VectorStoreConfig
+from backend.platform.knowledge.base.store import ChromaVectorStore, ElasticsearchVectorStore
+from backend.platform.knowledge.base.store import VectorStoreDocument
 from backend.tests.test_support import DATA_DIR, make_test_runtime_dir
 
 
 @pytest.fixture(params=["chroma", "elasticsearch"])
-def knowledge_service(request: pytest.FixtureRequest) -> KnowledgeService:
+def knowledge_service(request: pytest.FixtureRequest):
     provider = request.param
     if provider == "chroma":
         tmp_path = make_test_runtime_dir("knowledge-contract-chroma")
@@ -22,7 +22,7 @@ def knowledge_service(request: pytest.FixtureRequest) -> KnowledgeService:
                 chroma={"persist_directory": tmp_path / ".chroma"},
             ),
         )
-        yield KnowledgeService(app_settings=app_settings)
+        yield _StoreBackedKnowledgeService(ChromaVectorStore(app_settings))
         return
 
     index_prefix = f"ai-rag-contract-{uuid4().hex[:8]}"
@@ -37,7 +37,13 @@ def knowledge_service(request: pytest.FixtureRequest) -> KnowledgeService:
             },
         ),
     )
-    service = KnowledgeService(app_settings=app_settings)
+    try:
+        service = _StoreBackedKnowledgeService(ElasticsearchVectorStore(app_settings))
+    except Exception as exc:
+        pytest.skip(
+            "Elasticsearch is unavailable at http://localhost:9200. "
+            f"Start local ES to run contract tests. Details: {exc}"
+        )
     elasticsearch_store = service.store
     if not isinstance(elasticsearch_store, ElasticsearchVectorStore):
         pytest.fail("Expected ElasticsearchVectorStore when provider=elasticsearch.")
@@ -58,7 +64,7 @@ def knowledge_service(request: pytest.FixtureRequest) -> KnowledgeService:
         elasticsearch_store._client.indices.delete(index=review_index, ignore_unavailable=True)
 
 
-def test_contract_search_result_shape_is_consistent(knowledge_service: KnowledgeService) -> None:
+def test_contract_search_result_shape_is_consistent(knowledge_service) -> None:
     knowledge_service.upsert_products(
         [
             {
@@ -93,7 +99,7 @@ def test_contract_search_result_shape_is_consistent(knowledge_service: Knowledge
     assert any(result.document.id == "P001" for result in results)
 
 
-def test_contract_filter_and_access_pattern_are_consistent(knowledge_service: KnowledgeService) -> None:
+def test_contract_filter_and_access_pattern_are_consistent(knowledge_service) -> None:
     knowledge_service.upsert_reviews(
         [
             {
@@ -127,7 +133,7 @@ def test_contract_filter_and_access_pattern_are_consistent(knowledge_service: Kn
     assert filtered[0].document.metadata["product_id"] == "P007"
 
 
-def test_contract_delete_access_is_consistent(knowledge_service: KnowledgeService) -> None:
+def test_contract_delete_access_is_consistent(knowledge_service) -> None:
     knowledge_service.upsert_products(
         [
             {
@@ -146,3 +152,71 @@ def test_contract_delete_access_is_consistent(knowledge_service: KnowledgeServic
     knowledge_service.delete_documents("products", ["P009"])
     remaining = knowledge_service.search_products("机械 键盘 回弹", top_k=5)
     assert all(result.document.id != "P009" for result in remaining)
+
+
+def test_contract_chroma_preserves_system_document_indexes_with_dynamic_knowledge_sources() -> None:
+    tmp_path = make_test_runtime_dir("knowledge-contract-dynamic-chroma")
+    app_settings = AppSettings(
+        data_dir=DATA_DIR,
+        vector_store=VectorStoreConfig(
+            provider="chroma",
+            knowledge_sources={
+                "catalog": {
+                    "collection_name": "scene_catalog",
+                    "index_name": "scene-catalog",
+                }
+            },
+            documents={"index_name": "documents"},
+            chunks={"index_name": "chunks"},
+            chroma={"persist_directory": tmp_path / ".chroma"},
+        ),
+    )
+    store = ChromaVectorStore(app_settings)
+
+    store.ensure_collections()
+    store.ensure_document_indexes()
+
+    assert store.resolve_namespace_config("catalog").collection_name == "scene_catalog"
+    assert store.resolve_document_collection_name("documents") == "knowledge_documents"
+    assert store.resolve_document_collection_name("chunks") == "knowledge_chunks"
+
+
+class _StoreBackedKnowledgeService:
+    def __init__(self, store) -> None:
+        self.store = store
+        self.store.ensure_collections()
+
+    def upsert_products(self, products: list[dict[str, object]]) -> None:
+        self.store.upsert_documents(
+            "products",
+            [
+                VectorStoreDocument(
+                    id=str(product["product_id"]),
+                    content=f'{product["name"]} {product["description"]}',
+                    metadata={"product_id": product["product_id"]},
+                )
+                for product in products
+            ],
+        )
+
+    def search_products(self, query: str, top_k: int | None = None):
+        return self.store.search("products", query, top_k=top_k)
+
+    def upsert_reviews(self, reviews: list[dict[str, object]]) -> None:
+        self.store.upsert_documents(
+            "reviews",
+            [
+                VectorStoreDocument(
+                    id=str(review["review_id"]),
+                    content=f'{review["title"]} {review["content"]}',
+                    metadata={"product_id": review["product_id"], "review_id": review["review_id"]},
+                )
+                for review in reviews
+            ],
+        )
+
+    def search_reviews(self, query: str, top_k: int | None = None, filters: dict[str, object] | None = None):
+        return self.store.search("reviews", query, top_k=top_k, filters=filters)
+
+    def delete_documents(self, namespace: str, ids: list[str]) -> None:
+        self.store.delete_documents(namespace, ids)
