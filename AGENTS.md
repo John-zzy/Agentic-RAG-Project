@@ -6,6 +6,7 @@
 
 - 基于 `FastAPI` 提供可直接联调的对话 API
 - 支持商品与评价知识的 RAG 检索增强回答
+- 支持上传本地知识文件，并通过独立知识库管理页完成文档注册、列表、重建与删除
 - 内置 `Chroma` 与 `Elasticsearch` 两种向量存储后端
 - 使用 `SQLite` 持久化会话上下文，支持多轮对话
 - 提供静态 API 测试页，便于本地快速验证接口
@@ -34,7 +35,7 @@
 │   ├── tests/              # pytest 测试
 │   ├── .env.example        # 环境变量示例
 │   └── run.py              # 启动入口
-├── frontend/               # 静态 API 测试页
+├── frontend/               # 对话测试页与知识库管理页
 ├── docs/elasticsearch/     # 本地 Elasticsearch docker compose
 ├── openspec/               # 需求变更与实现任务文档
 └── README.md
@@ -54,6 +55,22 @@ python -m pip install -r backend\requirements.txt
 
 ```powershell
 python backend\run.py
+```
+
+知识文档管理相关页面与接口：
+
+```text
+/frontend/api-tester.html                  # 对话测试页
+/frontend/knowledge-manager.html           # 知识库管理页
+POST   /files/upload                       # 上传原始知识文件
+GET    /files                              # 列出已上传文件
+DELETE /files/{filename}                   # 删除已上传文件
+POST   /knowledge/documents                # 注册知识文档并建索引
+GET    /knowledge/documents                # 列出知识文档
+GET    /knowledge/documents/files          # 按文件聚合索引状态
+GET    /knowledge/documents/{document_id}  # 查看文档详情
+POST   /knowledge/documents/{document_id}/rechunk
+DELETE /knowledge/documents/{document_id}
 ```
 
 运行测试：
@@ -78,6 +95,7 @@ docker compose -f docs\elasticsearch\docker-compose.yml up -d
 
 ## 安全与配置提示
 敏感配置放在 `backend/.env`，不要提交 API Key。开发环境默认使用 `chroma`；切换到 Elasticsearch 时，设置 `AI_RAG_VECTOR_STORE__PROVIDER=elasticsearch`，并同时配置 `AI_RAG_VECTOR_STORE__ELASTICSEARCH__URL`。
+知识文档源文件默认写入 `backend/data/files`。仅 `.json`、`.txt`、`.md`、`.csv` 当前支持建索引；`.pdf`、`.docx`、`.xlsx` 当前仅支持上传和文件层管理，不支持注册入库。
 
 ## LLM 编码行为约束
 以下约束来自 `CLAUDE.md`，用于降低常见 LLM 编码错误。与项目特定说明冲突时，优先遵守本文件中更具体的项目规则。

@@ -6,6 +6,7 @@
 
 - 基于 `FastAPI` 提供可直接联调的对话 API
 - 支持商品与评价知识的 RAG 检索增强回答
+- 支持上传本地知识文件并通过独立管理页完成建索引、重建和删除
 - 内置 `Chroma` 与 `Elasticsearch` 两种向量存储后端
 - 使用 `SQLite` 持久化会话上下文，支持多轮对话
 - 提供静态 API 测试页，便于本地快速验证接口
@@ -21,7 +22,11 @@
 - `GET /sessions/{session_id}`：查看会话历史
 - `DELETE /sessions/{session_id}`：删除会话
 - 启动时自动预加载本地商品与评价数据到知识库
+- `POST /files/upload`、`GET /files`、`DELETE /files/{filename}`：上传和管理本地知识文件
+- `POST /knowledge/documents`、`GET /knowledge/documents`、`GET /knowledge/documents/files`：注册知识文档、查看文档列表和按文件聚合索引状态
+- `GET /knowledge/documents/{document_id}`、`POST /knowledge/documents/{document_id}/rechunk`、`DELETE /knowledge/documents/{document_id}`：查看详情、重建切分和删除知识文档
 - 本地挂载前端测试页：`/frontend/api-tester.html`
+- 本地挂载知识库管理页：`/frontend/knowledge-manager.html`
 
 当前尚未完成的部分：
 
@@ -52,7 +57,7 @@
 │   ├── tests/              # pytest 测试
 │   ├── .env.example        # 环境变量示例
 │   └── run.py              # 启动入口
-├── frontend/               # 静态 API 测试页
+├── frontend/               # 对话测试页与知识库管理页
 ├── docs/elasticsearch/     # 本地 Elasticsearch docker compose
 ├── openspec/               # 需求变更与实现任务文档
 └── README.md
@@ -119,7 +124,26 @@ python backend\run.py
 
 - API: `http://127.0.0.1:8000`
 - Swagger 文档: `http://127.0.0.1:8000/docs`
-- API 测试页: `http://127.0.0.1:8000/frontend/api-tester.html`
+- 对话测试页: `http://127.0.0.1:8000/frontend/api-tester.html`
+- 知识库管理页: `http://127.0.0.1:8000/frontend/knowledge-manager.html`
+
+## 知识文档管理
+
+项目当前支持把上传到 `backend/data/files` 的文本类文件注册到“我的文档知识库”，并通过独立管理页完成索引管理。
+
+- 支持上传的文件类型：`.json`、`.txt`、`.md`、`.csv`、`.pdf`、`.docx`、`.xlsx`
+- 当前支持建索引的文件类型：`.json`、`.txt`、`.md`、`.csv`
+- 上传文件和建索引是两步操作：先通过 `/files/upload` 上传，再通过 `/knowledge/documents` 注册入库
+- 文档管理接口默认懒加载，单独访问聊天 API 时不会因为文档索引初始化失败而阻塞启动
+
+一个典型流程如下：
+
+1. 打开 `http://127.0.0.1:8000/frontend/knowledge-manager.html`
+2. 上传知识文件到 `backend/data/files`
+3. 在文件列表中选择可索引文件，填写 `namespace`、`chunk_size`、`chunk_overlap`
+4. 点击“建索引”或对已有文档执行“重建”
+
+`namespace` 需要使用仅包含小写字母、数字和下划线的 slug，例如 `faq`、`manual_v2`。
 
 ## 可选：启动 Elasticsearch
 
