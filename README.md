@@ -144,6 +144,18 @@ backend\.venv\Scripts\python.exe backend\run.py
 - API 调试页: `http://127.0.0.1:8000/frontend/api-tester.html`
 - 知识库管理页: `http://127.0.0.1:8000/frontend/knowledge-manager.html`
 
+## 界面预览
+
+下面两张图展示了前端调试页和知识库管理页的默认界面，便于快速了解整体交互入口。
+
+### 智能客服工作台
+
+![智能客服工作台](./docs/images/api-tester-ui.png)
+
+### 知识库管理页
+
+![知识库管理页](./docs/images/knowledge-manager-ui.png)
+
 ## 接口与使用说明
 
 当前主要接口分为四类：
