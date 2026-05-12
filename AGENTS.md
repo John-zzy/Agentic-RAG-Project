@@ -107,3 +107,15 @@ AI_RAG_APP__ACTIVE_SCENE=generic_assistant
 - 在 `__init__.py` 中引入运行时装配，导致循环导入
 - 用不精确的覆盖式写文件方式修改内容，导致文件损坏或内容串乱
 - 架构相关改动后，没有补跑受影响测试或全量测试
+
+## Encoding And Patch Discipline
+
+- This repo's code and docs should be treated as UTF-8 unless the file itself clearly proves otherwise.
+- In this Windows PowerShell 5.1 environment, `Get-Content` without `-Encoding` may decode files with the system ANSI code page (`gb2312` here), which will garble UTF-8 Chinese text. Do not use default decoding when reading source files that may contain non-ASCII text.
+- When reading text files for inspection or patch preparation, explicitly use UTF-8, for example: `Get-Content -Raw -Encoding UTF8 <file>`.
+- If a command writes text files directly, explicitly use UTF-8 as well. Never rely on PowerShell 5.1 default file encoding for source code, HTML, Markdown, JSON, YAML, or config files.
+- If terminal output shows mojibake, first determine whether the file bytes are valid UTF-8 before assuming the file content is corrupted. Distinguish "wrong decode while reading" from "actual file damage".
+- Never build `apply_patch` context from garbled terminal output. Re-read the file with explicit UTF-8 and anchor patches on stable exact text.
+- A failed `apply_patch` does not justify a whole-file rewrite by itself. First re-read the live file, shrink the patch hunk, and retry with stable anchors.
+- Before patching a file that was recently edited, re-read its current contents from disk. Do not trust earlier copied snippets after structural changes.
+- Do not escalate localized changes into full-file rewrites unless the user explicitly approves it, or the file is already inconsistent enough that targeted patching is no longer safe.
