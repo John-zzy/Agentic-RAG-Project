@@ -1,0 +1,59 @@
+flowchart TB
+    classDef project fill:#111827,stroke:#111827,stroke-width:2px,color:#FFFFFF;
+    classDef key fill:#DBEAFE,stroke:#2563EB,stroke-width:1.5px,color:#0F172A;
+    classDef middleware fill:#DCFCE7,stroke:#16A34A,stroke-width:1.5px,color:#0F172A;
+    classDef api fill:#FCE7F3,stroke:#DB2777,stroke-width:1.5px,color:#0F172A;
+    classDef note fill:#F3F4F6,stroke:#6B7280,stroke-width:1px,color:#374151;
+
+    PROJECT["AI RAG Project\nFastAPI + RAG + Multi-Scene Assistant"]
+
+    subgraph KEY["关键依赖"]
+        FASTAPI["FastAPI\nHTTP API 与路由框架"]
+        UVICORN["Uvicorn\nASGI 服务启动与本地运行"]
+        LANGCHAIN["LangChain\nRAG 组链、Retriever 与 Prompt 组合"]
+        LANGGRAPH["LangGraph\n为 Agentic / 多步编排预留的运行图能力"]
+        LC_OPENAI["langchain-openai\n把外部聊天模型接成 LangChain ChatModel"]
+        PYDANTIC["Pydantic + pydantic-settings\n配置建模、请求响应校验与环境变量装配"]
+        DOTENV["python-dotenv\n加载 backend/.env 配置"]
+    end
+
+    subgraph MW["中间件"]
+        SQLITE["SQLite\n会话与聊天记忆持久化"]
+        CHROMA["Chroma\n默认本地向量存储"]
+        ES["Elasticsearch\n可切换的向量检索后端"]
+    end
+
+    subgraph API["外部 API"]
+        DASHSCOPE["DashScope Compatible API\n默认接入 Qwen 模型能力"]
+    end
+
+    LEGEND["颜色说明\n蓝色=关键依赖\n绿色=中间件\n粉色=外部 API"]
+
+    PROJECT --> FASTAPI
+    PROJECT --> UVICORN
+    PROJECT --> LANGCHAIN
+    PROJECT -. Agentic retrieval / orchestration .-> LANGGRAPH
+    PROJECT --> LC_OPENAI
+    PROJECT --> PYDANTIC
+    PROJECT --> DOTENV
+
+    PROJECT --> SQLITE
+    PROJECT --> CHROMA
+    PROJECT -. 可选切换 .-> ES
+
+    LC_OPENAI --> DASHSCOPE
+    PROJECT --> DASHSCOPE
+
+    PROJECT:::project
+    FASTAPI:::key
+    UVICORN:::key
+    LANGCHAIN:::key
+    LANGGRAPH:::key
+    LC_OPENAI:::key
+    PYDANTIC:::key
+    DOTENV:::key
+    SQLITE:::middleware
+    CHROMA:::middleware
+    ES:::middleware
+    DASHSCOPE:::api
+    LEGEND:::note

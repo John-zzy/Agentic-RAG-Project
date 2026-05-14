@@ -148,7 +148,6 @@ class RetrievalContext(BaseModel):
 
 
 class RetrievalDecisionLogEntry(BaseModel):
-    """缁熶竴璁板綍 Agentic Retrieval 姣忚疆鍐崇瓥锛屼究浜庤皟璇曞拰鍚庣画鍥炴斁銆?"""
 
     round_index: int
     tool_name: str

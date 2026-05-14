@@ -1,0 +1,84 @@
+flowchart LR
+    classDef runtime fill:#EAF4FF,stroke:#2563EB,stroke-width:1.5px,color:#0F172A;
+    classDef platform fill:#EEF8EE,stroke:#2F855A,stroke-width:1.5px,color:#0F172A;
+    classDef scenes fill:#FFF7E8,stroke:#C05621,stroke-width:1.5px,color:#0F172A;
+    classDef entry fill:#F3F4F6,stroke:#4B5563,stroke-width:1.5px,color:#0F172A;
+    classDef cycleNode fill:#FEE2E2,stroke:#DC2626,stroke-width:2px,color:#7F1D1D;
+
+    RUN["backend.run"]
+
+    subgraph APP["Application"]
+        AR["backend.application.runtime"]
+        API_CHAT["backend.application.runtime.api.chat"]
+        API_FILE["backend.application.runtime.api.file"]
+        API_KNOW["backend.application.runtime.api.knowledge"]
+    end
+
+    subgraph PLATFORM["Platform"]
+        CFG["backend.platform.config"]
+        KNOW["backend.platform.knowledge"]
+        MEM["backend.platform.memory"]
+        MODEL["backend.platform.models"]
+        RAG["backend.platform.rag"]
+        TOOL["backend.platform.tools"]
+    end
+
+    subgraph SCENES["Scenes"]
+        BASE["backend.scenes.base"]
+        ECOM["backend.scenes.ecommerce"]
+        GA["backend.scenes.generic_assistant"]
+    end
+
+    RUN --> AR
+    RUN --> CFG
+
+    AR --> API_CHAT
+    AR --> CFG
+    AR --> KNOW
+    AR --> MEM
+    AR --> MODEL
+    AR --> BASE
+    AR --> ECOM
+    AR --> GA
+
+    API_CHAT --> AR
+    API_FILE --> CFG
+    API_KNOW --> KNOW
+
+    KNOW --> CFG
+    MEM --> CFG
+    MODEL --> CFG
+
+    BASE --> MODEL
+
+    ECOM --> CFG
+    ECOM --> KNOW
+    ECOM --> MODEL
+    ECOM --> RAG
+    ECOM --> TOOL
+    ECOM --> BASE
+
+    GA --> CFG
+    GA --> KNOW
+    GA --> RAG
+    GA --> TOOL
+    GA --> BASE
+    GA --> ECOM
+
+    RUN:::entry
+    AR:::cycleNode
+    API_CHAT:::cycleNode
+    API_FILE:::runtime
+    API_KNOW:::runtime
+    CFG:::platform
+    KNOW:::platform
+    MEM:::platform
+    MODEL:::platform
+    RAG:::platform
+    TOOL:::platform
+    BASE:::scenes
+    ECOM:::scenes
+    GA:::scenes
+
+    linkStyle 2 stroke:#DC2626,stroke-width:3px;
+    linkStyle 8 stroke:#DC2626,stroke-width:3px;

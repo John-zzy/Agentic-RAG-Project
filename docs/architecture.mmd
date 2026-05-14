@@ -1,0 +1,50 @@
+flowchart TB
+    subgraph L1["前端层 Frontend"]
+        direction LR
+        FE1["API Tester 页面<br/>调试聊天、会话与场景接口，作为后端能力的人工验证入口。"]
+        FE2["Knowledge Manager 页面<br/>管理上传文件、文档索引与知识库运维操作。"]
+    end
+
+    subgraph L2["后端层 Backend"]
+        direction LR
+        BE1["FastAPI Runtime / API<br/>装配应用并暴露 chat、session、file、knowledge 等统一接口。"]
+        BE2["Scene Chat Service<br/>按会话绑定场景路由请求，并编排检索、回答生成与持久化。"]
+        BE3["Generic Assistant Scene<br/>面向通用文档问答，使用上传知识完成基础 RAG 对话。"]
+        BE4["Ecommerce Scene<br/>面向电商客服，聚合商品、评价、订单与文档知识能力。"]
+        BE5["Platform RAG & Knowledge<br/>提供通用检索、文档切块、索引管理与向量搜索能力。"]
+        BE6["Platform Memory<br/>管理会话状态、历史轮次与提示词上下文拼装。"]
+        BE7["Model Routing & LLM Client<br/>按任务复杂度选择模型，并统一封装模型调用。"]
+    end
+
+    subgraph L3["数据库层 Database"]
+        direction LR
+        DB1["SQLite Session DB<br/>持久化会话、聊天轮次与消息历史。"]
+        DB2["Uploaded Files Store<br/>保存上传的原始知识文件，作为索引构建输入。"]
+        DB3["Chroma Vector Store<br/>作为默认本地向量库，保存知识分块与检索索引。"]
+    end
+
+    subgraph L4["外部服务层 External Services"]
+        direction LR
+        EX1["DashScope / Qwen LLM API<br/>提供多档模型推理能力，支撑回答生成与复杂任务处理。"]
+        EX2["Elasticsearch Vector Store（可选）<br/>作为可替代的远程向量检索后端。"]
+    end
+
+    FE1 --> BE1
+    FE2 --> BE1
+
+    BE1 --> BE2
+    BE2 --> BE3
+    BE2 --> BE4
+    BE2 --> BE5
+    BE2 --> BE6
+    BE2 --> BE7
+
+    BE5 --> DB2
+    BE5 --> DB3
+    BE5 --> EX2
+    BE6 --> DB1
+    BE7 --> EX1
+
+    BE3 --> BE5
+    BE4 --> BE5
+    BE4 --> BE7
