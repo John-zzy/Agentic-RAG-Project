@@ -82,7 +82,7 @@
 
 当前缺口：
 
-- README 还没有体现数据接入、清洗、Chunk 策略和引用溯源等更完整的数据处理能力。
+- 还没有体现数据接入、清洗、Chunk 策略和引用溯源等更完整的数据处理能力。
 - 还缺少 `Hybrid Search`、`ReRank`、缓存、增量更新等工程化 RAG 优化能力。
 - 还缺少评测集、效果指标和可重复执行的 Evaluation Harness。
 - 还缺少错误样本沉淀、版本对比和数据回放形成的数据闭环。
@@ -206,6 +206,22 @@
 - 会话存储与聊天上下文
 - 通用知识文档处理
 - RAG 检索核心协议与实现
+
+其中 `backend/platform/knowledge` 现在已经把原来的聚合式文档服务拆成更小的职责单元：
+
+- `base/store.py`
+  - 保留 `KnowledgeRetriever` 和 `KnowledgeDocumentRepository` 两套接口
+  - provider 可以同时实现两套接口，但调用方按职责分别依赖
+- `documents/application_service.py`
+  - 负责注册文档、删除文档、重切块这些写流程
+- `documents/query_service.py`
+  - 负责文档列表、文档详情、文件索引状态聚合
+- `documents/publisher.py`
+  - 负责新版本发布、旧版本失活、失败恢复和清理新分块
+- `documents/mappers.py`
+  - 负责把仓储记录转换成摘要、详情和操作结果
+
+`backend/application/runtime/api/knowledge/routes.py` 也已经直接依赖拆分后的 `application service` 和 `query service`，不再通过旧的聚合服务中转。
 
 ### 2. Application
 
@@ -369,6 +385,7 @@ backend\.venv\Scripts\python.exe -m pytest backend\tests\test_chat_api.py -q -c 
 - 后端顶层代码以 `application / platform / scenes` 三层为核心组织方式
 - 修改架构、启动方式、环境变量或测试命令时，应同步更新 `README.md`、`AGENTS.md` 和 `backend/.env.example`
 - `__init__.py` 应保持轻量，避免在包初始化阶段引入运行时装配逻辑
+- 如果继续实现 `add-knowledge-processing-layer`，推荐直接把处理步骤挂到 `KnowledgeDocumentApplicationService` 和 `KnowledgeDocumentPublisher`，不要重新做一个聚合式文档服务
 
 ## 适用场景
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -7,9 +8,10 @@ import pytest
 
 from backend.platform.config.settings import AppSettings, VectorStoreConfig
 from backend.platform.knowledge.base.store import VectorStore, VectorStoreDocument, VectorStoreHealth
-from backend.platform.knowledge.documents.service import (
+from backend.platform.knowledge.documents import (
+    KnowledgeDocumentApplicationService,
     KnowledgeDocumentNotFoundError,
-    KnowledgeDocumentService,
+    KnowledgeDocumentQueryService,
     KnowledgeDocumentStoreError,
 )
 from backend.tests.test_support import tmp_path
@@ -22,6 +24,14 @@ from backend.platform.knowledge.documents import (
     validate_namespace,
     validate_source_path,
 )
+
+
+@dataclass(frozen=True)
+class SplitKnowledgeDocumentServices:
+    """明确区分读写职责，避免测试继续依赖已拆除的聚合服务。"""
+
+    application: KnowledgeDocumentApplicationService
+    query: KnowledgeDocumentQueryService
 
 
 class InMemoryDocumentStore(VectorStore):
@@ -220,15 +230,23 @@ def store(document_app_settings: AppSettings) -> InMemoryDocumentStore:
 
 
 @pytest.fixture
-def service(
+def split_services(
     document_app_settings: AppSettings,
     files_root: Path,
     store: InMemoryDocumentStore,
-) -> KnowledgeDocumentService:
-    return KnowledgeDocumentService(
-        app_settings=document_app_settings,
-        store=store,
-        files_root=files_root,
+) -> SplitKnowledgeDocumentServices:
+    # 这里让两个服务共享同一个内存仓储，才能真实覆盖“写后立即读”的协作路径。
+    return SplitKnowledgeDocumentServices(
+        application=KnowledgeDocumentApplicationService(
+            app_settings=document_app_settings,
+            repository=store,
+            files_root=files_root,
+        ),
+        query=KnowledgeDocumentQueryService(
+            app_settings=document_app_settings,
+            repository=store,
+            files_root=files_root,
+        ),
     )
 
 
@@ -344,10 +362,10 @@ def test_build_document_chunks_adds_trace_metadata_and_stable_chunk_ids(tmp_path
 
 
 def test_register_document_persists_document_record_and_chunks(
-    service: KnowledgeDocumentService,
+    split_services: SplitKnowledgeDocumentServices,
     store: InMemoryDocumentStore,
 ) -> None:
-    result = service.register_document(
+    result = split_services.application.register_document(
         namespace="faq",
         source_path="faq/returns.json",
         chunk_size=12,
@@ -362,7 +380,7 @@ def test_register_document_persists_document_record_and_chunks(
     assert result.chunk_count > 0
     assert len([chunk for chunk in store.chunks.values() if chunk["is_active"]]) == result.chunk_count
 
-    detail = service.get_document(result.document_id)
+    detail = split_services.query.get_document(result.document_id)
     assert detail.active_version == 1
     assert detail.source_path == "faq/returns.json"
     assert detail.chunk_size == 12
@@ -375,23 +393,23 @@ def test_default_service_reads_json_files_from_data_dir(document_app_settings: A
         encoding="utf-8",
     )
     store = InMemoryDocumentStore(document_app_settings)
-    service = KnowledgeDocumentService(
+    application_service = KnowledgeDocumentApplicationService(
         app_settings=document_app_settings,
-        store=store,
+        repository=store,
     )
 
-    result = service.register_document("faq", "orders.json", 12, 2, False)
+    result = application_service.register_document("faq", "orders.json", 12, 2, False)
 
     assert result.source_path == "orders.json"
     assert result.chunk_count > 0
 
 
 def test_repeated_register_reuses_document_id_and_overwrites_active_version_by_default(
-    service: KnowledgeDocumentService,
+    split_services: SplitKnowledgeDocumentServices,
     store: InMemoryDocumentStore,
 ) -> None:
-    first = service.register_document("faq", "faq/returns.json", 12, 2, False)
-    second = service.register_document("faq", "faq/returns.json", 8, 1, False)
+    first = split_services.application.register_document("faq", "faq/returns.json", 12, 2, False)
+    second = split_services.application.register_document("faq", "faq/returns.json", 8, 1, False)
 
     assert second.document_id == first.document_id
     assert second.document_version == 2
@@ -405,11 +423,16 @@ def test_repeated_register_reuses_document_id_and_overwrites_active_version_by_d
 
 
 def test_rechunk_document_keeps_previous_version_when_requested(
-    service: KnowledgeDocumentService,
+    split_services: SplitKnowledgeDocumentServices,
     store: InMemoryDocumentStore,
 ) -> None:
-    first = service.register_document("faq", "faq/returns.json", 12, 2, False)
-    second = service.rechunk_document(first.document_id, chunk_size=8, chunk_overlap=1, keep_version=True)
+    first = split_services.application.register_document("faq", "faq/returns.json", 12, 2, False)
+    second = split_services.application.rechunk_document(
+        first.document_id,
+        chunk_size=8,
+        chunk_overlap=1,
+        keep_version=True,
+    )
 
     assert second.document_version == 2
     assert second.active_version == 2
@@ -422,11 +445,11 @@ def test_rechunk_document_keeps_previous_version_when_requested(
 
 
 def test_register_document_keep_version_keeps_new_chunks_active(
-    service: KnowledgeDocumentService,
+    split_services: SplitKnowledgeDocumentServices,
     store: InMemoryDocumentStore,
 ) -> None:
-    first = service.register_document("faq", "faq/returns.json", 12, 2, False)
-    second = service.register_document("faq", "faq/returns.json", 8, 1, True)
+    first = split_services.application.register_document("faq", "faq/returns.json", 12, 2, False)
+    second = split_services.application.register_document("faq", "faq/returns.json", 8, 1, True)
 
     assert second.document_id == first.document_id
     assert second.active_version == 2
@@ -437,38 +460,94 @@ def test_register_document_keep_version_keeps_new_chunks_active(
 
 
 def test_list_documents_filters_namespace_and_excludes_deleted(
-    service: KnowledgeDocumentService,
+    split_services: SplitKnowledgeDocumentServices,
 ) -> None:
-    faq = service.register_document("faq", "faq/returns.json", 12, 2, False)
-    product = service.register_document("products", "products/laptop.json", 12, 2, False)
+    faq = split_services.application.register_document("faq", "faq/returns.json", 12, 2, False)
+    product = split_services.application.register_document("products", "products/laptop.json", 12, 2, False)
 
-    service.delete_document(faq.document_id)
+    split_services.application.delete_document(faq.document_id)
 
-    all_documents = service.list_documents()
-    product_documents = service.list_documents(namespace="products")
+    all_documents = split_services.query.list_documents()
+    product_documents = split_services.query.list_documents(namespace="products")
 
     assert [document.document_id for document in all_documents] == [product.document_id]
     assert [document.namespace for document in product_documents] == ["products"]
 
 
-def test_get_document_missing_raises_service_error(service: KnowledgeDocumentService) -> None:
-    with pytest.raises(KnowledgeDocumentNotFoundError, match="missing"):
-        service.get_document("missing")
-
-
-def test_delete_keeps_source_file_and_removes_document_from_default_paths(
-    service: KnowledgeDocumentService,
+def test_query_service_list_file_indexes_aggregates_file_status(
+    document_app_settings: AppSettings,
     files_root: Path,
     store: InMemoryDocumentStore,
 ) -> None:
-    result = service.register_document("faq", "faq/returns.json", 12, 2, False)
+    application_service = KnowledgeDocumentApplicationService(
+        app_settings=document_app_settings,
+        repository=store,
+        files_root=files_root,
+    )
+    query_service = KnowledgeDocumentQueryService(
+        app_settings=document_app_settings,
+        repository=store,
+        files_root=files_root,
+    )
+    application_service.register_document("faq", "faq/returns.json", 12, 2, False)
 
-    service.delete_document(result.document_id)
+    items = query_service.list_file_indexes()
+
+    assert [item.source_path for item in items] == ["products/laptop.json", "faq/returns.json"]
+    indexed_item = next(item for item in items if item.source_path == "faq/returns.json")
+    unindexed_item = next(item for item in items if item.source_path == "products/laptop.json")
+    assert indexed_item.indexed is True
+    assert indexed_item.namespace == "faq"
+    assert unindexed_item.indexed is False
+    assert unindexed_item.status == "unindexed"
+
+
+def test_application_service_and_query_service_can_be_used_independently(
+    document_app_settings: AppSettings,
+    files_root: Path,
+    store: InMemoryDocumentStore,
+) -> None:
+    application_service = KnowledgeDocumentApplicationService(
+        app_settings=document_app_settings,
+        repository=store,
+        files_root=files_root,
+    )
+    query_service = KnowledgeDocumentQueryService(
+        app_settings=document_app_settings,
+        repository=store,
+        files_root=files_root,
+    )
+
+    created = application_service.register_document("faq", "faq/returns.json", 12, 2, False)
+    detail = query_service.get_document(created.document_id)
+    deleted = application_service.delete_document(created.document_id)
+
+    assert detail.document_id == created.document_id
+    assert deleted.status == "deleted"
+    with pytest.raises(KnowledgeDocumentNotFoundError):
+        query_service.get_document(created.document_id)
+
+
+def test_get_document_missing_raises_service_error(
+    split_services: SplitKnowledgeDocumentServices,
+) -> None:
+    with pytest.raises(KnowledgeDocumentNotFoundError, match="missing"):
+        split_services.query.get_document("missing")
+
+
+def test_delete_keeps_source_file_and_removes_document_from_default_paths(
+    split_services: SplitKnowledgeDocumentServices,
+    files_root: Path,
+    store: InMemoryDocumentStore,
+) -> None:
+    result = split_services.application.register_document("faq", "faq/returns.json", 12, 2, False)
+
+    split_services.application.delete_document(result.document_id)
 
     assert (files_root / "faq" / "returns.json").exists()
-    assert service.list_documents() == []
+    assert split_services.query.list_documents() == []
     with pytest.raises(KnowledgeDocumentNotFoundError):
-        service.get_document(result.document_id)
+        split_services.query.get_document(result.document_id)
     assert all(
         chunk["is_active"] is False
         for chunk in store.chunks.values()
@@ -477,11 +556,11 @@ def test_delete_keeps_source_file_and_removes_document_from_default_paths(
 
 
 def test_rechunk_document_overwrites_old_active_version_by_default(
-    service: KnowledgeDocumentService,
+    split_services: SplitKnowledgeDocumentServices,
 ) -> None:
-    first = service.register_document("faq", "faq/returns.json", 20, 0, False)
+    first = split_services.application.register_document("faq", "faq/returns.json", 20, 0, False)
 
-    result = service.rechunk_document(first.document_id, chunk_size=8, chunk_overlap=1)
+    result = split_services.application.rechunk_document(first.document_id, chunk_size=8, chunk_overlap=1)
 
     assert result.document_version == 2
     assert result.active_version == 2
@@ -494,14 +573,14 @@ def test_register_document_records_failure_status_and_raises_clear_error(
     files_root: Path,
 ) -> None:
     failing_store = InMemoryDocumentStore(document_app_settings, fail_on_chunks=True)
-    service = KnowledgeDocumentService(
+    application_service = KnowledgeDocumentApplicationService(
         app_settings=document_app_settings,
-        store=failing_store,
+        repository=failing_store,
         files_root=files_root,
     )
 
     with pytest.raises(KnowledgeDocumentStoreError, match="chunk write failed"):
-        service.register_document("faq", "faq/returns.json", 12, 2, False)
+        application_service.register_document("faq", "faq/returns.json", 12, 2, False)
 
     record = next(iter(failing_store.documents.values()))
     assert record["status"] == "failed"
@@ -513,12 +592,19 @@ def test_rechunk_failure_preserves_previous_active_record_and_chunks(
     files_root: Path,
 ) -> None:
     store = FailsOnceOnChunksStore(document_app_settings)
-    service = KnowledgeDocumentService(
-        app_settings=document_app_settings,
-        store=store,
-        files_root=files_root,
+    split_services = SplitKnowledgeDocumentServices(
+        application=KnowledgeDocumentApplicationService(
+            app_settings=document_app_settings,
+            repository=store,
+            files_root=files_root,
+        ),
+        query=KnowledgeDocumentQueryService(
+            app_settings=document_app_settings,
+            repository=store,
+            files_root=files_root,
+        ),
     )
-    first = service.register_document("faq", "faq/returns.json", 12, 2, False)
+    first = split_services.application.register_document("faq", "faq/returns.json", 12, 2, False)
     active_v1_count = len(
         [
             chunk
@@ -531,9 +617,9 @@ def test_rechunk_failure_preserves_previous_active_record_and_chunks(
 
     store.fail_next_chunk_write = True
     with pytest.raises(KnowledgeDocumentStoreError, match="chunk write failed"):
-        service.rechunk_document(first.document_id, chunk_size=8, chunk_overlap=1)
+        split_services.application.rechunk_document(first.document_id, chunk_size=8, chunk_overlap=1)
 
-    detail = service.get_document(first.document_id)
+    detail = split_services.query.get_document(first.document_id)
     assert detail.status == "active"
     assert detail.active_version == 1
     assert [version.document_version for version in detail.versions] == [1]
@@ -553,12 +639,19 @@ def test_rechunk_publish_failure_preserves_previous_active_record_and_chunks(
     files_root: Path,
 ) -> None:
     store = FailsOnceOnRecordWriteStore(document_app_settings)
-    service = KnowledgeDocumentService(
-        app_settings=document_app_settings,
-        store=store,
-        files_root=files_root,
+    split_services = SplitKnowledgeDocumentServices(
+        application=KnowledgeDocumentApplicationService(
+            app_settings=document_app_settings,
+            repository=store,
+            files_root=files_root,
+        ),
+        query=KnowledgeDocumentQueryService(
+            app_settings=document_app_settings,
+            repository=store,
+            files_root=files_root,
+        ),
     )
-    first = service.register_document("faq", "faq/returns.json", 12, 2, False)
+    first = split_services.application.register_document("faq", "faq/returns.json", 12, 2, False)
     active_v1_count = len(
         [
             chunk
@@ -571,9 +664,9 @@ def test_rechunk_publish_failure_preserves_previous_active_record_and_chunks(
 
     store.fail_next_record_write = True
     with pytest.raises(KnowledgeDocumentStoreError, match="record write failed"):
-        service.rechunk_document(first.document_id, chunk_size=8, chunk_overlap=1)
+        split_services.application.rechunk_document(first.document_id, chunk_size=8, chunk_overlap=1)
 
-    detail = service.get_document(first.document_id)
+    detail = split_services.query.get_document(first.document_id)
     assert detail.status == "active"
     assert detail.active_version == 1
     assert [version.document_version for version in detail.versions] == [1]
@@ -593,12 +686,19 @@ def test_rechunk_deactivate_failure_restores_previous_record_and_chunks(
     files_root: Path,
 ) -> None:
     store = FailsOnceOnDeactivateStore(document_app_settings)
-    service = KnowledgeDocumentService(
-        app_settings=document_app_settings,
-        store=store,
-        files_root=files_root,
+    split_services = SplitKnowledgeDocumentServices(
+        application=KnowledgeDocumentApplicationService(
+            app_settings=document_app_settings,
+            repository=store,
+            files_root=files_root,
+        ),
+        query=KnowledgeDocumentQueryService(
+            app_settings=document_app_settings,
+            repository=store,
+            files_root=files_root,
+        ),
     )
-    first = service.register_document("faq", "faq/returns.json", 12, 2, False)
+    first = split_services.application.register_document("faq", "faq/returns.json", 12, 2, False)
     active_v1_count = store.count_chunks(
         document_id=first.document_id,
         document_version=1,
@@ -607,9 +707,9 @@ def test_rechunk_deactivate_failure_restores_previous_record_and_chunks(
 
     store.fail_next_deactivate = True
     with pytest.raises(KnowledgeDocumentStoreError, match="deactivate failed"):
-        service.rechunk_document(first.document_id, chunk_size=8, chunk_overlap=1)
+        split_services.application.rechunk_document(first.document_id, chunk_size=8, chunk_overlap=1)
 
-    detail = service.get_document(first.document_id)
+    detail = split_services.query.get_document(first.document_id)
     assert detail.status == "active"
     assert detail.active_version == 1
     assert [version.document_version for version in detail.versions] == [1]
@@ -630,43 +730,50 @@ def test_rechunk_cleanup_failure_does_not_mask_original_publish_error(
     files_root: Path,
 ) -> None:
     store = FailsOnceOnDeactivateStore(document_app_settings)
-    service = KnowledgeDocumentService(
-        app_settings=document_app_settings,
-        store=store,
-        files_root=files_root,
+    split_services = SplitKnowledgeDocumentServices(
+        application=KnowledgeDocumentApplicationService(
+            app_settings=document_app_settings,
+            repository=store,
+            files_root=files_root,
+        ),
+        query=KnowledgeDocumentQueryService(
+            app_settings=document_app_settings,
+            repository=store,
+            files_root=files_root,
+        ),
     )
-    first = service.register_document("faq", "faq/returns.json", 12, 2, False)
+    first = split_services.application.register_document("faq", "faq/returns.json", 12, 2, False)
 
     store.fail_next_deactivate = True
     store.fail_cleanup = True
     with pytest.raises(KnowledgeDocumentStoreError, match="deactivate failed") as exc_info:
-        service.rechunk_document(first.document_id, chunk_size=8, chunk_overlap=1)
+        split_services.application.rechunk_document(first.document_id, chunk_size=8, chunk_overlap=1)
 
     assert "cleanup failed" not in str(exc_info.value)
-    assert service.get_document(first.document_id).active_version == 1
+    assert split_services.query.get_document(first.document_id).active_version == 1
 
 
 def test_non_document_capable_store_errors_are_wrapped(
     document_app_settings: AppSettings,
 ) -> None:
-    service = KnowledgeDocumentService(
+    query_service = KnowledgeDocumentQueryService(
         app_settings=document_app_settings,
-        store=NonDocumentCapableStore(document_app_settings),
+        repository=NonDocumentCapableStore(document_app_settings),
     )
 
     with pytest.raises(KnowledgeDocumentStoreError, match="does not support document management"):
-        service.list_documents()
+        query_service.list_documents()
 
 
 def test_register_document_wraps_non_document_capable_store_error(
     document_app_settings: AppSettings,
     files_root: Path,
 ) -> None:
-    service = KnowledgeDocumentService(
+    application_service = KnowledgeDocumentApplicationService(
         app_settings=document_app_settings,
-        store=NonDocumentCapableStore(document_app_settings),
+        repository=NonDocumentCapableStore(document_app_settings),
         files_root=files_root,
     )
 
     with pytest.raises(KnowledgeDocumentStoreError, match="does not support document management"):
-        service.register_document("faq", "faq/returns.json", 12, 2, False)
+        application_service.register_document("faq", "faq/returns.json", 12, 2, False)

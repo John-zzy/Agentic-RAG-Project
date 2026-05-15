@@ -9,7 +9,13 @@ from uuid import uuid4
 import pytest
 
 from backend.platform.config.settings import AppSettings, VectorStoreConfig
-from backend.platform.knowledge.base.store import ElasticsearchVectorStore, VectorStoreDocument, VectorStoreFactory
+from backend.platform.knowledge.base.store import (
+    ElasticsearchVectorStore,
+    KnowledgeDocumentRepository,
+    KnowledgeRetriever,
+    VectorStoreDocument,
+    VectorStoreFactory,
+)
 from backend.tests.test_support import DATA_DIR
 import backend.platform.knowledge.base.store as store_module
 
@@ -273,6 +279,20 @@ def test_elasticsearch_store_initializes_indexes_and_healthcheck(monkeypatch: py
         fake_client.indices.mappings["ai-rag-products"]["properties"]["embedding"]["type"]
         == "dense_vector"
     )
+
+
+def test_factory_can_expose_elasticsearch_as_split_interfaces(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake_factory = FakeElasticsearchFactory()
+    monkeypatch.setattr(store_module, "Elasticsearch", fake_factory)
+    app_settings = build_elasticsearch_settings()
+
+    retriever = VectorStoreFactory.create_retriever(app_settings)
+    repository = VectorStoreFactory.create_document_repository(app_settings)
+
+    assert isinstance(retriever, KnowledgeRetriever)
+    assert isinstance(repository, KnowledgeDocumentRepository)
+    assert isinstance(retriever, ElasticsearchVectorStore)
+    assert isinstance(repository, ElasticsearchVectorStore)
 
 
 def test_elasticsearch_store_supports_dynamic_knowledge_source_namespaces() -> None:

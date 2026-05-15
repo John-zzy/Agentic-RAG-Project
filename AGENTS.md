@@ -77,6 +77,11 @@
   - SQLite 会话、轮次、消息历史持久化。
 - `knowledge/`
   - 通用知识文件读取、切块、索引管理、向量存储抽象。
+  - `base/store.py` 里已经拆出 `KnowledgeRetriever` 和 `KnowledgeDocumentRepository` 两套接口。
+  - `documents/application_service.py` 负责注册、删除、重切块这类写流程。
+  - `documents/query_service.py` 负责文档列表、详情和文件索引状态聚合查询。
+  - `documents/publisher.py` 负责新版本发布、旧版本失活、失败恢复和清理。
+  - `documents/mappers.py` 负责 DTO 映射，不要再把映射逻辑塞回应用服务。
 - `rag/`
   - 检索编排、Sufficiency 判断、Query Rewrite 等 Agentic RAG 核心协议。
 - `tools/`
@@ -205,6 +210,7 @@ backend\.venv\Scripts\python.exe -m pytest backend\tests\test_chat_api.py -q -c 
 - 避免大面积无关格式化 diff
 - 修改 `__init__.py` 时保持最小化，避免引入运行时依赖导致循环导入
 - 如果改动了架构、启动方式、环境变量或测试命令，要同步检查 `README.md`、`AGENTS.md`、`backend/.env.example`
+- 如果后续实现 `add-knowledge-processing-layer`，优先接到 `KnowledgeDocumentApplicationService` 和 `KnowledgeDocumentPublisher`，不要恢复聚合式文档服务
 
 ### 高频错误
 

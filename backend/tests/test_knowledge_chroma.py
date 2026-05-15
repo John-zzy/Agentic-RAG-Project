@@ -1,7 +1,13 @@
 import json
 
 from backend.platform.config.settings import AppSettings, VectorStoreConfig
-from backend.platform.knowledge.base.store import ChromaVectorStore, VectorStoreDocument, VectorStoreFactory
+from backend.platform.knowledge.base.store import (
+    ChromaVectorStore,
+    KnowledgeDocumentRepository,
+    KnowledgeRetriever,
+    VectorStoreDocument,
+    VectorStoreFactory,
+)
 from backend.tests.test_support import DATA_DIR, make_test_runtime_dir
 
 
@@ -51,6 +57,19 @@ def test_factory_defaults_to_chroma_on_startup() -> None:
     health = store.healthcheck()
     assert health.provider == "chroma"
     assert health.available is True
+
+
+def test_factory_can_expose_chroma_as_split_interfaces() -> None:
+    tmp_path = make_test_runtime_dir("knowledge-chroma-split-interfaces")
+    app_settings = build_test_settings(tmp_path)
+
+    retriever = VectorStoreFactory.create_retriever(app_settings)
+    repository = VectorStoreFactory.create_document_repository(app_settings)
+
+    assert isinstance(retriever, KnowledgeRetriever)
+    assert isinstance(repository, KnowledgeDocumentRepository)
+    assert isinstance(retriever, ChromaVectorStore)
+    assert isinstance(repository, ChromaVectorStore)
 
 
 def test_chroma_store_supports_upsert_search_and_delete() -> None:

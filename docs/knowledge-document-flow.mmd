@@ -1,0 +1,99 @@
+flowchart TB
+    %% 这张图把知识文档重构后的主业务流程和类调用关系放在一张图里，方便同时看接口入口、服务编排和底层仓储写入。
+    classDef entry fill:#EAF4FF,stroke:#2563EB,stroke-width:1.5px,color:#0F172A;
+    classDef api fill:#F3F4F6,stroke:#4B5563,stroke-width:1.5px,color:#111827;
+    classDef service fill:#EEF8EE,stroke:#2F855A,stroke-width:1.5px,color:#0F172A;
+    classDef domain fill:#FFF7E8,stroke:#C05621,stroke-width:1.5px,color:#0F172A;
+    classDef store fill:#FEF3C7,stroke:#D97706,stroke-width:1.5px,color:#78350F;
+    classDef provider fill:#FCE7F3,stroke:#BE185D,stroke-width:1.5px,color:#831843;
+    classDef rollback fill:#FEE2E2,stroke:#DC2626,stroke-width:2px,color:#7F1D1D;
+
+    APP["create_app<br/>把 KnowledgeDocumentApplicationService 和 KnowledgeDocumentQueryService 注入到 app.state"]:::entry
+
+    subgraph API["API 路由入口"]
+        direction TB
+        W1["POST /knowledge/documents<br/>register_knowledge_document"]:::api
+        W2["DELETE /knowledge/documents/{document_id}<br/>delete_knowledge_document"]:::api
+        W3["POST /knowledge/documents/{document_id}/rechunk<br/>rechunk_knowledge_document"]:::api
+        R1["GET /knowledge/documents<br/>list_knowledge_documents"]:::api
+        R2["GET /knowledge/documents/files<br/>list_knowledge_files"]:::api
+        R3["GET /knowledge/documents/{document_id}<br/>get_knowledge_document"]:::api
+    end
+
+    subgraph WRITE["写流程与删流程"]
+        direction TB
+        A1["KnowledgeDocumentApplicationService.register_document<br/>1. 校验 chunk_size 和 chunk_overlap<br/>2. 按顺序尝试 files_root 和 data_dir 读取源文件<br/>3. 调用 publisher.publish_new_version"]:::service
+        A2["KnowledgeDocumentApplicationService.delete_document<br/>1. 读取现有主记录<br/>2. 停用当前文档分块<br/>3. 软删除主记录<br/>4. 组装删除结果"]:::service
+        A3["KnowledgeDocumentApplicationService.rechunk_document<br/>1. 校验分块参数<br/>2. 读取现有主记录<br/>3. 重新读取原始文件<br/>4. 调用 publisher.publish_new_version"]:::service
+
+        P1["KnowledgeDocumentPublisher.publish_new_version<br/>1. build_document_id 计算 document_id<br/>2. 计算下一个 document_version<br/>3. build_document_chunks 生成新分块<br/>4. 组装 version 和 record"]:::domain
+        P2["KnowledgeDocumentPublisher 正式切换版本<br/>1. upsert_document_chunks 写入新分块<br/>2. upsert_document_record 切换主记录到新版本<br/>3. deactivate_document_chunks 停用旧版本分块"]:::domain
+        M1["KnowledgeDocumentMapper.to_operation_result<br/>把主记录和版本号转换成 API 响应"]:::service
+        RB["失败回滚分支<br/>1. 有旧版本时写回旧主记录<br/>2. 重新激活旧版本分块<br/>3. 首次建索引失败时写入 failed 主记录<br/>4. 删除这次新写入的分块<br/>5. 抛出 KnowledgeDocumentStoreError"]:::rollback
+    end
+
+    subgraph READ["读流程与文件索引视图"]
+        direction TB
+        Q1["KnowledgeDocumentQueryService.list_documents<br/>1. 校验 namespace<br/>2. 列出主记录<br/>3. mapper.to_summary 转成列表项"]:::service
+        Q2["KnowledgeDocumentQueryService.get_document<br/>1. 读取单个主记录<br/>2. 找不到时抛出 KnowledgeDocumentNotFoundError<br/>3. mapper.to_detail 转成详情"]:::service
+        Q3["KnowledgeDocumentQueryService.list_file_indexes<br/>1. 校验 namespace<br/>2. 读取主记录列表<br/>3. 用 source_path 建映射表<br/>4. 扫描上传目录全部受管文件<br/>5. 判断每个文件能不能建索引<br/>6. 输出 indexed 或 unindexed 摘要"]:::service
+        S1["KnowledgeManagedFileScanner.scan_files<br/>扫描 files_root 下的 json、txt、md、csv、pdf、docx、xlsx 文件"]:::domain
+        S2["KnowledgeManagedFileScanner.can_index<br/>只允许 json、txt、md、csv 进入索引流程"]:::domain
+        M2["KnowledgeDocumentMapper.to_summary / to_detail / to_indexed_file_summary / to_unindexed_file_summary"]:::service
+    end
+
+    subgraph STORE["仓储网关与底层提供者"]
+        direction TB
+        G1["KnowledgeDocumentRepositoryGateway<br/>统一调用仓储方法，并把 NotImplementedError 改成 KnowledgeDocumentStoreError"]:::store
+        F1["VectorStoreFactory.create_document_repository<br/>按配置创建 KnowledgeDocumentRepository"]:::store
+        F2["VectorStoreFactory.create_retriever<br/>按配置创建 KnowledgeRetriever"]:::store
+        I1["KnowledgeDocumentRepository 接口<br/>ensure_document_indexes / upsert_document_record / list_document_records / upsert_document_chunks / activate 或 deactivate_document_chunks"]:::store
+        I2["KnowledgeRetriever 接口<br/>search / upsert_documents / delete_documents / healthcheck"]:::store
+        V1["ChromaVectorStore<br/>用 collection 保存 documents 和 chunks"]:::provider
+        V2["ElasticsearchVectorStore<br/>用 documents 和 chunks 索引保存主记录和分块"]:::provider
+        ST1["EmbeddingStrategy<br/>把文本转换成向量"]:::provider
+        ST2["HybridRerankStrategy<br/>把向量结果和关键词结果重新排序"]:::provider
+    end
+
+    APP --> W1
+    APP --> W2
+    APP --> W3
+    APP --> R1
+    APP --> R2
+    APP --> R3
+
+    W1 --> A1
+    W2 --> A2
+    W3 --> A3
+    A1 --> P1
+    A3 --> P1
+    P1 --> P2
+    P2 --> G1
+    A2 --> G1
+    P2 --> M1
+    A2 --> M1
+    P2 -. 任一步失败后进入回滚 .-> RB
+    RB --> G1
+
+    R1 --> Q1
+    R2 --> Q3
+    R3 --> Q2
+    Q1 --> G1
+    Q2 --> G1
+    Q3 --> G1
+    Q3 --> S1
+    Q3 --> S2
+    Q1 --> M2
+    Q2 --> M2
+    Q3 --> M2
+
+    G1 --> I1
+    F1 --> I1
+    F2 --> I2
+    I1 --> V1
+    I1 --> V2
+    I2 --> V1
+    I2 --> V2
+    V1 --> ST1
+    V2 --> ST1
+    V2 --> ST2

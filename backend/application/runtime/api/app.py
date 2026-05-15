@@ -12,11 +12,16 @@ from backend.application.runtime.api.file.routes import router as file_router
 from backend.application.runtime.api.knowledge.routes import router as knowledge_document_router
 from backend.application.runtime.service import SceneChatService, create_chat_service
 from backend.platform.config.settings import settings
+from backend.platform.knowledge.documents import (
+    KnowledgeDocumentApplicationService,
+    KnowledgeDocumentQueryService,
+)
 
 
 def create_app(
     chat_service: SceneChatService | None = None,
-    knowledge_document_service: object | None = None,
+    knowledge_document_application_service: KnowledgeDocumentApplicationService | None = None,
+    knowledge_document_query_service: KnowledgeDocumentQueryService | None = None,
 ) -> FastAPI:
     """创建并配置 FastAPI 应用。"""
 
@@ -25,8 +30,11 @@ def create_app(
         """应用生命周期：注入配置与运行时服务。"""
         app.state.settings = settings
         app.state.chat_service = chat_service or create_chat_service()
-        if knowledge_document_service is not None:
-            app.state.knowledge_document_service = knowledge_document_service
+        # 知识文档路由只认拆分后的读写服务，这里不再回退到旧 facade。
+        if knowledge_document_application_service is not None:
+            app.state.knowledge_document_application_service = knowledge_document_application_service
+        if knowledge_document_query_service is not None:
+            app.state.knowledge_document_query_service = knowledge_document_query_service
         yield
 
     app = FastAPI(

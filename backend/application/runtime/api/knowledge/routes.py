@@ -15,16 +15,17 @@ from backend.application.runtime.api.knowledge.schemas import (
     KnowledgeFileIndexListResponse,
     KnowledgeFileIndexSummaryResponse,
 )
-from backend.platform.knowledge.documents.service import (
+from backend.platform.knowledge.documents import (
+    KnowledgeDocumentApplicationService,
     KnowledgeDocumentError,
     KnowledgeDocumentNotFoundError,
-    KnowledgeDocumentService,
+    KnowledgeDocumentQueryService,
     KnowledgeDocumentStoreError,
 )
 
 
-class KnowledgeDocumentServiceProtocol(Protocol):
-    """知识文档路由依赖协议。"""
+class KnowledgeDocumentApplicationServiceProtocol(Protocol):
+    """知识文档写路由依赖协议。"""
 
     def register_document(
         self,
@@ -34,15 +35,6 @@ class KnowledgeDocumentServiceProtocol(Protocol):
         chunk_overlap: int,
         keep_version: bool = False,
     ) -> object:
-        ...
-
-    def list_documents(self, namespace: str | None = None) -> list[object]:
-        ...
-
-    def list_file_indexes(self, namespace: str | None = None) -> list[object]:
-        ...
-
-    def get_document(self, document_id: str) -> object:
         ...
 
     def delete_document(self, document_id: str) -> object:
@@ -58,6 +50,19 @@ class KnowledgeDocumentServiceProtocol(Protocol):
         ...
 
 
+class KnowledgeDocumentQueryServiceProtocol(Protocol):
+    """知识文档读路由依赖协议。"""
+
+    def list_documents(self, namespace: str | None = None) -> list[object]:
+        ...
+
+    def list_file_indexes(self, namespace: str | None = None) -> list[object]:
+        ...
+
+    def get_document(self, document_id: str) -> object:
+        ...
+
+
 router = APIRouter(prefix="/knowledge/documents", tags=["knowledge-documents"])
 
 
@@ -67,7 +72,7 @@ def register_knowledge_document(
     request: Request,
 ) -> object:
     """注册知识文档并返回新版本。"""
-    service = _get_document_service(request)
+    service = _get_application_service(request)
     try:
         return service.register_document(
             namespace=payload.namespace,
@@ -86,7 +91,7 @@ def list_knowledge_documents(
     namespace: str | None = Query(default=None),
 ) -> KnowledgeDocumentListResponse:
     """列出知识文档。"""
-    service = _get_document_service(request)
+    service = _get_query_service(request)
     try:
         documents = service.list_documents(namespace=namespace)
     except Exception as exc:
@@ -102,7 +107,7 @@ def list_knowledge_files(
     namespace: str | None = Query(default=None),
 ) -> KnowledgeFileIndexListResponse:
     """按上传文件聚合索引状态。"""
-    service = _get_document_service(request)
+    service = _get_query_service(request)
     try:
         items = service.list_file_indexes(namespace=namespace)
     except Exception as exc:
@@ -115,7 +120,7 @@ def list_knowledge_files(
 @router.get("/{document_id}", response_model=KnowledgeDocumentDetailResponse)
 def get_knowledge_document(document_id: str, request: Request) -> object:
     """读取单个知识文档详情。"""
-    service = _get_document_service(request)
+    service = _get_query_service(request)
     try:
         return service.get_document(document_id)
     except Exception as exc:
@@ -125,7 +130,7 @@ def get_knowledge_document(document_id: str, request: Request) -> object:
 @router.delete("/{document_id}", response_model=KnowledgeDocumentDeleteResponse)
 def delete_knowledge_document(document_id: str, request: Request) -> object:
     """软删除知识文档。"""
-    service = _get_document_service(request)
+    service = _get_application_service(request)
     try:
         return service.delete_document(document_id)
     except Exception as exc:
@@ -139,7 +144,7 @@ def rechunk_knowledge_document(
     request: Request,
 ) -> object:
     """重建知识文档分块。"""
-    service = _get_document_service(request)
+    service = _get_application_service(request)
     try:
         return service.rechunk_document(
             document_id=document_id,
@@ -151,13 +156,13 @@ def rechunk_knowledge_document(
         _raise_document_http_error(exc)
 
 
-def _get_document_service(request: Request) -> KnowledgeDocumentServiceProtocol:
-    """从应用状态读取服务，缺失时懒加载。"""
-    service = getattr(request.app.state, "knowledge_document_service", None)
+def _get_application_service(request: Request) -> KnowledgeDocumentApplicationServiceProtocol:
+    """从应用状态读取写服务，缺失时才懒加载默认实现。"""
+    service = getattr(request.app.state, "knowledge_document_application_service", None)
     if service is not None:
         return service
     try:
-        service = KnowledgeDocumentService()
+        service = KnowledgeDocumentApplicationService()
     except Exception as exc:
         raise HTTPException(
             status_code=500,
@@ -166,7 +171,28 @@ def _get_document_service(request: Request) -> KnowledgeDocumentServiceProtocol:
                 "message": "Knowledge document backend is unavailable.",
             },
         ) from exc
-    request.app.state.knowledge_document_service = service
+    # 懒加载后缓存到应用状态，避免同一个进程里重复创建底层仓储对象。
+    request.app.state.knowledge_document_application_service = service
+    return service
+
+
+def _get_query_service(request: Request) -> KnowledgeDocumentQueryServiceProtocol:
+    """从应用状态读取读服务，缺失时才懒加载默认实现。"""
+    service = getattr(request.app.state, "knowledge_document_query_service", None)
+    if service is not None:
+        return service
+    try:
+        service = KnowledgeDocumentQueryService()
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "code": "KNOWLEDGE_DOCUMENT_STORE_ERROR",
+                "message": "Knowledge document backend is unavailable.",
+            },
+        ) from exc
+    # 读服务和写服务分开缓存，路由按职责各自取用，避免重新耦合成 facade。
+    request.app.state.knowledge_document_query_service = service
     return service
 
 

@@ -6,7 +6,7 @@ from pydantic import BaseModel
 
 from backend.platform.config.settings import AppSettings, settings
 from backend.platform.knowledge.base.store import (
-    SUPPORTED_NAMESPACES,
+    KnowledgeRetriever,
     VectorSearchResult,
     VectorStore,
     VectorStoreDocument,
@@ -28,11 +28,11 @@ class KnowledgeService:
     def __init__(
         self,
         app_settings: AppSettings | None = None,
-        store: VectorStore | None = None,
+        store: VectorStore | KnowledgeRetriever | None = None,
     ) -> None:
         """初始化知识服务并确保向量库命名空间可用。"""
         self.settings = app_settings or settings
-        self.store = store or VectorStoreFactory.create(self.settings)
+        self.store = store or VectorStoreFactory.create_retriever(self.settings)
         self.store.ensure_collections()
 
     def search(
@@ -116,10 +116,11 @@ class KnowledgeService:
 
     def _validate_namespace(self, namespace: str) -> None:
         """校验内置命名空间是否合法。"""
-        if namespace not in SUPPORTED_NAMESPACES:
+        supported_namespaces = tuple(self.settings.vector_store.knowledge_sources.keys())
+        if namespace not in supported_namespaces:
             raise ValueError(
                 f"Unsupported namespace '{namespace}'. "
-                f"Expected one of: {', '.join(SUPPORTED_NAMESPACES)}."
+                f"Expected one of: {', '.join(supported_namespaces)}."
             )
 
     def _validate_document_namespace(self, namespace: str) -> None:

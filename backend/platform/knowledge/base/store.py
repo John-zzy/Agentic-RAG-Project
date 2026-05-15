@@ -6,7 +6,7 @@ import math
 import re
 from abc import ABC, abstractmethod
 from collections import Counter
-from typing import Any, TypeVar, cast
+from typing import Any, Protocol, TypeVar, cast
 
 import chromadb
 from chromadb.api.models.Collection import Collection
@@ -50,12 +50,40 @@ class VectorStoreHealth(BaseModel):
     detail: str | None = None
 
 
+class EmbeddingStrategy(Protocol):
+    """定义文本转向量的统一入口。"""
+
+    def embed(self, text: str) -> list[float]:
+        """把一段文本转换成向量。"""
+
+
+class HybridRerankStrategy(Protocol):
+    """定义混合检索结果重排的统一入口。"""
+
+    def rank(
+        self,
+        *,
+        query: str,
+        vector_results: list["VectorSearchResult"],
+        keyword_results: list["VectorSearchResult"],
+        top_k: int,
+    ) -> list["VectorSearchResult"]:
+        """把向量结果和关键词结果重新排一遍顺序。"""
+
+
 class HybridSearchRanker:
     """融合向量检索与关键词检索结果，提升短问句与精确词命中能力。"""
 
-    def __init__(self, *, vector_weight: float = 0.65, keyword_weight: float = 0.35) -> None:
+    def __init__(
+        self,
+        *,
+        vector_weight: float = 0.65,
+        keyword_weight: float = 0.35,
+        embedder: "LocalHashingEmbedder | None" = None,
+    ) -> None:
         self.vector_weight = vector_weight
         self.keyword_weight = keyword_weight
+        self._embedder = embedder or LocalHashingEmbedder()
 
     def rank(
         self,
@@ -107,11 +135,11 @@ class HybridSearchRanker:
         if not documents:
             return {}
 
-        query_tokens = LocalHashingEmbedder()._tokenize(query.strip().lower())
+        query_tokens = self._embedder._tokenize(query.strip().lower())
         if not query_tokens:
             return {}
 
-        tokenized_documents = [LocalHashingEmbedder()._tokenize(document.strip().lower()) for document in documents]
+        tokenized_documents = [self._embedder._tokenize(document.strip().lower()) for document in documents]
         document_count = len(tokenized_documents)
         average_length = sum(len(tokens) for tokens in tokenized_documents) / document_count if document_count else 0.0
         if average_length == 0:
@@ -194,14 +222,15 @@ class LocalHashingEmbedder:
         return ascii_tokens + cjk_chars + ngrams
 
 
-class VectorStore(ABC):
-    """统一抽象不同向量后端的能力接口。"""
+class KnowledgeRetriever(ABC):
+    """只定义知识检索需要的方法，调用方不再依赖文档管理能力。"""
 
     def __init__(self, app_settings: AppSettings) -> None:
-        """初始化向量库基类配置与内置嵌入器。"""
+        """初始化检索基类配置，并把可替换策略对象挂进来。"""
         self.settings = app_settings
         self.config = app_settings.vector_store
-        self._embedder = LocalHashingEmbedder()
+        self._embedder: EmbeddingStrategy = self._create_embedder()
+        self._hybrid_ranker: HybridRerankStrategy = self._create_hybrid_ranker()
 
     @abstractmethod
     def ensure_collections(self) -> None:
@@ -228,6 +257,59 @@ class VectorStore(ABC):
     @abstractmethod
     def healthcheck(self) -> VectorStoreHealth:
         """返回向量后端可用性与连通性信息。"""
+
+    def _create_embedder(self) -> EmbeddingStrategy:
+        return LocalHashingEmbedder()
+
+    def _create_hybrid_ranker(self) -> HybridRerankStrategy:
+        return HybridSearchRanker(embedder=cast(LocalHashingEmbedder, self._embedder))
+
+    def resolve_namespace_config(self, namespace: str) -> VectorNamespaceConfig:
+        """解析命名空间对应的配置对象。"""
+        namespace_config = self.config.knowledge_sources.get(namespace)
+        if namespace_config is None:
+            supported_namespaces = ", ".join(sorted(self.config.knowledge_sources))
+            raise ValueError(
+                f"Unsupported namespace '{namespace}'. Expected one of: {supported_namespaces}."
+            )
+        return namespace_config
+
+    def iter_knowledge_source_namespaces(self) -> list[str]:
+        """返回当前配置声明的全部场景知识源命名空间。"""
+        return list(self.config.knowledge_sources.keys())
+
+    def build_embedding(self, text: str) -> list[float]:
+        """构建文本向量。"""
+        return self._embedder.embed(text)
+
+    def normalize_metadata(self, metadata: VectorMetadata) -> dict[str, MetadataValue]:
+        """将 metadata 规范化为后端可序列化的标量字典。"""
+        normalized: dict[str, MetadataValue] = {}
+        for key, value in metadata.items():
+            if isinstance(value, bool | str | int | float):
+                normalized[key] = value
+            elif value is not None:
+                normalized[key] = str(value)
+        return normalized
+
+    def rerank_hybrid_results(
+        self,
+        *,
+        query: str,
+        vector_results: list[VectorSearchResult],
+        keyword_results: list[VectorSearchResult],
+        top_k: int,
+    ) -> list[VectorSearchResult]:
+        return self._hybrid_ranker.rank(
+            query=query,
+            vector_results=vector_results,
+            keyword_results=keyword_results,
+            top_k=top_k,
+        )
+
+
+class KnowledgeDocumentRepository(ABC):
+    """只定义知识文档索引管理需要的方法。"""
 
     @abstractmethod
     def ensure_document_indexes(self) -> None:
@@ -274,48 +356,9 @@ class VectorStore(ABC):
         """按分块 ID 删除新写入但未发布的文档分块。"""
         return None
 
-    def resolve_namespace_config(self, namespace: str) -> VectorNamespaceConfig:
-        """解析命名空间对应的配置对象。"""
-        namespace_config = self.config.knowledge_sources.get(namespace)
-        if namespace_config is None:
-            supported_namespaces = ", ".join(sorted(self.config.knowledge_sources))
-            raise ValueError(
-                f"Unsupported namespace '{namespace}'. Expected one of: {supported_namespaces}."
-            )
-        return namespace_config
 
-    def iter_knowledge_source_namespaces(self) -> list[str]:
-        """返回当前配置声明的全部场景知识源命名空间。"""
-        return list(self.config.knowledge_sources.keys())
-
-    def build_embedding(self, text: str) -> list[float]:
-        """构建文本向量。"""
-        return self._embedder.embed(text)
-
-    def normalize_metadata(self, metadata: VectorMetadata) -> dict[str, MetadataValue]:
-        """将 metadata 规范化为后端可序列化的标量字典。"""
-        normalized: dict[str, MetadataValue] = {}
-        for key, value in metadata.items():
-            if isinstance(value, bool | str | int | float):
-                normalized[key] = value
-            elif value is not None:
-                normalized[key] = str(value)
-        return normalized
-
-    def rerank_hybrid_results(
-        self,
-        *,
-        query: str,
-        vector_results: list[VectorSearchResult],
-        keyword_results: list[VectorSearchResult],
-        top_k: int,
-    ) -> list[VectorSearchResult]:
-        return HybridSearchRanker().rank(
-            query=query,
-            vector_results=vector_results,
-            keyword_results=keyword_results,
-            top_k=top_k,
-        )
+class VectorStore(KnowledgeRetriever, KnowledgeDocumentRepository):
+    """兼容旧调用方的复合抽象，后续调用方应尽量依赖拆分后的接口。"""
 
 
 VectorStoreType = TypeVar("VectorStoreType", bound=VectorStore)
@@ -1082,6 +1125,19 @@ class VectorStoreFactory:
                 "Implement the provider and register it with VectorStoreFactory.register()."
             )
         return store_cls(resolved_settings)
+
+    @classmethod
+    def create_retriever(cls, app_settings: AppSettings | None = None) -> KnowledgeRetriever:
+        """创建检索接口实例，当前 provider 仍复用同一个对象。"""
+        return cls.create(app_settings)
+
+    @classmethod
+    def create_document_repository(
+        cls,
+        app_settings: AppSettings | None = None,
+    ) -> KnowledgeDocumentRepository:
+        """创建文档仓储接口实例，当前 provider 仍复用同一个对象。"""
+        return cls.create(app_settings)
 
 
 VectorStoreFactory.register("chroma", ChromaVectorStore)
