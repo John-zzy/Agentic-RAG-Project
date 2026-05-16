@@ -113,8 +113,8 @@
 - 主要入参：
   - Body `namespace`: 知识命名空间，必填。
   - Body `source_path`: 源文件路径，必填。
-  - Body `chunk_size`: 切块大小，必填，`> 0`。
-  - Body `chunk_overlap`: 切块重叠长度，必填，`>= 0` 且必须小于 `chunk_size`。
+  - Body `chunk_size`: 切块大小，可选，`> 0`；缺省时使用数据预处理模块默认值。
+  - Body `chunk_overlap`: 切块重叠长度，可选，`>= 0` 且必须小于 `chunk_size`；缺省时使用数据预处理模块默认值。
   - Body `keep_version`: 是否保留旧版本，默认 `false`。
 - 返回结构：
   - 文档详情字段：`document_id`、`namespace`、`source_path`、`status`、`active_version`、`chunk_count`、`updated_at`、`source_type`、`chunk_size`、`chunk_overlap`、`last_error`、`versions`。
@@ -159,8 +159,8 @@
 - 一句话说明：按新的切块参数重建指定知识文档的分块与索引版本。
 - 主要入参：
   - Path `document_id`: 文档 ID。
-  - Body `chunk_size`: 新切块大小，必填，`> 0`。
-  - Body `chunk_overlap`: 新切块重叠长度，必填，`>= 0` 且必须小于 `chunk_size`。
+  - Body `chunk_size`: 新切块大小，可选，`> 0`；缺省时使用数据预处理模块默认值。
+  - Body `chunk_overlap`: 新切块重叠长度，可选，`>= 0` 且必须小于 `chunk_size`；缺省时使用数据预处理模块默认值。
   - Body `keep_version`: 是否保留旧版本，默认 `false`。
 - 返回结构：
   - 与注册接口一致，返回最新文档详情和 `document_version`。

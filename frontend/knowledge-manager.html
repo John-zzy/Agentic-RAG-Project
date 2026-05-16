@@ -509,6 +509,13 @@
       background: var(--teal);
     }
 
+    .knowledge-button.ghost {
+      background: #f6fafc;
+      color: var(--text-muted);
+      border: 1px solid var(--line);
+      box-shadow: none;
+    }
+
     .knowledge-button.danger {
       background: var(--red-soft);
       color: var(--red);
@@ -734,6 +741,10 @@
       overflow-y: auto;
     }
 
+    .overlay-card.processing-card {
+      width: min(1420px, calc(100vw - 48px));
+    }
+
     .overlay-card.show {
       display: block;
     }
@@ -853,6 +864,257 @@
       padding: 0 28px 26px;
       display: grid;
       gap: 14px;
+    }
+
+    .processing-layout {
+      padding: 0 28px 26px;
+      display: grid;
+      grid-template-columns: minmax(320px, 0.88fr) minmax(420px, 1.2fr);
+      gap: 24px;
+    }
+
+    .processing-column {
+      display: grid;
+      align-content: start;
+      gap: 16px;
+    }
+
+    .processing-section {
+      padding: 16px;
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      background: #fbfdfe;
+    }
+
+    .processing-section h4 {
+      margin: 0 0 10px;
+      color: var(--text);
+      font-size: 15px;
+      font-weight: 800;
+    }
+
+    .processing-meta {
+      display: grid;
+      gap: 8px;
+      color: var(--text-muted);
+      font-size: 13px;
+      line-height: 1.55;
+    }
+
+    .processing-config-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+      margin-top: 12px;
+    }
+
+    .processing-config-grid .field {
+      min-width: 0;
+    }
+
+    .processing-config-card {
+      min-height: 84px;
+      padding: 12px 14px;
+      border-radius: 14px;
+      border: 1px solid #dce8ef;
+      background: #f7fbfd;
+    }
+
+    .processing-config-card span {
+      display: block;
+      margin-bottom: 8px;
+      color: var(--text-muted);
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .processing-config-card strong {
+      color: var(--text);
+      font-size: 24px;
+      font-weight: 800;
+    }
+
+    .processing-meta strong {
+      color: var(--text);
+    }
+
+    .processing-stats {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .processing-stat {
+      min-height: 76px;
+      padding: 12px;
+      border-radius: 14px;
+      border: 1px solid #dce8ef;
+      background: #f5f9fb;
+    }
+
+    .processing-stat span {
+      display: block;
+      margin-bottom: 8px;
+      color: var(--text-muted);
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .processing-stat strong {
+      color: var(--text);
+      font-size: 22px;
+      font-weight: 800;
+    }
+
+    .rule-list {
+      display: grid;
+      gap: 10px;
+    }
+
+    .rule-option {
+      display: grid;
+      grid-template-columns: 20px minmax(0, 1fr);
+      gap: 10px;
+      align-items: start;
+      padding: 10px 12px;
+      border: 1px solid #dce8ef;
+      border-radius: 14px;
+      background: #f7fbfd;
+    }
+
+    .rule-option input {
+      width: 16px;
+      height: 16px;
+      margin-top: 2px;
+      accent-color: var(--teal);
+    }
+
+    .rule-option strong {
+      display: block;
+      margin-bottom: 3px;
+      color: var(--text);
+      font-size: 13px;
+      font-weight: 800;
+    }
+
+    .rule-option span {
+      color: var(--text-muted);
+      font-size: 12px;
+      line-height: 1.5;
+    }
+
+    .warning-list {
+      display: grid;
+      gap: 8px;
+    }
+
+    .warning-item {
+      padding: 10px 12px;
+      border-radius: 14px;
+      border: 1px solid rgba(184, 119, 31, 0.26);
+      background: var(--amber-soft);
+      color: var(--amber);
+      font-size: 13px;
+      line-height: 1.55;
+    }
+
+    .warning-item.error {
+      border-color: rgba(211, 90, 72, 0.22);
+      background: var(--red-soft);
+      color: var(--red);
+    }
+
+    .preview-shell {
+      display: grid;
+      gap: 10px;
+    }
+
+    .preview-subtitle {
+      margin: -2px 0 8px;
+      color: var(--text-muted);
+      font-size: 13px;
+      line-height: 1.6;
+    }
+
+    .document-preview {
+      min-height: 280px;
+      max-height: 320px;
+      overflow: auto;
+      padding: 14px 16px;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: #ffffff;
+      color: var(--text);
+      white-space: pre-wrap;
+      word-break: break-word;
+      font: 13px/1.65 Consolas, "SFMono-Regular", monospace;
+    }
+
+    .chunk-preview-list {
+      display: grid;
+      gap: 12px;
+      max-height: 700px;
+      overflow: auto;
+      padding-right: 4px;
+    }
+
+    .chunk-preview-card {
+      padding: 16px 18px;
+      border-radius: 18px;
+      border: 1px solid var(--line);
+      background: #ffffff;
+      box-shadow: 0 6px 18px rgba(12, 39, 58, 0.04);
+    }
+
+    .chunk-preview-card header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+
+    .chunk-preview-card strong {
+      color: var(--teal);
+      font-size: 13px;
+      font-weight: 800;
+    }
+
+    .chunk-preview-card span {
+      display: inline-flex;
+      align-items: center;
+      min-height: 28px;
+      padding: 0 10px;
+      border: 1px solid #dce8ef;
+      border-radius: 10px;
+      background: #f7fbfd;
+      color: var(--text-muted);
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .chunk-preview-card pre {
+      margin: 0;
+      color: var(--text);
+      white-space: pre-wrap;
+      word-break: break-word;
+      font: 13px/1.65 Consolas, "SFMono-Regular", monospace;
+    }
+
+    .processing-actions {
+      display: flex;
+      justify-content: flex-end;
+      align-items: center;
+      gap: 12px;
+      padding: 0 28px 24px;
+      flex-wrap: wrap;
+    }
+
+    .processing-actions-primary {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
     }
 
     .detail-title {
@@ -1114,6 +1376,8 @@
 
       .detail-grid,
       .version-grid,
+      .processing-layout,
+      .processing-stats,
       .upload-grid,
       .signal-strip,
       .nav {
@@ -1126,6 +1390,7 @@
 
       .topbar-actions,
       .toolbar-inline,
+      .processing-actions,
       .upload-actions {
         width: 100%;
       }
@@ -1308,15 +1573,7 @@
                 </div>
                 <div class="field">
                   <label for="manualIndexButton">导入策略</label>
-                  <button id="manualIndexButton" class="knowledge-button secondary" type="button">上传后手动建索引</button>
-                </div>
-                <div class="field">
-                  <label for="chunkSizeInput">分块大小</label>
-                  <input id="chunkSizeInput" type="number" min="1" step="1" value="500" />
-                </div>
-                <div class="field">
-                  <label for="chunkOverlapInput">重叠长度</label>
-                  <input id="chunkOverlapInput" type="number" min="0" step="1" value="80" />
+                  <button id="manualIndexButton" class="knowledge-button secondary" type="button">上传后预处理确认</button>
                 </div>
               </div>
 
@@ -1325,7 +1582,7 @@
                 <button id="uploadButton" class="knowledge-button accent" type="button">确认导入</button>
               </div>
 
-              <div id="statusBox" class="knowledge-status">就绪。选择文件后上传，上传完成后再在列表中手动建索引。</div>
+              <div id="statusBox" class="knowledge-status">就绪。选择文件后上传，上传完成会进入数据预处理确认。</div>
             </div>
           </section>
 
@@ -1344,6 +1601,74 @@
               </div>
             </div>
           </aside>
+
+          <section id="processingCard" class="overlay-card processing-card" aria-label="数据预处理">
+            <div class="overlay-header">
+              <div>
+                <h3 id="processingTitle">数据预处理</h3>
+                <p id="processingSubtitle">上传后先确认清洗规则，预览无误后再入库。</p>
+              </div>
+              <div class="panel-header-actions">
+                <button id="hideProcessingButton" class="overlay-close" type="button" aria-label="关闭数据预处理">×</button>
+              </div>
+            </div>
+
+            <div class="processing-layout">
+              <div class="processing-column">
+                <section class="processing-section">
+                  <h4>文档信息</h4>
+                  <div id="processingMeta" class="processing-meta"></div>
+                  <div id="processingConfig" class="processing-config-grid">
+                    <div class="field">
+                      <label for="chunkSizeInput">分块大小</label>
+                      <input id="chunkSizeInput" type="number" min="1" step="1" value="500" />
+                    </div>
+                    <div class="field">
+                      <label for="chunkOverlapInput">重叠长度</label>
+                      <input id="chunkOverlapInput" type="number" min="0" step="1" value="80" />
+                    </div>
+                  </div>
+                </section>
+
+                <section class="processing-section">
+                  <h4>处理统计</h4>
+                  <div id="processingStats" class="processing-stats"></div>
+                </section>
+
+                <section class="processing-section">
+                  <h4>清洗规则</h4>
+                  <div id="processingRules" class="rule-list"></div>
+                </section>
+
+                <section class="processing-section">
+                  <h4>提示</h4>
+                  <div id="processingWarnings" class="warning-list"></div>
+                </section>
+              </div>
+
+              <div class="processing-column">
+                <section class="processing-section">
+                  <h4>清洗后分块预览</h4>
+                  <p class="preview-subtitle">清洗完成后，文档已分块，预览分块内容。</p>
+                  <div id="processedSamples" class="chunk-preview-list"></div>
+                </section>
+
+                <section class="processing-section">
+                  <h4>原始文档预览</h4>
+                  <div id="originalSamples" class="document-preview"></div>
+                </section>
+              </div>
+            </div>
+
+            <div class="processing-actions">
+              <div class="processing-actions-primary">
+                <button id="refreshPreviewButton" class="knowledge-button secondary" type="button">切分预览</button>
+                <button id="submitProcessingButton" class="knowledge-button accent" type="button">确认清洗并入库</button>
+                <button id="rechunkButton" class="knowledge-button secondary" type="button">仅重切块</button>
+              </div>
+              <button id="hideProcessingFooterButton" class="knowledge-button secondary" type="button">关闭</button>
+            </div>
+          </section>
         </div>
       </section>
     </section>
@@ -1379,9 +1704,24 @@
       manualIndexButton: document.getElementById("manualIndexButton"),
       hideImportButton: document.getElementById("hideImportButton"),
       hideDetailButton: document.getElementById("hideDetailButton"),
+      hideProcessingButton: document.getElementById("hideProcessingButton"),
       overlayStack: document.getElementById("overlayStack"),
       importCard: document.getElementById("importCard"),
       detailCardPanel: document.getElementById("detailCardPanel"),
+      processingCard: document.getElementById("processingCard"),
+      processingTitle: document.getElementById("processingTitle"),
+      processingSubtitle: document.getElementById("processingSubtitle"),
+      processingMeta: document.getElementById("processingMeta"),
+      processingConfig: document.getElementById("processingConfig"),
+      processingStats: document.getElementById("processingStats"),
+      processingRules: document.getElementById("processingRules"),
+      processingWarnings: document.getElementById("processingWarnings"),
+      originalSamples: document.getElementById("originalSamples"),
+      processedSamples: document.getElementById("processedSamples"),
+      refreshPreviewButton: document.getElementById("refreshPreviewButton"),
+      rechunkButton: document.getElementById("rechunkButton"),
+      submitProcessingButton: document.getElementById("submitProcessingButton"),
+      hideProcessingFooterButton: document.getElementById("hideProcessingFooterButton"),
       statusBox: document.getElementById("statusBox"),
       tableBody: document.getElementById("tableBody"),
       countLabel: document.getElementById("countLabel"),
@@ -1411,6 +1751,15 @@
       busy: false,
       selectedDocumentId: "",
       selectedDocument: null,
+      processing: {
+        mode: "",
+        sourcePath: "",
+        filename: "",
+        documentId: "",
+        document: null,
+        preview: null,
+        selectedRules: []
+      },
       pendingDelete: null
     };
 
@@ -1466,6 +1815,9 @@
         return "deleted";
       }
       if (["pending", "processing", "queued"].includes(value)) {
+        return "pending";
+      }
+      if (["awaiting_processing"].includes(value)) {
         return "pending";
       }
       if (["unsupported"].includes(value)) {
@@ -1539,9 +1891,16 @@
       refs.nextPageButton.disabled = isBusy;
       refs.createSpaceButton.disabled = isBusy;
       refs.manualIndexButton.disabled = isBusy;
+      refs.refreshPreviewButton.disabled = isBusy;
+      refs.rechunkButton.disabled = isBusy || state.processing.mode !== "rechunk";
+      refs.submitProcessingButton.disabled = isBusy;
+      refs.hideProcessingFooterButton.disabled = isBusy;
       refs.tableBody.querySelectorAll("button").forEach(function (button) {
         button.disabled = isBusy;
       });
+      if (!isBusy && refs.processingCard.classList.contains("show")) {
+        renderProcessingPreview();
+      }
     }
 
     function setStatus(message, tone) {
@@ -1552,12 +1911,13 @@
     function showImportCard() {
       refs.overlayStack.classList.add("show");
       refs.detailCardPanel.classList.remove("show");
+      refs.processingCard.classList.remove("show");
       refs.importCard.classList.add("show");
     }
 
     function hideImportCard() {
       refs.importCard.classList.remove("show");
-      if (!refs.detailCardPanel.classList.contains("show")) {
+      if (!refs.detailCardPanel.classList.contains("show") && !refs.processingCard.classList.contains("show")) {
         refs.overlayStack.classList.remove("show");
       }
     }
@@ -1565,12 +1925,27 @@
     function showDetailCard() {
       refs.overlayStack.classList.add("show");
       refs.importCard.classList.remove("show");
+      refs.processingCard.classList.remove("show");
       refs.detailCardPanel.classList.add("show");
     }
 
     function hideDetailCard() {
       refs.detailCardPanel.classList.remove("show");
-      if (!refs.importCard.classList.contains("show")) {
+      if (!refs.importCard.classList.contains("show") && !refs.processingCard.classList.contains("show")) {
+        refs.overlayStack.classList.remove("show");
+      }
+    }
+
+    function showProcessingCard() {
+      refs.overlayStack.classList.add("show");
+      refs.importCard.classList.remove("show");
+      refs.detailCardPanel.classList.remove("show");
+      refs.processingCard.classList.add("show");
+    }
+
+    function hideProcessingCard() {
+      refs.processingCard.classList.remove("show");
+      if (!refs.importCard.classList.contains("show") && !refs.detailCardPanel.classList.contains("show")) {
         refs.overlayStack.classList.remove("show");
       }
     }
@@ -1593,14 +1968,23 @@
       return data;
     }
 
-    function readChunkConfig() {
+    function readNamespaceConfig() {
       const namespace = refs.namespaceInput.value.trim();
-      const chunkSize = Number(refs.chunkSizeInput.value);
-      const chunkOverlap = Number(refs.chunkOverlapInput.value);
 
       if (!namespace) {
         throw new Error("请填写命名空间。");
       }
+
+      return {
+        namespace: namespace
+      };
+    }
+
+    function readProcessingConfig() {
+      const namespaceConfig = readNamespaceConfig();
+      const chunkSize = Number(refs.chunkSizeInput.value);
+      const chunkOverlap = Number(refs.chunkOverlapInput.value);
+
       if (!Number.isInteger(chunkSize) || chunkSize <= 0) {
         throw new Error("分块大小必须是正整数。");
       }
@@ -1612,7 +1996,7 @@
       }
 
       return {
-        namespace: namespace,
+        namespace: namespaceConfig.namespace,
         chunk_size: chunkSize,
         chunk_overlap: chunkOverlap
       };
@@ -1646,6 +2030,312 @@
       return '<span class="file-dot ' + normalizeStatus(item.status) + '"></span>';
     }
 
+    function getStatsValue(stats, key) {
+      return stats && typeof stats[key] === "number" ? stats[key] : 0;
+    }
+
+    function formatRules(rules) {
+      return Array.isArray(rules) && rules.length ? rules.join(", ") : "未选择";
+    }
+
+    function formatStats(stats) {
+      if (!stats) {
+        return "暂无";
+      }
+      return "记录 " + getStatsValue(stats, "raw_record_count") + " -> " + getStatsValue(stats, "processed_record_count")
+        + "，字符 " + getStatsValue(stats, "raw_char_count") + " -> " + getStatsValue(stats, "processed_char_count");
+    }
+
+    function findFileBySourcePath(sourcePath) {
+      return state.files.find(function (item) {
+        return item.source_path === sourcePath;
+      }) || null;
+    }
+
+    function isSupportedUpload(data) {
+      const path = String(data.source_path || data.filename || "").toLowerCase();
+      return [".json", ".txt", ".md", ".csv"].some(function (suffix) {
+        return path.endsWith(suffix);
+      });
+    }
+
+    function renderProcessingShell(message) {
+      refs.processingStats.innerHTML = '<div class="empty-card"><p class="empty-state">' + escapeHtml(message || "等待预览结果。") + "</p></div>";
+      refs.processingRules.innerHTML = '<div class="empty-card"><p class="empty-state">规则列表将在预览返回后显示。</p></div>';
+      refs.processingWarnings.innerHTML = '<div class="empty-card"><p class="empty-state">暂无提示。</p></div>';
+      refs.originalSamples.innerHTML = "暂无原始文档内容。";
+      refs.processedSamples.innerHTML = '<div class="empty-card"><p class="empty-state">暂无分块预览。</p></div>';
+    }
+
+    function renderProcessingMeta() {
+      const processing = state.processing;
+      const preview = processing.preview || {};
+      const document = processing.document || {};
+      const namespaceConfig = readNamespaceConfig();
+      refs.processingMeta.innerHTML =
+        '<span><strong>文件</strong> ' + escapeHtml(processing.filename || processing.sourcePath || document.source_path || "暂无") + "</span>" +
+        '<span><strong>来源</strong> ' + escapeHtml(processing.sourcePath || document.source_path || "暂无") + "</span>" +
+        '<span><strong>命名空间</strong> ' + escapeHtml(namespaceConfig.namespace) + "</span>" +
+        '<span><strong>类型</strong> ' + escapeHtml(preview.source_type || document.source_type || "待识别") + "</span>" +
+        '<span><strong>规则</strong> ' + escapeHtml(formatRules(processing.selectedRules)) + "</span>";
+    }
+
+    function renderProcessingStats(stats) {
+      refs.processingStats.innerHTML =
+        '<div class="processing-stat"><span>原始记录</span><strong>' + escapeHtml(getStatsValue(stats, "raw_record_count")) + "</strong></div>" +
+        '<div class="processing-stat"><span>处理后记录</span><strong>' + escapeHtml(getStatsValue(stats, "processed_record_count")) + "</strong></div>" +
+        '<div class="processing-stat"><span>移除记录</span><strong>' + escapeHtml(getStatsValue(stats, "removed_record_count")) + "</strong></div>" +
+        '<div class="processing-stat"><span>原始字符</span><strong>' + escapeHtml(getStatsValue(stats, "raw_char_count")) + "</strong></div>" +
+        '<div class="processing-stat"><span>处理后字符</span><strong>' + escapeHtml(getStatsValue(stats, "processed_char_count")) + "</strong></div>" +
+        '<div class="processing-stat"><span>字符压缩</span><strong>' + escapeHtml(getStatsValue(stats, "raw_char_count") ? Math.max(0, Math.round((1 - getStatsValue(stats, "processed_char_count") / getStatsValue(stats, "raw_char_count")) * 100)) : 0) + "%</strong></div>";
+    }
+
+    function renderRuleOptions(preview) {
+      const supportedRules = Array.isArray(preview.supported_rules) ? preview.supported_rules : [];
+      if (!supportedRules.length) {
+        refs.processingRules.innerHTML = '<div class="empty-card"><p class="empty-state">当前文件类型没有可用清洗规则。</p></div>';
+        return;
+      }
+      refs.processingRules.innerHTML = supportedRules.map(function (rule) {
+        const checked = state.processing.selectedRules.includes(rule.rule_id) ? " checked" : "";
+        return (
+          '<label class="rule-option">' +
+            '<input type="checkbox" data-rule-id="' + escapeHtml(rule.rule_id) + '"' + checked + " />" +
+            "<span><strong>" + escapeHtml(rule.display_name || rule.rule_id) + "</strong>" +
+            escapeHtml(rule.description || "") + "</span>" +
+          "</label>"
+        );
+      }).join("");
+    }
+
+    function renderWarnings(preview) {
+      const warnings = Array.isArray(preview.warnings) ? preview.warnings : [];
+      if (!warnings.length && preview.can_index !== false) {
+        refs.processingWarnings.innerHTML = '<div class="empty-card"><p class="empty-state">当前预览可入库。</p></div>';
+        return;
+      }
+      const canIndexWarning = preview.can_index === false
+        ? [{ severity: "error", code: "CANNOT_INDEX", message: "当前预览不可入库，请检查文件类型或规则设置。" }]
+        : [];
+      refs.processingWarnings.innerHTML = canIndexWarning.concat(warnings).map(function (warning) {
+        const severity = warning.severity === "error" ? " error" : "";
+        return '<div class="warning-item' + severity + '"><strong>' + escapeHtml(warning.code || "WARNING") + "</strong> " + escapeHtml(warning.message || "") + "</div>";
+      }).join("");
+    }
+
+    function renderDocumentPreview(samples) {
+      if (!Array.isArray(samples) || !samples.length) {
+        refs.originalSamples.textContent = "暂无原始文档内容。";
+        return;
+      }
+      refs.originalSamples.textContent = samples.map(function (sample) {
+        return sample.content || "";
+      }).join("\n\n");
+    }
+
+    function splitPreviewChunks(samples, chunkSize, chunkOverlap) {
+      if (!Array.isArray(samples) || !samples.length) {
+        return [];
+      }
+      if (!Number.isInteger(chunkSize) || chunkSize <= 0) {
+        return samples.slice();
+      }
+      if (!Number.isInteger(chunkOverlap) || chunkOverlap < 0 || chunkOverlap >= chunkSize) {
+        return samples.slice();
+      }
+
+      const allWithinSize = samples.every(function (sample) {
+        return (sample.content || "").length <= chunkSize;
+      });
+      if (allWithinSize) {
+        return samples.slice();
+      }
+
+      const step = chunkSize - chunkOverlap;
+      const normalizedText = samples.map(function (sample) {
+        return sample.content || "";
+      }).join("\n\n");
+      const baseSample = samples[0] || {};
+      const chunks = [];
+      let start = 0;
+      let sampleIndex = 0;
+
+      while (start < normalizedText.length) {
+        chunks.push({
+          sample_index: sampleIndex,
+          source_record_id: baseSample.source_record_id || "preview",
+          record_index: typeof baseSample.record_index === "number" ? baseSample.record_index : sampleIndex,
+          content: normalizedText.slice(start, start + chunkSize),
+          applied_rules: Array.isArray(baseSample.applied_rules) ? baseSample.applied_rules : [],
+          dropped: false
+        });
+        sampleIndex += 1;
+        start += step;
+      }
+
+      return chunks;
+    }
+
+    function renderChunkPreview(samples) {
+      const preview = state.processing.preview || {};
+      const resolvedSamples = splitPreviewChunks(
+        samples,
+        Number(preview.chunk_size),
+        Number(preview.chunk_overlap)
+      );
+
+      if (!resolvedSamples.length) {
+        refs.processedSamples.innerHTML = '<div class="empty-card"><p class="empty-state">暂无分块预览。</p></div>';
+        return;
+      }
+      refs.processedSamples.innerHTML = resolvedSamples.map(function (sample) {
+        return (
+          '<article class="chunk-preview-card">' +
+            "<header><strong>chunk " + escapeHtml(sample.sample_index + 1) + "</strong><span>" + escapeHtml((sample.content || "").length) + " 字符</span></header>" +
+            "<pre>" + escapeHtml(sample.content || "") + "</pre>" +
+          "</article>"
+        );
+      }).join("");
+    }
+
+    function renderProcessingPreview() {
+      const preview = state.processing.preview;
+      renderProcessingMeta();
+      if (!preview) {
+        renderProcessingShell("正在加载预处理预览...");
+        refs.submitProcessingButton.disabled = true;
+        return;
+      }
+
+      renderProcessingStats(preview.processing_stats);
+      renderRuleOptions(preview);
+      renderWarnings(preview);
+      renderDocumentPreview(preview.original_samples);
+      renderChunkPreview(preview.processed_samples);
+      refs.submitProcessingButton.disabled = state.busy || preview.can_index === false;
+      refs.rechunkButton.disabled = state.busy || state.processing.mode !== "rechunk";
+      refs.refreshPreviewButton.textContent = "重新预览";
+      refs.submitProcessingButton.textContent = state.processing.mode === "create" ? "确认清洗并入库" : "确认重处理";
+    }
+
+    async function refreshProcessingPreview() {
+      const processing = state.processing;
+      if (!processing.sourcePath) {
+        return;
+      }
+      try {
+        const payload = readProcessingConfig();
+        renderProcessingShell("正在加载预处理预览...");
+        setBusy(true);
+        const preview = await apiRequest("/knowledge/documents/preprocess-preview", {
+          method: "POST",
+          body: JSON.stringify({
+            namespace: payload.namespace,
+            source_path: processing.sourcePath,
+            chunk_size: payload.chunk_size,
+            chunk_overlap: payload.chunk_overlap,
+            processing_rules: processing.selectedRules
+          })
+        });
+        state.processing.preview = preview;
+        if (!state.processing.selectedRules.length && Array.isArray(preview.selected_rules) && preview.selected_rules.length) {
+          state.processing.selectedRules = preview.selected_rules.map(function (rule) {
+            return rule.rule_id;
+          });
+        }
+        renderProcessingPreview();
+        setStatus("预处理预览已刷新。", preview.can_index === false ? "error" : "ok");
+      } catch (error) {
+        state.processing.preview = null;
+        renderProcessingShell(error.message || "预览加载失败。");
+        setStatus(error.message || "预览加载失败", "error");
+      } finally {
+        setBusy(false);
+      }
+    }
+
+    async function openProcessingDialog(options) {
+      const mode = options.mode;
+      const document = options.document || null;
+      const sourcePath = options.sourcePath || (document && document.source_path) || "";
+      state.processing = {
+        mode: mode,
+        sourcePath: sourcePath,
+        filename: options.filename || (sourcePath.split("/").pop() || sourcePath),
+        documentId: options.documentId || (document && document.document_id) || "",
+        document: document,
+        preview: null,
+        selectedRules: Array.isArray(options.processingRules) ? options.processingRules.slice() : []
+      };
+
+      refs.processingTitle.textContent = mode === "create" ? "数据预处理" : "数据重处理";
+      refs.processingSubtitle.textContent = mode === "create"
+        ? "上传后先确认清洗规则，预览无误后再入库。"
+        : "沿用或调整清洗规则后生成新版本，也可以仅使用当前规则重切块。";
+      refs.refreshPreviewButton.textContent = "切分预览";
+      refs.rechunkButton.style.display = mode === "rechunk" ? "inline-flex" : "none";
+      refs.chunkSizeInput.value = String(document && document.chunk_size ? document.chunk_size : 500);
+      refs.chunkOverlapInput.value = String(document && document.chunk_overlap ? document.chunk_overlap : 80);
+      showProcessingCard();
+      renderProcessingPreview();
+      await refreshProcessingPreview();
+    }
+
+    async function submitProcessing(rechunkOnly) {
+      const processing = state.processing;
+      if (!processing.preview || processing.preview.can_index === false) {
+        setStatus("当前预览不可入库。", "error");
+        return;
+      }
+
+      try {
+        const payload = readProcessingConfig();
+        setBusy(true);
+        let document;
+        if (rechunkOnly) {
+          document = await apiRequest("/knowledge/documents/" + encodeURIComponent(processing.documentId) + "/rechunk", {
+            method: "POST",
+            body: JSON.stringify({
+              chunk_size: payload.chunk_size,
+              chunk_overlap: payload.chunk_overlap,
+              keep_version: true
+            })
+          });
+        } else if (processing.mode === "create") {
+          document = await apiRequest("/knowledge/documents", {
+            method: "POST",
+            body: JSON.stringify({
+              namespace: payload.namespace,
+              source_path: processing.sourcePath,
+              chunk_size: payload.chunk_size,
+              chunk_overlap: payload.chunk_overlap,
+              processing_rules: processing.selectedRules,
+              keep_version: false
+            })
+          });
+        } else {
+          document = await apiRequest("/knowledge/documents/" + encodeURIComponent(processing.documentId) + "/reprocess", {
+            method: "POST",
+            body: JSON.stringify({
+              chunk_size: payload.chunk_size,
+              chunk_overlap: payload.chunk_overlap,
+              processing_rules: processing.selectedRules,
+              keep_version: true
+            })
+          });
+        }
+
+        hideProcessingCard();
+        renderDetail(document);
+        await refreshFiles(false);
+        setStatus(rechunkOnly ? "重切块完成。" : "处理入库完成。", "ok");
+      } catch (error) {
+        setStatus(error.message || "处理失败", "error");
+      } finally {
+        setBusy(false);
+      }
+    }
+
     function renderList() {
       refs.countLabel.textContent = state.filtered.length + " 条记录";
 
@@ -1668,9 +2358,10 @@
 
         if (canViewDetail) {
           actionButtons.push('<button class="knowledge-button secondary" type="button" data-action="detail" data-document-id="' + escapeHtml(item.document_id) + '">详情</button>');
-          actionButtons.push('<button class="knowledge-button secondary" type="button" data-action="rebuild" data-document-id="' + escapeHtml(item.document_id) + '">重建</button>');
+          actionButtons.push('<button class="knowledge-button secondary" type="button" data-action="reprocess" data-document-id="' + escapeHtml(item.document_id) + '">重处理</button>');
+          actionButtons.push('<button class="knowledge-button secondary" type="button" data-action="rechunk" data-document-id="' + escapeHtml(item.document_id) + '">重切块</button>');
         } else if (canIndex) {
-          actionButtons.push('<button class="knowledge-button secondary" type="button" data-action="index" data-source-path="' + escapeHtml(item.source_path) + '">建索引</button>');
+          actionButtons.push('<button class="knowledge-button secondary" type="button" data-action="index" data-source-path="' + escapeHtml(item.source_path) + '">预处理</button>');
         }
 
         actionButtons.push('<button class="knowledge-button danger" type="button" data-action="delete-file" data-filename="' + escapeHtml(item.filename) + '" data-document-id="' + escapeHtml(item.document_id || "") + '">删除</button>');
@@ -1682,6 +2373,7 @@
               '<div class="file-copy">' +
                 '<strong title="' + escapeHtml(item.filename) + '">' + escapeHtml(item.filename) + '</strong>' +
                 '<span>' + escapeHtml(item.source_path) + " · " + escapeHtml(formatSize(item.file_size)) + "</span>" +
+                (item.can_index === false ? '<span>当前类型暂不支持处理入库。</span>' : "") +
                 (item.last_error ? '<span>' + escapeHtml(item.last_error) + "</span>" : "") +
               "</div>" +
             "</div>" +
@@ -1734,6 +2426,10 @@
           '<div class="detail-row"><strong>命名空间</strong><span>' + escapeHtml(document.namespace || "暂无") + "</span></div>" +
           '<div class="detail-row"><strong>分块参数</strong><span>' + escapeHtml(document.chunk_size || "-") + " / " + escapeHtml(document.chunk_overlap || "-") + "</span></div>" +
           '<div class="detail-row full"><strong>来源路径</strong><span>' + escapeHtml(document.source_path || "暂无") + "</span></div>" +
+          '<div class="detail-row"><strong>来源类型</strong><span>' + escapeHtml(document.source_type || "未知") + "</span></div>" +
+          '<div class="detail-row"><strong>处理规则</strong><span>' + escapeHtml(formatRules(document.processing_rules)) + "</span></div>" +
+          '<div class="detail-row"><strong>Provenance</strong><span>' + escapeHtml(document.provenance_enabled ? "已启用" : "未启用") + "</span></div>" +
+          '<div class="detail-row full"><strong>处理统计</strong><span>' + escapeHtml(formatStats(document.processing_stats)) + "</span></div>" +
           '<div class="detail-row"><strong>更新时间</strong><span>' + escapeHtml(formatDateTime(document.updated_at)) + "</span></div>" +
           '<div class="detail-row"><strong>分块总数</strong><span>' + escapeHtml(chunkCount) + "</span></div>" +
           '<div class="detail-row"><strong>最后错误</strong><span>' + escapeHtml(document.last_error || "暂无") + "</span></div>" +
@@ -1749,6 +2445,9 @@
                       '<div class="version-row"><strong>状态</strong><span>' + escapeHtml(version.status || "未知") + "</span></div>" +
                       '<div class="version-row"><strong>分块数量</strong><span>' + escapeHtml(version.chunk_count || 0) + "</span></div>" +
                       '<div class="version-row"><strong>分块参数</strong><span>' + escapeHtml(version.chunk_size || "-") + " / " + escapeHtml(version.chunk_overlap || "-") + "</span></div>" +
+                      '<div class="version-row"><strong>来源类型</strong><span>' + escapeHtml(version.source_type || "未知") + "</span></div>" +
+                      '<div class="version-row full"><strong>处理规则</strong><span>' + escapeHtml(formatRules(version.processing_rules)) + "</span></div>" +
+                      '<div class="version-row full"><strong>处理统计</strong><span>' + escapeHtml(formatStats(version.processing_stats)) + "</span></div>" +
                       '<div class="version-row"><strong>创建时间</strong><span>' + escapeHtml(formatDateTime(version.created_at)) + "</span></div>" +
                       '<div class="version-row full"><strong>错误信息</strong><span>' + escapeHtml(version.last_error || "暂无") + "</span></div>" +
                     "</div>" +
@@ -1823,6 +2522,14 @@
         hideImportCard();
         await refreshFiles(false);
         setStatus("文件上传成功：" + data.filename, "ok");
+        if (isSupportedUpload(data)) {
+          await openProcessingDialog({
+            mode: "create",
+            sourcePath: data.source_path,
+            filename: data.filename,
+            processingRules: []
+          });
+        }
       } catch (error) {
         setStatus(error.message || "上传失败", "error");
       } finally {
@@ -1832,46 +2539,31 @@
 
     async function indexFile(sourcePath) {
       try {
-        const payload = readChunkConfig();
-        setBusy(true);
-        setStatus("正在构建索引...", "");
-        await apiRequest("/knowledge/documents", {
-          method: "POST",
-          body: JSON.stringify({
-            namespace: payload.namespace,
-            source_path: sourcePath,
-            chunk_size: payload.chunk_size,
-            chunk_overlap: payload.chunk_overlap,
-            keep_version: false
-          })
+        const item = findFileBySourcePath(sourcePath);
+        await openProcessingDialog({
+          mode: "create",
+          sourcePath: sourcePath,
+          filename: item ? item.filename : "",
+          processingRules: []
         });
-        await refreshFiles(false);
-        setStatus("索引构建完成。", "ok");
       } catch (error) {
-        setStatus(error.message || "索引构建失败", "error");
-      } finally {
-        setBusy(false);
+        setStatus(error.message || "预处理打开失败", "error");
       }
     }
 
-    async function rebuildDocument(documentId) {
+    async function rebuildDocument(documentId, mode) {
       try {
-        const payload = readChunkConfig();
         setBusy(true);
-        setStatus("正在重建索引...", "");
-        const document = await apiRequest("/knowledge/documents/" + encodeURIComponent(documentId) + "/rechunk", {
-          method: "POST",
-          body: JSON.stringify({
-            chunk_size: payload.chunk_size,
-            chunk_overlap: payload.chunk_overlap,
-            keep_version: true
-          })
+        setStatus("正在加载文档处理配置...", "");
+        const document = await apiRequest("/knowledge/documents/" + encodeURIComponent(documentId));
+        await openProcessingDialog({
+          mode: mode || "reprocess",
+          documentId: documentId,
+          document: document,
+          processingRules: document.processing_rules || []
         });
-        renderDetail(document);
-        await refreshFiles(false);
-        setStatus("索引重建完成。", "ok");
       } catch (error) {
-        setStatus(error.message || "索引重建失败", "error");
+        setStatus(error.message || "处理配置加载失败", "error");
       } finally {
         setBusy(false);
       }
@@ -2000,8 +2692,10 @@
         const action = button.dataset.action;
         if (action === "detail") {
           loadDocumentDetail(button.dataset.documentId);
-        } else if (action === "rebuild") {
-          rebuildDocument(button.dataset.documentId);
+        } else if (action === "reprocess") {
+          rebuildDocument(button.dataset.documentId, "reprocess");
+        } else if (action === "rechunk") {
+          rebuildDocument(button.dataset.documentId, "rechunk");
         } else if (action === "index") {
           indexFile(button.dataset.sourcePath);
         } else if (action === "delete-file") {
@@ -2024,7 +2718,7 @@
         setStatus("请先在命名空间输入框填写新的空间名称，当前页面仅重构 UI，不新增后端建空间接口。", "");
       });
       refs.manualIndexButton.addEventListener("click", function () {
-        setStatus("导入后不会自动建索引，请在列表中按文件手动执行“建索引”或“重建”。", "");
+        setStatus("导入成功后会自动打开数据预处理弹窗，确认清洗结果后再入库。", "");
       });
       refs.hideImportButton.addEventListener("click", function () {
         hideImportCard();
@@ -2032,10 +2726,39 @@
       refs.hideDetailButton.addEventListener("click", function () {
         hideDetailCard();
       });
+      refs.hideProcessingButton.addEventListener("click", function () {
+        hideProcessingCard();
+      });
+      refs.hideProcessingFooterButton.addEventListener("click", function () {
+        hideProcessingCard();
+      });
+      refs.refreshPreviewButton.addEventListener("click", function () {
+        refreshProcessingPreview();
+      });
+      refs.submitProcessingButton.addEventListener("click", function () {
+        submitProcessing(false);
+      });
+      refs.rechunkButton.addEventListener("click", function () {
+        submitProcessing(true);
+      });
+      refs.processingRules.addEventListener("change", function (event) {
+        const input = event.target.closest("[data-rule-id]");
+        if (!input) {
+          return;
+        }
+        const ruleId = input.dataset.ruleId;
+        state.processing.selectedRules = Array.from(refs.processingRules.querySelectorAll("[data-rule-id]:checked")).map(function (item) {
+          return item.dataset.ruleId;
+        });
+        if (ruleId) {
+          refreshProcessingPreview();
+        }
+      });
       refs.overlayStack.addEventListener("click", function (event) {
         if (event.target === refs.overlayStack) {
           hideImportCard();
           hideDetailCard();
+          hideProcessingCard();
         }
       });
     }

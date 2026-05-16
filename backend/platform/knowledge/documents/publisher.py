@@ -8,6 +8,7 @@ from backend.platform.knowledge.documents.loader import build_document_id
 from backend.platform.knowledge.documents.models import DocumentStatus, KnowledgeDocumentStoreError
 from backend.platform.knowledge.documents.schemas import DocumentRecord
 from backend.platform.knowledge.documents.store_support import KnowledgeDocumentRepositoryGateway
+from backend.platform.knowledge.processing import process_document_records
 
 
 class KnowledgeDocumentPublisher:
@@ -25,14 +26,23 @@ class KnowledgeDocumentPublisher:
         chunk_overlap: int,
         keep_version: bool,
         existing_record: dict[str, object] | None,
+        processing_rules: list[str],
     ) -> tuple[dict[str, object], int]:
         normalized_source_path = records[0].source_path
         document_id = build_document_id(namespace=namespace, source_path=normalized_source_path)
         current_record = existing_record or self.repository_gateway.get_document_record(document_id)
         document_version = self._next_version(current_record)
         updated_at = self._now()
-        chunks = build_document_chunks(
+        processed_result = process_document_records(
+            namespace=namespace,
+            source_path=normalized_source_path,
             records=records,
+            processing_rules=processing_rules,
+        )
+        if not processed_result.can_index:
+            raise ValueError("No records remain after processing; indexing is disabled.")
+        chunks = build_document_chunks(
+            records=processed_result.records,
             document_id=document_id,
             document_version=document_version,
             updated_at=updated_at,
@@ -46,6 +56,10 @@ class KnowledgeDocumentPublisher:
             chunk_size=chunk_size,
             chunk_overlap=chunk_overlap,
             created_at=updated_at,
+            source_type=processed_result.source_type,
+            processing_rules=processed_result.processing_rules,
+            processing_stats=processed_result.processing_stats.model_dump(),
+            provenance_enabled=True,
         )
         record = self._build_record(
             current_record=current_record,
@@ -56,6 +70,10 @@ class KnowledgeDocumentPublisher:
             version=version,
             keep_version=keep_version,
             updated_at=updated_at,
+            source_type=processed_result.source_type,
+            processing_rules=processed_result.processing_rules,
+            processing_stats=processed_result.processing_stats.model_dump(),
+            provenance_enabled=True,
         )
         vector_chunks = [
             VectorStoreDocument(
@@ -113,6 +131,10 @@ class KnowledgeDocumentPublisher:
         chunk_size: int,
         chunk_overlap: int,
         created_at: str,
+        source_type: str,
+        processing_rules: list[str],
+        processing_stats: dict[str, object],
+        provenance_enabled: bool,
         last_error: str | None = None,
     ) -> dict[str, object]:
         return {
@@ -122,6 +144,10 @@ class KnowledgeDocumentPublisher:
             "chunk_size": chunk_size,
             "chunk_overlap": chunk_overlap,
             "created_at": created_at,
+            "source_type": source_type,
+            "processing_rules": processing_rules,
+            "processing_stats": processing_stats,
+            "provenance_enabled": provenance_enabled,
             "last_error": last_error,
         }
 
@@ -136,6 +162,10 @@ class KnowledgeDocumentPublisher:
         version: dict[str, object],
         keep_version: bool,
         updated_at: str,
+        source_type: str,
+        processing_rules: list[str],
+        processing_stats: dict[str, object],
+        provenance_enabled: bool,
     ) -> dict[str, object]:
         existing_versions = current_record.get("versions", []) if current_record else []
         versions = list(existing_versions) if keep_version and isinstance(existing_versions, list) else []
@@ -144,9 +174,12 @@ class KnowledgeDocumentPublisher:
         return {
             "document_id": document_id,
             "namespace": namespace,
-            "source_type": "json",
+            "source_type": source_type,
             "source_path": source_path,
             "status": "active",
+            "processing_rules": processing_rules,
+            "processing_stats": processing_stats,
+            "provenance_enabled": provenance_enabled,
             "active_version": active_version,
             "chunk_count": int(version["chunk_count"]),
             "chunk_size": int(version["chunk_size"]),

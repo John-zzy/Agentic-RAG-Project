@@ -9,7 +9,10 @@ from backend.application.runtime.api.knowledge.schemas import (
     KnowledgeDocumentDetailResponse,
     KnowledgeDocumentListResponse,
     KnowledgeDocumentOperationResponse,
+    KnowledgeDocumentPreprocessPreviewRequest,
+    KnowledgeDocumentPreprocessPreviewResponse,
     KnowledgeDocumentRechunkRequest,
+    KnowledgeDocumentReprocessRequest,
     KnowledgeDocumentRegisterRequest,
     KnowledgeDocumentSummaryResponse,
     KnowledgeFileIndexListResponse,
@@ -34,10 +37,31 @@ class KnowledgeDocumentApplicationServiceProtocol(Protocol):
         chunk_size: int,
         chunk_overlap: int,
         keep_version: bool = False,
+        processing_rules: list[str] | None = None,
+    ) -> object:
+        ...
+
+    def preprocess_preview(
+        self,
+        namespace: str,
+        source_path: str,
+        chunk_size: int,
+        chunk_overlap: int,
+        processing_rules: list[str] | None = None,
     ) -> object:
         ...
 
     def delete_document(self, document_id: str) -> object:
+        ...
+
+    def reprocess_document(
+        self,
+        document_id: str,
+        chunk_size: int,
+        chunk_overlap: int,
+        keep_version: bool = False,
+        processing_rules: list[str] | None = None,
+    ) -> object:
         ...
 
     def rechunk_document(
@@ -66,6 +90,25 @@ class KnowledgeDocumentQueryServiceProtocol(Protocol):
 router = APIRouter(prefix="/knowledge/documents", tags=["knowledge-documents"])
 
 
+@router.post("/preprocess-preview", response_model=KnowledgeDocumentPreprocessPreviewResponse)
+def preview_knowledge_document_preprocess(
+    payload: KnowledgeDocumentPreprocessPreviewRequest,
+    request: Request,
+) -> object:
+    """预览知识文档预处理结果。"""
+    service = _get_application_service(request)
+    try:
+        return service.preprocess_preview(
+            namespace=payload.namespace,
+            source_path=payload.source_path,
+            chunk_size=payload.resolved_chunk_size(),
+            chunk_overlap=payload.resolved_chunk_overlap(),
+            processing_rules=payload.processing_rules,
+        )
+    except Exception as exc:
+        _raise_document_http_error(exc)
+
+
 @router.post("", response_model=KnowledgeDocumentOperationResponse)
 def register_knowledge_document(
     payload: KnowledgeDocumentRegisterRequest,
@@ -77,9 +120,10 @@ def register_knowledge_document(
         return service.register_document(
             namespace=payload.namespace,
             source_path=payload.source_path,
-            chunk_size=payload.chunk_size,
-            chunk_overlap=payload.chunk_overlap,
+            chunk_size=payload.resolved_chunk_size(),
+            chunk_overlap=payload.resolved_chunk_overlap(),
             keep_version=payload.keep_version,
+            processing_rules=payload.processing_rules,
         )
     except Exception as exc:
         _raise_document_http_error(exc)
@@ -148,9 +192,29 @@ def rechunk_knowledge_document(
     try:
         return service.rechunk_document(
             document_id=document_id,
-            chunk_size=payload.chunk_size,
-            chunk_overlap=payload.chunk_overlap,
+            chunk_size=payload.resolved_chunk_size(),
+            chunk_overlap=payload.resolved_chunk_overlap(),
             keep_version=payload.keep_version,
+        )
+    except Exception as exc:
+        _raise_document_http_error(exc)
+
+
+@router.post("/{document_id}/reprocess", response_model=KnowledgeDocumentOperationResponse)
+def reprocess_knowledge_document(
+    document_id: str,
+    payload: KnowledgeDocumentReprocessRequest,
+    request: Request,
+) -> object:
+    """重跑知识文档预处理并生成新版本。"""
+    service = _get_application_service(request)
+    try:
+        return service.reprocess_document(
+            document_id=document_id,
+            chunk_size=payload.resolved_chunk_size(),
+            chunk_overlap=payload.resolved_chunk_overlap(),
+            keep_version=payload.keep_version,
+            processing_rules=payload.processing_rules,
         )
     except Exception as exc:
         _raise_document_http_error(exc)

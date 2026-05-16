@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+
+from backend.platform.knowledge.processing.schemas import ProcessingStats
 
 
 DocumentStatus = Literal["active", "failed", "deleted"]
@@ -20,6 +22,9 @@ class KnowledgeDocumentStoreError(KnowledgeDocumentError):
     """文档仓储读写失败。"""
 
 
+KnowledgeDocumentProcessingStats = ProcessingStats
+
+
 class KnowledgeDocumentVersionSummary(BaseModel):
     """单个文档版本摘要。"""
 
@@ -29,6 +34,10 @@ class KnowledgeDocumentVersionSummary(BaseModel):
     chunk_size: int
     chunk_overlap: int
     created_at: str
+    source_type: str = "json"
+    processing_rules: list[str] = Field(default_factory=list)
+    processing_stats: ProcessingStats | None = None
+    provenance_enabled: bool = False
     last_error: str | None = None
 
 
@@ -39,6 +48,10 @@ class KnowledgeDocumentSummary(BaseModel):
     namespace: str
     source_path: str
     status: DocumentStatus
+    source_type: str = "json"
+    processing_rules: list[str] = Field(default_factory=list)
+    processing_stats: ProcessingStats | None = None
+    provenance_enabled: bool = False
     active_version: int
     chunk_count: int
     updated_at: str
@@ -47,9 +60,12 @@ class KnowledgeDocumentSummary(BaseModel):
 class KnowledgeDocumentDetail(KnowledgeDocumentSummary):
     """文档详情。"""
 
-    source_type: str
+    source_type: str = "json"
     chunk_size: int
     chunk_overlap: int
+    processing_rules: list[str] = Field(default_factory=list)
+    processing_stats: ProcessingStats | None = None
+    provenance_enabled: bool = False
     last_error: str | None = None
     versions: list[KnowledgeDocumentVersionSummary]
 

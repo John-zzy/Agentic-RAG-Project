@@ -14,13 +14,23 @@ from backend.platform.knowledge.documents import (
     KnowledgeDocumentVersionSummary,
     KnowledgeFileIndexSummary,
 )
+from backend.platform.knowledge.processing.config import DEFAULT_PROCESSING_CHUNK_CONFIG
+from backend.platform.knowledge.processing.schemas import (
+    PreprocessPreview,
+    ProcessingRuleDefinition,
+    ProcessingSample,
+    ProcessingStats,
+    ProcessingWarning,
+)
 
 
 class FakeKnowledgeDocumentState:
     def __init__(self) -> None:
         self.documents: dict[str, KnowledgeDocumentOperationResult] = {}
         self.file_indexes: list[KnowledgeFileIndexSummary] = []
+        self.last_preview: dict[str, Any] | None = None
         self.last_register: dict[str, Any] | None = None
+        self.last_reprocess: dict[str, Any] | None = None
         self.last_rechunk: dict[str, Any] | None = None
         self.fail_store = False
         self.fail_unknown_methods: set[str] = set()
@@ -40,6 +50,7 @@ class FakeKnowledgeDocumentApplicationService:
         chunk_size: int,
         chunk_overlap: int,
         keep_version: bool = False,
+        processing_rules: list[str] | None = None,
     ) -> KnowledgeDocumentOperationResult:
         self.state.last_register = {
             "namespace": namespace,
@@ -47,6 +58,7 @@ class FakeKnowledgeDocumentApplicationService:
             "chunk_size": chunk_size,
             "chunk_overlap": chunk_overlap,
             "keep_version": keep_version,
+            "processing_rules": processing_rules or [],
         }
         if self.state.fail_store:
             raise KnowledgeDocumentStoreError("store unavailable")
@@ -64,10 +76,107 @@ class FakeKnowledgeDocumentApplicationService:
             document_version=document_version,
             chunk_size=chunk_size,
             chunk_overlap=chunk_overlap,
+            processing_rules=processing_rules or [],
             versions=versions,
         )
         self.state.documents[document_id] = result
         return result
+
+    def preprocess_preview(
+        self,
+        namespace: str,
+        source_path: str,
+        chunk_size: int,
+        chunk_overlap: int,
+        processing_rules: list[str] | None = None,
+    ) -> PreprocessPreview:
+        self.state.last_preview = {
+            "namespace": namespace,
+            "source_path": source_path,
+            "chunk_size": chunk_size,
+            "chunk_overlap": chunk_overlap,
+            "processing_rules": processing_rules or [],
+        }
+        if "preview" in self.state.fail_unknown_methods:
+            raise RuntimeError("secret backend preview failure")
+        if source_path.endswith(".pdf"):
+            return PreprocessPreview(
+                namespace=namespace,
+                source_path=source_path,
+                source_type="pdf",
+                chunk_size=chunk_size,
+                chunk_overlap=chunk_overlap,
+                can_index=False,
+                warnings=[
+                    ProcessingWarning(
+                        code="unsupported_source_type",
+                        message="Source type 'pdf' is not supported for processing or indexing yet.",
+                    )
+                ],
+            )
+        return PreprocessPreview(
+            namespace=namespace,
+            source_path=source_path,
+            source_type="md" if source_path.endswith(".md") else "json",
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
+            supported_rules=[
+                ProcessingRuleDefinition(
+                    rule_id="trim_whitespace",
+                    display_name="Trim Whitespace",
+                    description="Trim leading and trailing whitespace.",
+                    supported_source_types=["json", "csv", "txt", "md"],
+                    level="record",
+                )
+            ],
+            selected_rules=[
+                ProcessingRuleDefinition(
+                    rule_id="trim_whitespace",
+                    display_name="Trim Whitespace",
+                    description="Trim leading and trailing whitespace.",
+                    supported_source_types=["json", "csv", "txt", "md"],
+                    level="record",
+                )
+            ]
+            if "trim_whitespace" in (processing_rules or [])
+            else [],
+            processing_stats=ProcessingStats(
+                raw_record_count=2,
+                processed_record_count=1,
+                removed_record_count=1,
+                raw_char_count=42,
+                processed_char_count=21,
+            ),
+            original_samples=[
+                ProcessingSample(
+                    sample_index=0,
+                    source_record_id="r-0",
+                    record_index=0,
+                    content="  hello  ",
+                    content_hash="raw-hash",
+                )
+            ],
+            processed_samples=[
+                ProcessingSample(
+                    sample_index=0,
+                    source_record_id="r-0",
+                    record_index=0,
+                    content="hello world",
+                    content_hash="processed-hash-0",
+                    applied_rules=["trim_whitespace"],
+                ),
+                ProcessingSample(
+                    sample_index=1,
+                    source_record_id="r-0",
+                    record_index=0,
+                    content="orld",
+                    content_hash="processed-hash-1",
+                    applied_rules=["trim_whitespace"],
+                )
+            ],
+            can_index=True,
+            warnings=[],
+        )
 
     def delete_document(self, document_id: str) -> KnowledgeDocumentOperationResult:
         if "delete" in self.state.fail_unknown_methods:
@@ -110,6 +219,57 @@ class FakeKnowledgeDocumentApplicationService:
         self.state.documents[document_id] = result
         return result
 
+    def reprocess_document(
+        self,
+        document_id: str,
+        chunk_size: int,
+        chunk_overlap: int,
+        keep_version: bool = False,
+        processing_rules: list[str] | None = None,
+    ) -> KnowledgeDocumentOperationResult:
+        self.state.last_reprocess = {
+            "document_id": document_id,
+            "chunk_size": chunk_size,
+            "chunk_overlap": chunk_overlap,
+            "keep_version": keep_version,
+            "processing_rules": processing_rules or [],
+        }
+        if "reprocess" in self.state.fail_unknown_methods:
+            raise RuntimeError("secret backend reprocess failure")
+        current = self.state.documents.get(document_id)
+        if current is None:
+            raise KnowledgeDocumentNotFoundError(document_id)
+        document_version = current.document_version + 1
+        versions = [] if not keep_version else list(current.versions)
+        versions.append(
+            _version(
+                document_version,
+                chunk_size,
+                chunk_overlap,
+                processing_rules=processing_rules or [],
+            )
+        )
+        result = current.model_copy(
+            update={
+                "document_version": document_version,
+                "active_version": document_version,
+                "chunk_size": chunk_size,
+                "chunk_overlap": chunk_overlap,
+                "processing_rules": processing_rules or [],
+                "processing_stats": ProcessingStats(
+                    raw_record_count=2,
+                    processed_record_count=1,
+                    removed_record_count=1,
+                    raw_char_count=42,
+                    processed_char_count=21,
+                ),
+                "provenance_enabled": True,
+                "versions": versions,
+            }
+        )
+        self.state.documents[document_id] = result
+        return result
+
 
 class FakeKnowledgeDocumentQueryService:
     """只模拟读路径，测试路由是否正确拿 query service。"""
@@ -129,6 +289,10 @@ class FakeKnowledgeDocumentQueryService:
                 namespace=document.namespace,
                 source_path=document.source_path,
                 status=document.status,
+                source_type=document.source_type,
+                processing_rules=document.processing_rules,
+                processing_stats=document.processing_stats,
+                provenance_enabled=document.provenance_enabled,
                 active_version=document.active_version,
                 chunk_count=document.chunk_count,
                 updated_at=document.updated_at,
@@ -159,6 +323,7 @@ def _version(
     document_version: int,
     chunk_size: int,
     chunk_overlap: int,
+    processing_rules: list[str] | None = None,
 ) -> KnowledgeDocumentVersionSummary:
     return KnowledgeDocumentVersionSummary(
         document_version=document_version,
@@ -167,6 +332,16 @@ def _version(
         chunk_size=chunk_size,
         chunk_overlap=chunk_overlap,
         created_at="2026-05-07T00:00:00+00:00",
+        source_type="json",
+        processing_rules=processing_rules or [],
+        processing_stats=ProcessingStats(
+            raw_record_count=1,
+            processed_record_count=1,
+            removed_record_count=0,
+            raw_char_count=10,
+            processed_char_count=10,
+        ),
+        provenance_enabled=True,
     )
 
 
@@ -178,6 +353,7 @@ def _operation_result(
     document_version: int,
     chunk_size: int,
     chunk_overlap: int,
+    processing_rules: list[str] | None = None,
     versions: list[KnowledgeDocumentVersionSummary],
 ) -> KnowledgeDocumentOperationResult:
     return KnowledgeDocumentOperationResult(
@@ -189,6 +365,15 @@ def _operation_result(
         chunk_count=1,
         updated_at="2026-05-07T00:00:00+00:00",
         source_type="json",
+        processing_rules=processing_rules or [],
+        processing_stats=ProcessingStats(
+            raw_record_count=1,
+            processed_record_count=1,
+            removed_record_count=0,
+            raw_char_count=10,
+            processed_char_count=10,
+        ),
+        provenance_enabled=True,
         chunk_size=chunk_size,
         chunk_overlap=chunk_overlap,
         last_error=None,
@@ -250,6 +435,7 @@ def test_register_knowledge_document_returns_document_payload() -> None:
                 "source_path": "faq/returns.json",
                 "chunk_size": 120,
                 "chunk_overlap": 20,
+                "processing_rules": ["trim_whitespace"],
                 "keep_version": False,
             },
         )
@@ -263,8 +449,142 @@ def test_register_knowledge_document_returns_document_payload() -> None:
         "source_path": "faq/returns.json",
         "chunk_size": 120,
         "chunk_overlap": 20,
+        "processing_rules": ["trim_whitespace"],
         "keep_version": False,
     }
+    assert payload["processing_rules"] == ["trim_whitespace"]
+    assert payload["processing_stats"]["processed_record_count"] == 1
+    assert payload["provenance_enabled"] is True
+
+
+def test_register_knowledge_document_accepts_legacy_request_without_processing_rules() -> None:
+    state, application_service, query_service = _services()
+
+    with _client(application_service, query_service) as client:
+        response = client.post(
+            "/knowledge/documents",
+            json={
+                "namespace": "faq",
+                "source_path": "faq/returns.json",
+                "chunk_size": 120,
+                "chunk_overlap": 20,
+            },
+        )
+
+    assert response.status_code == 200
+    assert state.last_register == {
+        "namespace": "faq",
+        "source_path": "faq/returns.json",
+        "chunk_size": 120,
+        "chunk_overlap": 20,
+        "processing_rules": [],
+        "keep_version": False,
+    }
+    assert response.json()["processing_rules"] == []
+
+
+def test_register_knowledge_document_uses_processing_default_chunking_when_omitted() -> None:
+    state, application_service, query_service = _services()
+
+    with _client(application_service, query_service) as client:
+        response = client.post(
+            "/knowledge/documents",
+            json={
+                "namespace": "faq",
+                "source_path": "faq/returns.json",
+            },
+        )
+
+    assert response.status_code == 200
+    assert state.last_register == {
+        "namespace": "faq",
+        "source_path": "faq/returns.json",
+        "chunk_size": DEFAULT_PROCESSING_CHUNK_CONFIG.chunk_size,
+        "chunk_overlap": DEFAULT_PROCESSING_CHUNK_CONFIG.chunk_overlap,
+        "processing_rules": [],
+        "keep_version": False,
+    }
+
+
+def test_preview_knowledge_document_returns_processing_payload() -> None:
+    state, application_service, query_service = _services()
+
+    with _client(application_service, query_service) as client:
+        response = client.post(
+            "/knowledge/documents/preprocess-preview",
+            json={
+                "namespace": "faq",
+                "source_path": "faq/messy.md",
+                "chunk_size": 120,
+                "chunk_overlap": 20,
+                "processing_rules": ["trim_whitespace"],
+            },
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["source_type"] == "md"
+    assert payload["can_index"] is True
+    assert payload["chunk_size"] == 120
+    assert payload["chunk_overlap"] == 20
+    assert payload["selected_rules"][0]["rule_id"] == "trim_whitespace"
+    assert len(payload["processed_samples"]) == 2
+    assert payload["processed_samples"][0]["content"] == "hello world"
+    assert state.last_preview == {
+        "namespace": "faq",
+        "source_path": "faq/messy.md",
+        "chunk_size": 120,
+        "chunk_overlap": 20,
+        "processing_rules": ["trim_whitespace"],
+    }
+
+
+def test_preview_knowledge_document_uses_processing_default_chunking_when_omitted() -> None:
+    state, application_service, query_service = _services()
+
+    with _client(application_service, query_service) as client:
+        response = client.post(
+            "/knowledge/documents/preprocess-preview",
+            json={
+                "namespace": "faq",
+                "source_path": "faq/messy.md",
+                "processing_rules": [],
+            },
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["chunk_size"] == DEFAULT_PROCESSING_CHUNK_CONFIG.chunk_size
+    assert payload["chunk_overlap"] == DEFAULT_PROCESSING_CHUNK_CONFIG.chunk_overlap
+    assert state.last_preview == {
+        "namespace": "faq",
+        "source_path": "faq/messy.md",
+        "chunk_size": DEFAULT_PROCESSING_CHUNK_CONFIG.chunk_size,
+        "chunk_overlap": DEFAULT_PROCESSING_CHUNK_CONFIG.chunk_overlap,
+        "processing_rules": [],
+    }
+
+
+def test_preview_knowledge_document_for_unsupported_type_returns_warning() -> None:
+    _, application_service, query_service = _services()
+
+    with _client(application_service, query_service) as client:
+        response = client.post(
+            "/knowledge/documents/preprocess-preview",
+            json={
+                "namespace": "faq",
+                "source_path": "faq/manual.pdf",
+                "chunk_size": 120,
+                "chunk_overlap": 20,
+                "processing_rules": [],
+            },
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["source_type"] == "pdf"
+    assert payload["can_index"] is False
+    assert payload["warnings"][0]["code"] == "unsupported_source_type"
 
 
 def test_register_knowledge_document_rejects_invalid_chunk_params() -> None:
@@ -347,6 +667,8 @@ def test_get_knowledge_document_returns_detail() -> None:
     assert payload["document_id"] == created.document_id
     assert payload["versions"][0]["chunk_size"] == 120
     assert payload["last_error"] is None
+    assert payload["processing_stats"]["processed_record_count"] == 1
+    assert payload["provenance_enabled"] is True
 
 
 def test_get_knowledge_document_missing_returns_404() -> None:
@@ -354,6 +676,36 @@ def test_get_knowledge_document_missing_returns_404() -> None:
 
     with _client(application_service, query_service) as client:
         response = client.get("/knowledge/documents/missing")
+
+    assert response.status_code == 404
+    assert response.json()["detail"]["code"] == "KNOWLEDGE_DOCUMENT_NOT_FOUND"
+
+
+def test_reprocess_knowledge_document_missing_returns_404() -> None:
+    _, application_service, query_service = _services()
+
+    with _client(application_service, query_service) as client:
+        response = client.post(
+            "/knowledge/documents/missing/reprocess",
+            json={
+                "chunk_size": 80,
+                "chunk_overlap": 10,
+                "processing_rules": ["trim_whitespace"],
+            },
+        )
+
+    assert response.status_code == 404
+    assert response.json()["detail"]["code"] == "KNOWLEDGE_DOCUMENT_NOT_FOUND"
+
+
+def test_rechunk_knowledge_document_missing_returns_404() -> None:
+    _, application_service, query_service = _services()
+
+    with _client(application_service, query_service) as client:
+        response = client.post(
+            "/knowledge/documents/missing/rechunk",
+            json={"chunk_size": 80, "chunk_overlap": 10},
+        )
 
     assert response.status_code == 404
     assert response.json()["detail"]["code"] == "KNOWLEDGE_DOCUMENT_NOT_FOUND"
@@ -407,6 +759,36 @@ def test_rechunk_knowledge_document_can_keep_previous_version() -> None:
     assert response.status_code == 200
     payload = response.json()
     assert [version["document_version"] for version in payload["versions"]] == [1, 2]
+
+
+def test_reprocess_knowledge_document_updates_processing_rules() -> None:
+    state, application_service, query_service = _services()
+    created = application_service.register_document("faq", "faq/returns.json", 120, 20, False)
+
+    with _client(application_service, query_service) as client:
+        response = client.post(
+            f"/knowledge/documents/{created.document_id}/reprocess",
+            json={
+                "chunk_size": 80,
+                "chunk_overlap": 10,
+                "processing_rules": ["trim_whitespace", "remove_url_lines"],
+                "keep_version": True,
+            },
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["document_version"] == 2
+    assert payload["processing_rules"] == ["trim_whitespace", "remove_url_lines"]
+    assert payload["processing_stats"]["removed_record_count"] == 1
+    assert [version["document_version"] for version in payload["versions"]] == [1, 2]
+    assert state.last_reprocess == {
+        "document_id": created.document_id,
+        "chunk_size": 80,
+        "chunk_overlap": 10,
+        "keep_version": True,
+        "processing_rules": ["trim_whitespace", "remove_url_lines"],
+    }
 
 
 def test_store_errors_return_500_with_structured_detail() -> None:
@@ -467,12 +849,66 @@ def test_unknown_register_error_returns_structured_safe_500() -> None:
     }
 
 
+def test_preview_value_error_returns_structured_422() -> None:
+    state, application_service, query_service = _services()
+    state.fail_unknown_methods.clear()
+
+    original = application_service.preprocess_preview
+
+    def failing_preview(*args: Any, **kwargs: Any) -> PreprocessPreview:
+        raise ValueError("Unsupported source file type: faq/manual.exe")
+
+    application_service.preprocess_preview = failing_preview  # type: ignore[method-assign]
+    try:
+        with _client(application_service, query_service) as client:
+            response = client.post(
+                "/knowledge/documents/preprocess-preview",
+                json={
+                    "namespace": "faq",
+                    "source_path": "faq/manual.exe",
+                    "chunk_size": 120,
+                    "chunk_overlap": 20,
+                    "processing_rules": [],
+                },
+            )
+    finally:
+        application_service.preprocess_preview = original  # type: ignore[method-assign]
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == {
+        "code": "KNOWLEDGE_DOCUMENT_VALIDATION_ERROR",
+        "message": "Unsupported source file type: faq/manual.exe",
+    }
+
+
 def test_unknown_errors_return_structured_safe_500_for_read_write_routes() -> None:
     cases = [
+        (
+            "preview",
+            "post",
+            "/knowledge/documents/preprocess-preview",
+            {
+                "namespace": "faq",
+                "source_path": "faq/returns.json",
+                "chunk_size": 120,
+                "chunk_overlap": 20,
+                "processing_rules": [],
+            },
+        ),
         ("list", "get", "/knowledge/documents", None),
         ("files", "get", "/knowledge/documents/files", None),
         ("detail", "get", "/knowledge/documents/faq:returns", None),
         ("delete", "delete", "/knowledge/documents/faq:returns", None),
+        (
+            "reprocess",
+            "post",
+            "/knowledge/documents/faq:returns/reprocess",
+            {
+                "chunk_size": 80,
+                "chunk_overlap": 10,
+                "processing_rules": ["trim_whitespace"],
+            },
+        ),
         (
             "rechunk",
             "post",

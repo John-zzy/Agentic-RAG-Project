@@ -13,6 +13,7 @@ from backend.platform.knowledge.documents.models import (
 )
 from backend.platform.knowledge.documents.store_support import KnowledgeDocumentRepositoryGateway
 from backend.platform.knowledge.documents.validators import validate_namespace
+from backend.platform.knowledge.processing.provenance import normalize_source_type
 
 MANAGED_FILE_EXTENSIONS = {".json", ".txt", ".md", ".csv", ".pdf", ".docx", ".xlsx"}
 INDEXABLE_FILE_EXTENSIONS = {".json", ".txt", ".md", ".csv"}
@@ -33,7 +34,7 @@ class KnowledgeManagedFileScanner:
                 for path in self.files_root.rglob("*")
                 if path.is_file() and path.suffix.lower() in MANAGED_FILE_EXTENSIONS
             ),
-            key=lambda path: path.stat().st_ctime,
+            key=lambda path: (path.stat().st_ctime, path.as_posix()),
             reverse=True,
         )
 
@@ -88,11 +89,16 @@ class KnowledgeDocumentQueryService:
             record = document_by_path.get(relative_path)
             can_index = self.file_scanner.can_index(file_path)
             if record is None:
+                warning_message = None
+                source_type = normalize_source_type(relative_path)
+                if source_type in {"pdf", "docx", "xlsx"}:
+                    warning_message = f"当前文件类型 '{source_type}' 尚未接入处理与索引链路。"
                 summaries.append(
                     self.mapper.to_unindexed_file_summary(
                         file_path=file_path,
                         files_root=self.files_root,
                         can_index=can_index,
+                        warning_message=warning_message,
                     )
                 )
                 continue

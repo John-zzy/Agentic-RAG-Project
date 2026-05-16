@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 from pathlib import Path
 from typing import Any
 
@@ -10,6 +11,7 @@ from backend.platform.config.settings import AppSettings, VectorStoreConfig
 from backend.platform.knowledge.base.store import VectorStore, VectorStoreDocument, VectorStoreHealth
 from backend.platform.knowledge.documents import (
     KnowledgeDocumentApplicationService,
+    KnowledgeDocumentProcessor,
     KnowledgeDocumentNotFoundError,
     KnowledgeDocumentQueryService,
     KnowledgeDocumentStoreError,
@@ -18,6 +20,8 @@ from backend.tests.test_support import tmp_path
 from backend.platform.knowledge.documents import (
     build_document_chunks,
     build_document_id,
+    build_preprocess_preview,
+    process_document_records,
     build_source_record_id,
     load_document_records,
     validate_chunking,
@@ -216,6 +220,11 @@ def files_root(document_app_settings: AppSettings) -> Path:
         '[{"id":"r1","title":"退货政策","content":"7天无理由退货，保持包装完整。"}]',
         encoding="utf-8",
     )
+    (root / "faq" / "manual.pdf").write_text("fake-pdf", encoding="utf-8")
+    (root / "faq" / "messy.md").write_text(
+        "# Table of Contents\n\nhttps://example.com\n\n<div>退货政策</div>\n\n  7天无理由退货  \n",
+        encoding="utf-8",
+    )
     (root / "products").mkdir(parents=True, exist_ok=True)
     (root / "products" / "laptop.json").write_text(
         '[{"id":"p1","title":"轻薄本","description":"适合办公和会议。"}]',
@@ -327,10 +336,16 @@ def test_build_document_chunks_adds_trace_metadata_and_stable_chunk_ids(tmp_path
     source.parent.mkdir(parents=True, exist_ok=True)
     source.write_text('[{"id":"r1","title":"退货政策","content":"7天无理由退货，保持包装完整。"}]', encoding="utf-8")
     records = load_document_records(namespace="faq", source_path=source, data_root=tmp_path / "files")
+    processed = process_document_records(
+        namespace="faq",
+        source_path=records[0].source_path,
+        records=records,
+        processing_rules=[],
+    )
     document_id = build_document_id(namespace="faq", source_path=records[0].source_path)
 
     chunks = build_document_chunks(
-        records=records,
+        records=processed.records,
         document_id=document_id,
         document_version=1,
         updated_at="2026-05-06T12:00:00Z",
@@ -341,7 +356,7 @@ def test_build_document_chunks_adds_trace_metadata_and_stable_chunk_ids(tmp_path
     assert chunks
     assert chunks[0].chunk_id == chunks[0].metadata["chunk_id"]
     assert chunks[0].chunk_id == build_document_chunks(
-        records=records,
+        records=processed.records,
         document_id=document_id,
         document_version=1,
         updated_at="2026-05-06T12:00:00Z",
@@ -355,10 +370,109 @@ def test_build_document_chunks_adds_trace_metadata_and_stable_chunk_ids(tmp_path
         "source_type": "json",
         "source_path": "faq.json",
         "source_record_id": records[0].source_record_id,
+        "source_record_index": 0,
         "chunk_id": chunks[0].chunk_id,
         "chunk_index": 0,
+        "applied_rules": [],
+        "raw_content_hash": processed.records[0].raw_content_hash,
+        "processed_content_hash": processed.records[0].processed_content_hash,
         "updated_at": "2026-05-06T12:00:00Z",
+        "is_active": True,
     }
+
+
+def test_processing_pipeline_applies_rules_and_builds_preview(tmp_path: Path) -> None:
+    source = tmp_path / "files" / "faq.md"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text(
+        "# Table of Contents\n\nhttps://example.com\n\n<div>退货政策</div>\n\n  7天无理由退货  \n",
+        encoding="utf-8",
+    )
+    records = load_document_records(namespace="faq", source_path=source, data_root=tmp_path / "files")
+
+    preview = build_preprocess_preview(
+        namespace="faq",
+        source_path=records[0].source_path,
+        records=records,
+        chunk_size=12,
+        chunk_overlap=2,
+        processing_rules=[
+            "trim_whitespace",
+            "strip_html_tags",
+            "remove_url_lines",
+            "remove_markdown_boilerplate",
+        ],
+    )
+
+    assert preview.can_index is True
+    assert preview.source_type == "md"
+    assert [rule.rule_id for rule in preview.selected_rules] == [
+        "trim_whitespace",
+        "strip_html_tags",
+        "remove_url_lines",
+        "remove_markdown_boilerplate",
+    ]
+    assert preview.processing_stats is not None
+    assert preview.processing_stats.raw_record_count == 1
+    assert preview.processing_stats.processed_record_count == 1
+    assert preview.chunk_size == 12
+    assert preview.chunk_overlap == 2
+    assert "Table of Contents" not in preview.processed_samples[0].content
+    assert "https://example.com" not in preview.processed_samples[0].content
+    assert "<div>" not in preview.processed_samples[0].content
+
+
+def test_processing_pipeline_dedupes_and_drops_empty_records(tmp_path: Path) -> None:
+    source = tmp_path / "files" / "faq.json"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text(
+        json.dumps(
+                [
+                    {"title": "退货", "content": " 7天无理由 "},
+                    {"title": "退货", "content": "7天无理由"},
+                    {"content": "https://example.com"},
+                ],
+                ensure_ascii=False,
+            ),
+        encoding="utf-8",
+    )
+    records = load_document_records(namespace="faq", source_path=source, data_root=tmp_path / "files")
+
+    result = KnowledgeDocumentProcessor().process(
+        namespace="faq",
+        source_path=records[0].source_path,
+        records=records,
+        processing_rules=["trim_whitespace", "remove_url_lines", "drop_empty_records", "dedupe_records"],
+    )
+
+    assert result.can_index is True
+    assert result.processing_stats.raw_record_count == 3
+    assert result.processing_stats.processed_record_count == 1
+    assert result.processing_stats.removed_record_count == 2
+    assert len(result.records) == 1
+    assert any(warning.code == "dropped_duplicate_record" for warning in result.warnings)
+    assert any(warning.code == "dropped_empty_record" for warning in result.warnings)
+    kept_record = result.records[0]
+    assert kept_record.raw_content_hash
+    assert kept_record.processed_content_hash
+    assert kept_record.source_record_id == records[0].source_record_id
+
+
+def test_processing_pipeline_blocks_unsupported_rule_for_source_type(tmp_path: Path) -> None:
+    source = tmp_path / "files" / "faq.txt"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text("退货政策", encoding="utf-8")
+    records = load_document_records(namespace="faq", source_path=source, data_root=tmp_path / "files")
+
+    with pytest.raises(ValueError, match="remove_markdown_boilerplate"):
+        build_preprocess_preview(
+            namespace="faq",
+            source_path=records[0].source_path,
+            records=records,
+            chunk_size=12,
+            chunk_overlap=2,
+            processing_rules=["remove_markdown_boilerplate"],
+        )
 
 
 def test_register_document_persists_document_record_and_chunks(
@@ -385,6 +499,284 @@ def test_register_document_persists_document_record_and_chunks(
     assert detail.source_path == "faq/returns.json"
     assert detail.chunk_size == 12
     assert detail.chunk_overlap == 2
+    assert detail.processing_rules == []
+    assert detail.processing_stats is not None
+    assert detail.provenance_enabled is True
+
+
+def test_preprocess_preview_returns_supported_rules_and_processed_samples(
+    split_services: SplitKnowledgeDocumentServices,
+) -> None:
+    preview = split_services.application.preprocess_preview(
+        namespace="faq",
+        source_path="faq/messy.md",
+        chunk_size=12,
+        chunk_overlap=2,
+        processing_rules=[
+            "trim_whitespace",
+            "strip_html_tags",
+            "remove_url_lines",
+            "remove_markdown_boilerplate",
+        ],
+    )
+
+    assert preview.can_index is True
+    assert preview.source_type == "md"
+    assert preview.chunk_size == 12
+    assert preview.chunk_overlap == 2
+    assert [rule.rule_id for rule in preview.selected_rules] == [
+        "trim_whitespace",
+        "strip_html_tags",
+        "remove_url_lines",
+        "remove_markdown_boilerplate",
+    ]
+    assert len(preview.processed_samples) > 1
+    assert all(len(sample.content) <= 12 for sample in preview.processed_samples)
+    assert "Table of Contents" not in "".join(sample.content for sample in preview.processed_samples)
+
+
+def test_preprocess_preview_for_unsupported_type_returns_warning(
+    split_services: SplitKnowledgeDocumentServices,
+) -> None:
+    preview = split_services.application.preprocess_preview(
+        namespace="faq",
+        source_path="faq/manual.pdf",
+        chunk_size=12,
+        chunk_overlap=2,
+        processing_rules=[],
+    )
+
+    assert preview.can_index is False
+    assert preview.source_type == "pdf"
+    assert preview.warnings
+    assert preview.warnings[0].code == "unsupported_source_type"
+
+
+def test_reprocess_document_updates_processing_rules_and_stats(
+    split_services: SplitKnowledgeDocumentServices,
+    store: InMemoryDocumentStore,
+) -> None:
+    created = split_services.application.register_document("faq", "faq/messy.md", 12, 2, False)
+
+    updated = split_services.application.reprocess_document(
+        created.document_id,
+        chunk_size=12,
+        chunk_overlap=2,
+        keep_version=True,
+        processing_rules=[
+            "trim_whitespace",
+            "strip_html_tags",
+            "remove_url_lines",
+            "remove_markdown_boilerplate",
+        ],
+    )
+
+    assert updated.document_version == 2
+    assert updated.active_version == 2
+    assert updated.processing_rules == [
+        "trim_whitespace",
+        "strip_html_tags",
+        "remove_url_lines",
+        "remove_markdown_boilerplate",
+    ]
+    assert updated.processing_stats is not None
+    assert any(version.document_version == 1 for version in updated.versions)
+    assert store.count_chunks(document_id=created.document_id, document_version=1, is_active=True) == 0
+    assert store.count_chunks(document_id=created.document_id, document_version=2, is_active=True) > 0
+
+
+def test_register_document_publish_failure_records_failed_status_and_cleans_chunks(
+    document_app_settings: AppSettings,
+    files_root: Path,
+) -> None:
+    store = FailsOnceOnRecordWriteStore(document_app_settings)
+    application_service = KnowledgeDocumentApplicationService(
+        app_settings=document_app_settings,
+        repository=store,
+        files_root=files_root,
+    )
+    store.fail_next_record_write = True
+
+    with pytest.raises(KnowledgeDocumentStoreError, match="record write failed"):
+        application_service.register_document("faq", "faq/returns.json", 12, 2, False)
+
+    record = next(iter(store.documents.values()))
+    assert record["status"] == "failed"
+    assert record["last_error"] == "record write failed"
+    assert store.chunks == {}
+
+
+def test_reprocess_failure_preserves_previous_active_record_and_chunks(
+    document_app_settings: AppSettings,
+    files_root: Path,
+) -> None:
+    store = FailsOnceOnChunksStore(document_app_settings)
+    split_services = SplitKnowledgeDocumentServices(
+        application=KnowledgeDocumentApplicationService(
+            app_settings=document_app_settings,
+            repository=store,
+            files_root=files_root,
+        ),
+        query=KnowledgeDocumentQueryService(
+            app_settings=document_app_settings,
+            repository=store,
+            files_root=files_root,
+        ),
+    )
+    first = split_services.application.register_document("faq", "faq/returns.json", 12, 2, False)
+    active_v1_count = store.count_chunks(
+        document_id=first.document_id,
+        document_version=1,
+        is_active=True,
+    )
+
+    store.fail_next_chunk_write = True
+    with pytest.raises(KnowledgeDocumentStoreError, match="chunk write failed"):
+        split_services.application.reprocess_document(
+            first.document_id,
+            chunk_size=8,
+            chunk_overlap=1,
+            processing_rules=["trim_whitespace"],
+        )
+
+    detail = split_services.query.get_document(first.document_id)
+    assert detail.status == "active"
+    assert detail.active_version == 1
+    assert detail.processing_rules == []
+    assert [version.document_version for version in detail.versions] == [1]
+    assert store.count_chunks(
+        document_id=first.document_id,
+        document_version=1,
+        is_active=True,
+    ) == active_v1_count
+
+
+def test_reprocess_publish_failure_preserves_previous_active_record_and_chunks(
+    document_app_settings: AppSettings,
+    files_root: Path,
+) -> None:
+    store = FailsOnceOnRecordWriteStore(document_app_settings)
+    split_services = SplitKnowledgeDocumentServices(
+        application=KnowledgeDocumentApplicationService(
+            app_settings=document_app_settings,
+            repository=store,
+            files_root=files_root,
+        ),
+        query=KnowledgeDocumentQueryService(
+            app_settings=document_app_settings,
+            repository=store,
+            files_root=files_root,
+        ),
+    )
+    first = split_services.application.register_document("faq", "faq/returns.json", 12, 2, False)
+    active_v1_count = store.count_chunks(
+        document_id=first.document_id,
+        document_version=1,
+        is_active=True,
+    )
+
+    store.fail_next_record_write = True
+    with pytest.raises(KnowledgeDocumentStoreError, match="record write failed"):
+        split_services.application.reprocess_document(
+            first.document_id,
+            chunk_size=8,
+            chunk_overlap=1,
+            processing_rules=["trim_whitespace"],
+        )
+
+    detail = split_services.query.get_document(first.document_id)
+    assert detail.status == "active"
+    assert detail.active_version == 1
+    assert detail.processing_rules == []
+    assert [version.document_version for version in detail.versions] == [1]
+    assert store.count_chunks(
+        document_id=first.document_id,
+        document_version=1,
+        is_active=True,
+    ) == active_v1_count
+
+
+def test_reprocess_deactivate_failure_restores_previous_record_and_chunks(
+    document_app_settings: AppSettings,
+    files_root: Path,
+) -> None:
+    store = FailsOnceOnDeactivateStore(document_app_settings)
+    split_services = SplitKnowledgeDocumentServices(
+        application=KnowledgeDocumentApplicationService(
+            app_settings=document_app_settings,
+            repository=store,
+            files_root=files_root,
+        ),
+        query=KnowledgeDocumentQueryService(
+            app_settings=document_app_settings,
+            repository=store,
+            files_root=files_root,
+        ),
+    )
+    first = split_services.application.register_document("faq", "faq/returns.json", 12, 2, False)
+    active_v1_count = store.count_chunks(
+        document_id=first.document_id,
+        document_version=1,
+        is_active=True,
+    )
+
+    store.fail_next_deactivate = True
+    with pytest.raises(KnowledgeDocumentStoreError, match="deactivate failed"):
+        split_services.application.reprocess_document(
+            first.document_id,
+            chunk_size=8,
+            chunk_overlap=1,
+            processing_rules=["trim_whitespace"],
+        )
+
+    detail = split_services.query.get_document(first.document_id)
+    assert detail.status == "active"
+    assert detail.active_version == 1
+    assert detail.processing_rules == []
+    assert [version.document_version for version in detail.versions] == [1]
+    assert store.count_chunks(
+        document_id=first.document_id,
+        document_version=1,
+        is_active=True,
+    ) == active_v1_count
+    assert store.count_chunks(
+        document_id=first.document_id,
+        document_version=2,
+        is_active=True,
+    ) == 0
+
+
+def test_reprocess_cleanup_failure_does_not_mask_original_publish_error(
+    document_app_settings: AppSettings,
+    files_root: Path,
+) -> None:
+    store = FailsOnceOnDeactivateStore(document_app_settings)
+    split_services = SplitKnowledgeDocumentServices(
+        application=KnowledgeDocumentApplicationService(
+            app_settings=document_app_settings,
+            repository=store,
+            files_root=files_root,
+        ),
+        query=KnowledgeDocumentQueryService(
+            app_settings=document_app_settings,
+            repository=store,
+            files_root=files_root,
+        ),
+    )
+    first = split_services.application.register_document("faq", "faq/returns.json", 12, 2, False)
+
+    store.fail_next_deactivate = True
+    store.fail_cleanup = True
+    with pytest.raises(KnowledgeDocumentStoreError, match="deactivate failed") as exc_info:
+        split_services.application.reprocess_document(
+            first.document_id,
+            chunk_size=8,
+            chunk_overlap=1,
+            processing_rules=["trim_whitespace"],
+        )
+
+    assert "cleanup failed" not in str(exc_info.value)
+    assert split_services.query.get_document(first.document_id).active_version == 1
 
 
 def test_default_service_reads_json_files_from_data_dir(document_app_settings: AppSettings) -> None:
@@ -493,13 +885,21 @@ def test_query_service_list_file_indexes_aggregates_file_status(
 
     items = query_service.list_file_indexes()
 
-    assert [item.source_path for item in items] == ["products/laptop.json", "faq/returns.json"]
+    assert {item.source_path for item in items} == {
+        "products/laptop.json",
+        "faq/returns.json",
+        "faq/messy.md",
+        "faq/manual.pdf",
+    }
     indexed_item = next(item for item in items if item.source_path == "faq/returns.json")
     unindexed_item = next(item for item in items if item.source_path == "products/laptop.json")
+    unsupported_item = next(item for item in items if item.source_path == "faq/manual.pdf")
     assert indexed_item.indexed is True
     assert indexed_item.namespace == "faq"
     assert unindexed_item.indexed is False
-    assert unindexed_item.status == "unindexed"
+    assert unindexed_item.status == "awaiting_processing"
+    assert unsupported_item.status == "unsupported"
+    assert unsupported_item.last_error == "当前文件类型 'pdf' 尚未接入处理与索引链路。"
 
 
 def test_application_service_and_query_service_can_be_used_independently(
@@ -566,6 +966,35 @@ def test_rechunk_document_overwrites_old_active_version_by_default(
     assert result.active_version == 2
     assert result.chunk_count != first.chunk_count
     assert [version.document_version for version in result.versions] == [2]
+    assert result.processing_rules == []
+
+
+def test_rechunk_document_reuses_active_processing_rules(
+    split_services: SplitKnowledgeDocumentServices,
+) -> None:
+    first = split_services.application.register_document(
+        "faq",
+        "faq/messy.md",
+        20,
+        0,
+        False,
+        processing_rules=[
+            "trim_whitespace",
+            "strip_html_tags",
+            "remove_url_lines",
+            "remove_markdown_boilerplate",
+        ],
+    )
+
+    result = split_services.application.rechunk_document(first.document_id, chunk_size=8, chunk_overlap=1)
+
+    assert result.document_version == 2
+    assert result.processing_rules == [
+        "trim_whitespace",
+        "strip_html_tags",
+        "remove_url_lines",
+        "remove_markdown_boilerplate",
+    ]
 
 
 def test_register_document_records_failure_status_and_raises_clear_error(

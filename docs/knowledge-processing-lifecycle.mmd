@@ -1,0 +1,55 @@
+flowchart TB
+    classDef entry fill:#EAF4FF,stroke:#2563EB,stroke-width:1.5px,color:#0F172A;
+    classDef app fill:#EEF8EE,stroke:#2F855A,stroke-width:1.5px,color:#0F172A;
+    classDef process fill:#FFF7E8,stroke:#C05621,stroke-width:1.5px,color:#0F172A;
+    classDef store fill:#FEF3C7,stroke:#D97706,stroke-width:1.5px,color:#78350F;
+    classDef rollback fill:#FEE2E2,stroke:#DC2626,stroke-width:2px,color:#7F1D1D;
+
+    U["知识库管理页 / API 调用方"]:::entry
+
+    subgraph APP["Document Service Lifecycle 3.x"]
+        direction TB
+        A1["KnowledgeDocumentApplicationService.preprocess_preview<br/>1. 校验 chunk 参数<br/>2. 解析 source_path 实际位置<br/>3. 非首版类型直接走 warning preview<br/>4. 支持类型执行 load -> process -> preview"]:::app
+        A2["KnowledgeDocumentApplicationService.register_document<br/>1. 校验 chunk 参数<br/>2. 解析 source_path 实际位置<br/>3. load 原始记录<br/>4. publish_new_version"]:::app
+        A3["KnowledgeDocumentApplicationService.reprocess_document<br/>1. 读取活动文档记录<br/>2. 重新加载源文件<br/>3. 使用新 processing_rules 执行 publish_new_version"]:::app
+        A4["KnowledgeDocumentApplicationService.rechunk_document<br/>1. 读取活动文档记录<br/>2. 重新加载源文件<br/>3. 沿用活动版本 processing_rules<br/>4. 执行 publish_new_version"]:::app
+        A5["KnowledgeDocumentQueryService.list_file_indexes<br/>1. 扫描受管文件<br/>2. 可处理未入库文件标记 awaiting_processing<br/>3. pdf/docx/xlsx 标记 unsupported 并返回 warning"]:::app
+    end
+
+    subgraph PROCESS["Processing And Publish Pipeline"]
+        direction TB
+        P1["load_document_records<br/>按 json/csv/txt/md 读取原始 DocumentRecord"]:::process
+        P2["process_document_records<br/>normalize -> apply rules -> stats/warnings/samples -> ProcessedDocumentRecord"]:::process
+        P3["build_document_chunks<br/>仅消费 ProcessedDocumentRecord<br/>生成 provenance 完整的 chunk metadata"]:::process
+        P4["KnowledgeDocumentPublisher.publish_new_version<br/>1. 生成 document_id / document_version<br/>2. 写入新 chunk<br/>3. 切换主记录到新版本<br/>4. 失活旧活动 chunk"]:::process
+    end
+
+    subgraph STORE["Persistence And Rollback"]
+        direction TB
+        S1["document record<br/>source_type / processing_rules / processing_stats / provenance_enabled / versions"]:::store
+        S2["chunk store<br/>source_record_index / applied_rules / raw_content_hash / processed_content_hash / is_active"]:::store
+        R1["失败回滚<br/>1. 恢复旧主记录<br/>2. 恢复旧活动 chunk<br/>3. 首次失败写 failed record<br/>4. 清理新写入 chunk"]:::rollback
+    end
+
+    U --> A1
+    U --> A2
+    U --> A3
+    U --> A4
+    U --> A5
+
+    A1 --> P1
+    A1 --> P2
+    A2 --> P1
+    A2 --> P2
+    A3 --> P1
+    A3 --> P2
+    A4 --> P1
+    A4 --> P2
+
+    P2 --> P3
+    P3 --> P4
+    P4 --> S1
+    P4 --> S2
+    P4 -. 发布任一步失败 .-> R1
+    R1 --> S1
+    R1 --> S2

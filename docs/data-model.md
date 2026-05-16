@@ -356,8 +356,8 @@
 | --- | --- | --- | --- |
 | `namespace` | `str` | 必填 | 目标命名空间。 |
 | `source_path` | `str` | 必填 | 源文件路径。 |
-| `chunk_size` | `int` | `> 0` | 切块大小。 |
-| `chunk_overlap` | `int` | `>= 0` | 切块重叠长度，且必须小于 `chunk_size`。 |
+| `chunk_size` | `int \| null` | `> 0` | 切块大小；缺省时使用数据预处理模块默认值。 |
+| `chunk_overlap` | `int \| null` | `>= 0` | 切块重叠长度，且必须小于 `chunk_size`；缺省时使用数据预处理模块默认值。 |
 | `keep_version` | `bool` |  | 是否保留旧版本。 |
 
 ### 24. `KnowledgeDocumentRechunkRequest`
@@ -366,8 +366,8 @@
 
 | 字段 | 类型 | 约束 | 说明 |
 | --- | --- | --- | --- |
-| `chunk_size` | `int` | `> 0` | 新切块大小。 |
-| `chunk_overlap` | `int` | `>= 0` | 新切块重叠长度，且必须小于 `chunk_size`。 |
+| `chunk_size` | `int \| null` | `> 0` | 新切块大小；缺省时使用数据预处理模块默认值。 |
+| `chunk_overlap` | `int \| null` | `>= 0` | 新切块重叠长度，且必须小于 `chunk_size`；缺省时使用数据预处理模块默认值。 |
 | `keep_version` | `bool` |  | 是否保留旧版本。 |
 
 ### 25. `KnowledgeDocumentVersionResponse`

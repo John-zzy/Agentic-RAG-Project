@@ -13,6 +13,7 @@ from backend.platform.knowledge.documents.models import (
     KnowledgeDocumentError,
     KnowledgeDocumentNotFoundError,
     KnowledgeDocumentOperationResult,
+    KnowledgeDocumentProcessingStats,
     KnowledgeDocumentStoreError,
     KnowledgeDocumentSummary,
     KnowledgeDocumentVersionSummary,
@@ -24,6 +25,11 @@ from backend.platform.knowledge.documents.query_service import (
     KnowledgeManagedFileScanner,
 )
 from backend.platform.knowledge.documents.schemas import DocumentChunk, DocumentRecord
+from backend.platform.knowledge.processing import (
+    KnowledgeDocumentProcessor,
+    build_preprocess_preview,
+    process_document_records,
+)
 from backend.platform.knowledge.documents.store_support import KnowledgeDocumentRepositoryGateway
 from backend.platform.knowledge.documents.validators import (
     validate_chunking,
@@ -41,6 +47,7 @@ __all__ = [
     "KnowledgeDocumentMapper",
     "KnowledgeDocumentNotFoundError",
     "KnowledgeDocumentOperationResult",
+    "KnowledgeDocumentProcessingStats",
     "KnowledgeDocumentPublisher",
     "KnowledgeDocumentQueryService",
     "KnowledgeDocumentRepositoryGateway",
@@ -49,10 +56,13 @@ __all__ = [
     "KnowledgeDocumentVersionSummary",
     "KnowledgeFileIndexSummary",
     "KnowledgeManagedFileScanner",
+    "KnowledgeDocumentProcessor",
     "build_document_chunks",
     "build_document_id",
+    "build_preprocess_preview",
     "build_source_record_id",
     "load_document_records",
+    "process_document_records",
     "validate_chunking",
     "validate_namespace",
     "validate_source_path",
