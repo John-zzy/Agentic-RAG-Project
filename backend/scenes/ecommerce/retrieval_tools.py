@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +20,8 @@ from backend.platform.rag.core import RetrievalCitation, RetrievalResult, Retrie
 from backend.platform.tools import BaseJsonStore, ToolResult, build_structured_tool
 from backend.scenes.ecommerce.knowledge_service import KnowledgeService, create_knowledge_service
 from backend.scenes.ecommerce.loader import preload_knowledge_base
+
+logger = logging.getLogger(__name__)
 
 
 PRODUCTS_FILE_NAME = "products.json"
@@ -157,6 +160,14 @@ class SemanticRetrievalTool(RetrievalTool):
 
     def retrieve(self, query: str, *, run_manager: Any | None = None) -> RetrievalResult:
         """从指定知识库执行语义检索并返回标准化结果。"""
+        del run_manager
+        logger.info(
+            "Semantic retrieval started: tool=%s, namespace=%s, query=%r, top_k=%s",
+            self.name,
+            self.namespace,
+            query,
+            self.default_top_k,
+        )
         search_func = getattr(self.knowledge_service, self.search_method)
         vector_results = search_func(query=query, top_k=self.default_top_k)
         
@@ -164,13 +175,21 @@ class SemanticRetrievalTool(RetrievalTool):
             vector_results = _inject_named_product_match(query, vector_results, self.product_store)
         if self.namespace == "orders":
             vector_results = _rank_order_results(query, vector_results)
-        
-        return build_retrieval_result(
+
+        retrieval_result = build_retrieval_result(
             tool_name=self.name,
             namespace=self.namespace,
             query=query,
             vector_results=vector_results,
         )
+        logger.info(
+            "Semantic retrieval finished: tool=%s, namespace=%s, records=%s, confidence=%s",
+            self.name,
+            self.namespace,
+            len(retrieval_result.records),
+            retrieval_result.confidence,
+        )
+        return retrieval_result
 
 
 class KnowledgeDocumentSemanticRetrievalTool(RetrievalTool):
@@ -186,15 +205,29 @@ class KnowledgeDocumentSemanticRetrievalTool(RetrievalTool):
 
     def retrieve(self, query: str, *, run_manager: Any | None = None) -> RetrievalResult:
         """从文档分块索引中检索用户上传的知识。"""
+        del run_manager
+        logger.info(
+            "Document retrieval started: tool=%s, query=%r, top_k=%s",
+            self.name,
+            query,
+            self.default_top_k,
+        )
         vector_results = self.knowledge_service.search_document_chunks(query=query, top_k=self.default_top_k)
         vector_results = filter_managed_document_results(vector_results, files_root=self.files_root)
         vector_results = filter_low_relevance_document_results(vector_results)
-        return build_retrieval_result(
+        retrieval_result = build_retrieval_result(
             tool_name=self.name,
             namespace="documents",
             query=query,
             vector_results=vector_results,
         )
+        logger.info(
+            "Document retrieval finished: tool=%s, records=%s, confidence=%s",
+            self.name,
+            len(retrieval_result.records),
+            retrieval_result.confidence,
+        )
+        return retrieval_result
 
 
 def build_knowledge_document_retrieval_tool(
@@ -239,8 +272,11 @@ class InventoryLookupRetrievalTool(RetrievalTool):
 
     def retrieve(self, query: str, *, run_manager: Any | None = None) -> RetrievalResult:
         """按 product_id 查询库存信息。"""
+        del run_manager
+        logger.info("Inventory lookup started: tool=%s, product_id=%r", self.name, query.strip())
         product = self.product_store.find_product(query.strip())
         if product is None:
+            logger.warning("Inventory lookup missed: tool=%s, product_id=%r", self.name, query.strip())
             return RetrievalResult.fail(
                 tool_name=self.name,
                 query=query,
@@ -274,6 +310,7 @@ class InventoryLookupRetrievalTool(RetrievalTool):
             confidence=1.0,
             metadata={"namespace": "inventory", "result_count": 1},
         )
+        
 
 
 class ProductDetailLookupRetrievalTool(RetrievalTool):
@@ -287,8 +324,11 @@ class ProductDetailLookupRetrievalTool(RetrievalTool):
 
     def retrieve(self, query: str, *, run_manager: Any | None = None) -> RetrievalResult:
         """按 product_id 返回结构化详情。"""
+        del run_manager
+        logger.info("Product detail lookup started: tool=%s, product_id=%r", self.name, query.strip())
         product = self.product_store.find_product(query.strip())
         if product is None:
+            logger.warning("Product detail lookup missed: tool=%s, product_id=%r", self.name, query.strip())
             return RetrievalResult.fail(
                 tool_name=self.name,
                 query=query,

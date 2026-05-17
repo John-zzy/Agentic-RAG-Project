@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from langchain_core.runnables import RunnableConfig
@@ -35,6 +36,8 @@ ECOMMERCE_SYSTEM_PROMPT = (
     "Do not fabricate inventory, price, or order status details. "
     "If evidence is missing, say what is missing and ask the user for a product name, order id, or keyword."
 )
+
+logger = logging.getLogger(__name__)
 
 
 class EcommerceSufficiencyJudge(SufficiencyJudge):
@@ -130,6 +133,16 @@ class EcommerceSufficiencyJudge(SufficiencyJudge):
         preferred_ecommerce_tool = self._resolve_preferred_ecommerce_tool(
             normalized_query,
             plan.candidate_tools,
+        )
+        logger.info(
+            "Sufficiency judge evaluating: round=%s, current_tool=%s, result_count=%s, candidate_tools=%s, has_ecommerce_intent=%s, is_document_question=%s, has_document_evidence=%s",
+            plan.round_index,
+            current_tool,
+            result_count,
+            plan.candidate_tools,
+            has_ecommerce_intent,
+            is_document_question,
+            has_document_evidence,
         )
 
         if result_count == 0:
@@ -344,6 +357,11 @@ class EcommerceQueryRewriter(QueryRewriter):
         ).strip()
         if rewritten == lowered:
             rewritten = f"{query} product specs reviews documents"
+        logger.info(
+            "Query rewriter generated follow-up query: from=%r, to=%r",
+            query,
+            rewritten,
+        )
         return QueryRewrite(
             query=rewritten,
             reason="Broadened the query with product, review, and document terms for the next round.",

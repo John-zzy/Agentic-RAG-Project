@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from langchain_core.callbacks.manager import CallbackManagerForRetrieverRun
@@ -18,6 +19,8 @@ from backend.platform.rag.core import (
     SufficiencyDecision,
     SufficiencyJudge,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class RetrievalRound(RetrievalContext):
@@ -74,6 +77,13 @@ class AgenticRetriever(BaseRetriever):
         self._validate_tools()
         resolved_candidate_tools = self._resolve_candidate_tools(candidate_tools)
         initial_tool = self._resolve_initial_tool(selected_tool, resolved_candidate_tools)
+        logger.info(
+            "Agentic retrieval started: query=%r, initial_tool=%s, candidate_tools=%s, max_rounds=%s",
+            query,
+            initial_tool,
+            resolved_candidate_tools,
+            self.max_rounds,
+        )
         current_plan = RetrievalPlan(
             user_query=query,
             active_query=query,
@@ -88,12 +98,46 @@ class AgenticRetriever(BaseRetriever):
         documents: list[Document] = []
 
         while True:
+            logger.info(
+                "Retrieval round %s/%s: tool=%s, query=%r, attempted_tools=%s",
+                current_plan.round_index,
+                current_plan.max_rounds,
+                current_plan.selected_tool,
+                current_plan.active_query,
+                current_plan.attempted_tools,
+            )
             result = self._run_tool(current_plan, run_manager)
             results.append(result)
             documents = self._merge_documents(documents, result.documents)
+            logger.info(
+                "Retrieval round %s result: tool=%s, success=%s, records=%s, documents=%s, citations=%s, confidence=%s",
+                current_plan.round_index,
+                result.tool_name,
+                result.success,
+                len(result.records),
+                len(result.documents),
+                len(result.citations),
+                result.confidence,
+            )
+            if result.error:
+                logger.warning(
+                    "Retrieval round %s tool error: tool=%s, error=%s",
+                    current_plan.round_index,
+                    result.tool_name,
+                    result.error,
+                )
 
             context = RetrievalContext(plan=current_plan, results=results, documents=documents)
             decision = self._judge(context, run_manager)
+            logger.info(
+                "Retrieval round %s decision: action=%s, sufficient=%s, suggested_tool=%s, confidence=%s, reason=%s",
+                current_plan.round_index,
+                decision.next_action,
+                decision.is_sufficient,
+                decision.suggested_tool,
+                decision.confidence,
+                decision.reason,
+            )
             round_trace = RetrievalRound(
                 plan=current_plan,
                 results=list(results),
@@ -111,6 +155,12 @@ class AgenticRetriever(BaseRetriever):
                         rewritten_query=None,
                         exit_reason=exit_reason,
                     )
+                )
+                logger.info(
+                    "Agentic retrieval finished: exit_reason=%s, rounds=%s, total_documents=%s",
+                    exit_reason,
+                    len(rounds),
+                    len(documents),
                 )
                 return AgenticRetrievalOutcome(
                     plan=current_plan,
@@ -151,6 +201,12 @@ class AgenticRetriever(BaseRetriever):
                         exit_reason="max_rounds_reached",
                     )
                 )
+                logger.warning(
+                    "Agentic retrieval stopped at max rounds: rounds=%s, total_documents=%s, reason=%s",
+                    current_plan.max_rounds,
+                    len(documents),
+                    bounded_decision.reason,
+                )
                 return AgenticRetrievalOutcome(
                     plan=current_plan,
                     results=results,
@@ -173,6 +229,12 @@ class AgenticRetriever(BaseRetriever):
                         exit_reason="ask_user",
                     )
                 )
+                logger.info(
+                    "Agentic retrieval requires user follow-up: rounds=%s, total_documents=%s, question=%r",
+                    len(rounds),
+                    len(documents),
+                    decision.follow_up_question,
+                )
                 return AgenticRetrievalOutcome(
                     plan=current_plan,
                     results=results,
@@ -189,6 +251,13 @@ class AgenticRetriever(BaseRetriever):
             if decision.next_action == "rewrite":
                 rewrite = self._rewrite_query(context, run_manager)
                 round_trace.rewrite = rewrite
+                logger.info(
+                    "Retrieval round %s rewriting query: from=%r to=%r, reason=%s",
+                    current_plan.round_index,
+                    current_plan.active_query,
+                    rewrite.query,
+                    rewrite.reason,
+                )
                 decision_log.append(
                     self._build_decision_log_entry(
                         round_trace,
@@ -206,6 +275,13 @@ class AgenticRetriever(BaseRetriever):
             elif decision.next_action == "switch_tool":
                 next_tool = self._resolve_next_tool(current_plan, decision)
                 resolved_query = str(decision.metadata.get("resolved_query") or current_plan.active_query)
+                logger.info(
+                    "Retrieval round %s switching tool: from=%s to=%s, next_query=%r",
+                    current_plan.round_index,
+                    current_plan.selected_tool,
+                    next_tool,
+                    resolved_query,
+                )
                 decision_log.append(
                     self._build_decision_log_entry(
                         round_trace,
@@ -232,6 +308,12 @@ class AgenticRetriever(BaseRetriever):
         """执行当前轮次指定工具，并传递 LangChain 回调上下文。"""
         tool = self._get_tool(plan.selected_tool)
         child_manager = run_manager.get_child(tag=f"retrieval:{tool.name}") if run_manager else None
+        logger.debug(
+            "Executing retrieval tool: tool=%s, query=%r, round=%s",
+            tool.name,
+            plan.active_query,
+            plan.round_index,
+        )
         return tool.retrieve(query=plan.active_query, run_manager=child_manager)
 
     def _rewrite_query(
@@ -248,6 +330,12 @@ class AgenticRetriever(BaseRetriever):
         )
         if not rewrite.query.strip():
             raise ValueError("Query rewriter returned an empty query.")
+        logger.debug(
+            "Query rewrite completed: from=%r, to=%r, metadata=%s",
+            context.plan.active_query,
+            rewrite.query,
+            rewrite.metadata,
+        )
         return rewrite
 
     def _judge(
@@ -256,10 +344,17 @@ class AgenticRetriever(BaseRetriever):
         run_manager: CallbackManagerForRetrieverRun | None,
     ) -> SufficiencyDecision:
         """调用 LangChain runnable 风格的充分性判断器。"""
-        return self.sufficiency_judge.invoke(
+        decision = self.sufficiency_judge.invoke(
             context,
             config=self._build_runnable_config(run_manager, tag="sufficiency_judge"),
         )
+        logger.debug(
+            "Sufficiency judge completed: tool=%s, action=%s, sufficient=%s",
+            context.plan.selected_tool,
+            decision.next_action,
+            decision.is_sufficient,
+        )
+        return decision
 
     def _resolve_next_tool(self, plan: RetrievalPlan, decision: SufficiencyDecision) -> str:
         """解析下一轮工具，始终限制在本轮候选工具集合内。"""
@@ -313,14 +408,17 @@ class AgenticRetriever(BaseRetriever):
                     f"Selected retrieval tool '{selected_tool}' is not in candidate tools."
                 )
             self._get_tool(selected_tool)
+            logger.debug("Resolved initial retrieval tool from explicit selection: %s", selected_tool)
             return selected_tool
 
         if self.default_tool and self.default_tool in candidate_tools:
             self._get_tool(self.default_tool)
+            logger.debug("Resolved initial retrieval tool from default tool: %s", self.default_tool)
             return self.default_tool
 
         first_tool = candidate_tools[0]
         self._get_tool(first_tool)
+        logger.debug("Resolved initial retrieval tool from first candidate: %s", first_tool)
         return first_tool
 
     def _get_tool(self, tool_name: str) -> RetrievalTool:

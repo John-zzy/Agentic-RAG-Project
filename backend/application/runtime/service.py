@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
+import logging
 from pathlib import Path
 import re
 from typing import Any, Protocol
@@ -33,6 +34,8 @@ from backend.platform.memory.base.session_store import (
 from backend.platform.memory.chat.prompt_context import PromptContextBuilder
 from backend.platform.models.base.router import TaskComplexity
 from backend.platform.models.llm.client import ModelClient, model_client
+
+logger = logging.getLogger(__name__)
 
 
 class RetrievalChainModel(Protocol):
@@ -246,16 +249,42 @@ class ChatService:
     ) -> list[Document]:
         """兼容普通 retriever 与 agentic retriever 的检索输出。"""
         candidate_tools = self._resolve_candidate_tools(mounted_knowledge_sources)
+        logger.info(
+            "Starting retrieval for scene=%s: message=%r, mounted_knowledge_sources=%s, candidate_tools=%s",
+            self.scene_definition.scene,
+            message,
+            mounted_knowledge_sources,
+            candidate_tools,
+        )
         if hasattr(self._retriever, "retrieve_with_trace"):
             outcome: AgenticRetrievalOutcome = self._retriever.retrieve_with_trace(  # type: ignore[attr-defined]
                 message,
                 candidate_tools=candidate_tools,
             )
+            logger.info(
+                "Agentic retrieval completed for scene=%s: exit_reason=%s, rounds=%s, documents=%s",
+                self.scene_definition.scene,
+                outcome.exit_reason,
+                len(outcome.rounds),
+                len(outcome.documents),
+            )
             return list(outcome.documents)
         if hasattr(self._retriever, "search"):
-            return list(self._retriever.search(query=message))  # type: ignore[attr-defined]
+            documents = list(self._retriever.search(query=message))  # type: ignore[attr-defined]
+            logger.info(
+                "Retriever search completed for scene=%s: documents=%s",
+                self.scene_definition.scene,
+                len(documents),
+            )
+            return documents
         if isinstance(self._retriever, BaseRetriever):
-            return list(self._retriever.invoke(message))
+            documents = list(self._retriever.invoke(message))
+            logger.info(
+                "BaseRetriever invoke completed for scene=%s: documents=%s",
+                self.scene_definition.scene,
+                len(documents),
+            )
+            return documents
         raise TypeError("Retriever does not support document retrieval.")
 
     def _resolve_candidate_tools(
@@ -281,6 +310,12 @@ class ChatService:
 
         if not tool_names:
             raise ValueError("No retrieval tools available for mounted knowledge sources.")
+        logger.debug(
+            "Resolved candidate retrieval tools for scene=%s: mounted_knowledge_sources=%s, tool_names=%s",
+            self.scene_definition.scene,
+            mounted_knowledge_sources,
+            tool_names,
+        )
         return tuple(tool_names)
 
     def _append_candidate_tool(
