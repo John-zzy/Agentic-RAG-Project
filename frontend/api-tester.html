@@ -297,60 +297,6 @@
       border: 0;
     }
 
-    .mount-panel {
-      display: grid;
-      gap: 10px;
-      padding: 14px 16px;
-      border: 1px solid rgba(214, 225, 232, 0.92);
-      border-radius: 18px;
-      background: rgba(255, 255, 255, 0.76);
-      box-shadow: var(--shadow-soft);
-    }
-
-    .mount-panel-title {
-      margin: 0;
-      color: var(--text);
-      font-size: 14px;
-      font-weight: 800;
-    }
-
-    .mount-options {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 12px;
-    }
-
-    .mount-option {
-      display: flex;
-      align-items: flex-start;
-      gap: 10px;
-      min-width: 220px;
-      padding: 12px 14px;
-      border: 1px solid rgba(214, 225, 232, 0.92);
-      border-radius: 16px;
-      background: rgba(244, 248, 251, 0.94);
-    }
-
-    .mount-option input {
-      margin-top: 2px;
-      accent-color: var(--teal);
-    }
-
-    .mount-option strong {
-      display: block;
-      color: var(--text);
-      font-size: 13px;
-      font-weight: 800;
-    }
-
-    .mount-option span {
-      display: block;
-      margin-top: 4px;
-      color: var(--text-muted);
-      font-size: 12px;
-      line-height: 1.5;
-    }
-
     .conversation-board {
       min-height: 0;
       padding: 18px 28px 22px;
@@ -385,6 +331,154 @@
       color: var(--text);
       font-size: 18px;
       font-weight: 800;
+    }
+
+    .board-head-actions {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    .mount-dropdown {
+      position: relative;
+    }
+
+    .mount-trigger {
+      min-height: 42px;
+      min-width: 244px;
+      padding: 0 16px;
+      border-radius: 16px;
+      border: 1px solid rgba(205, 219, 227, 0.94);
+      background: rgba(255, 255, 255, 0.92);
+      color: var(--text);
+      display: inline-flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      box-shadow: var(--shadow-soft);
+    }
+
+    .mount-trigger-copy {
+      display: grid;
+      gap: 2px;
+      text-align: left;
+    }
+
+    .mount-trigger-copy strong {
+      font-size: 13px;
+      font-weight: 800;
+    }
+
+    .mount-trigger-copy span {
+      color: var(--text-muted);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    .mount-trigger-caret {
+      color: var(--teal);
+      font-size: 12px;
+      font-weight: 800;
+      transition: transform 160ms ease;
+    }
+
+    .mount-dropdown.open .mount-trigger-caret {
+      transform: rotate(180deg);
+    }
+
+    .mount-menu {
+      position: absolute;
+      top: calc(100% + 10px);
+      right: 0;
+      z-index: 8;
+      width: min(360px, calc(100vw - 84px));
+      display: none;
+      gap: 10px;
+      padding: 14px;
+      border: 1px solid rgba(205, 219, 227, 0.94);
+      border-radius: 20px;
+      background: rgba(255, 255, 255, 0.98);
+      box-shadow: 0 22px 46px rgba(12, 39, 58, 0.14);
+      backdrop-filter: blur(14px);
+    }
+
+    .mount-dropdown.open .mount-menu {
+      display: grid;
+    }
+
+    .mount-menu-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .mount-menu-head strong {
+      display: block;
+      font-size: 14px;
+      font-weight: 800;
+    }
+
+    .mount-menu-head span {
+      display: block;
+      margin-top: 4px;
+      color: var(--text-muted);
+      font-size: 12px;
+      line-height: 1.55;
+    }
+
+    .mount-menu-tip {
+      padding: 5px 10px;
+      border-radius: 999px;
+      color: var(--teal);
+      background: var(--teal-soft);
+      font-size: 11px;
+      font-weight: 800;
+      white-space: nowrap;
+    }
+
+    .mount-options {
+      display: grid;
+      gap: 10px;
+    }
+
+    .mount-option {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      padding: 12px 14px;
+      border: 1px solid rgba(214, 225, 232, 0.92);
+      border-radius: 16px;
+      background: rgba(244, 248, 251, 0.94);
+      transition: border-color 160ms ease, transform 160ms ease, box-shadow 160ms ease;
+    }
+
+    .mount-option:hover {
+      transform: translateY(-1px);
+      border-color: rgba(127, 177, 189, 0.92);
+      box-shadow: 0 12px 22px rgba(12, 39, 58, 0.06);
+    }
+
+    .mount-option input {
+      margin-top: 2px;
+      accent-color: var(--teal);
+    }
+
+    .mount-option strong {
+      display: block;
+      color: var(--text);
+      font-size: 13px;
+      font-weight: 800;
+    }
+
+    .mount-option span {
+      display: block;
+      margin-top: 4px;
+      color: var(--text-muted);
+      font-size: 12px;
+      line-height: 1.5;
     }
 
     .feed-shell {
@@ -531,7 +625,7 @@
     }
 
     .support-card-inline {
-      width: min(720px, calc(100% - 52px));
+      width: min(760px, calc(100% - 52px));
       margin-left: 52px;
       border-radius: 22px;
       border: 1px solid rgba(201, 215, 224, 0.94);
@@ -546,6 +640,7 @@
       justify-content: space-between;
       gap: 14px;
       padding: 14px 16px 0;
+      flex-wrap: wrap;
     }
 
     .support-head-inline h4 {
@@ -601,34 +696,110 @@
       line-height: 1.5;
     }
 
-    .knowledge-entry {
+    .support-head-actions {
       display: flex;
       align-items: center;
-      justify-content: space-between;
-      gap: 12px;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    .support-link {
+      min-height: 34px;
+      padding: 0 14px;
+      border-radius: 999px;
+      border: 1px solid rgba(177, 220, 223, 0.92);
+      background: rgba(223, 242, 240, 0.72);
+      color: var(--teal);
+      display: inline-flex;
+      align-items: center;
+      font-size: 12px;
+      font-weight: 800;
+      text-decoration: none;
+    }
+
+    .evidence-summary {
+      display: grid;
+      gap: 10px;
       padding: 14px 16px;
       border-radius: 18px;
       background: rgba(255, 255, 255, 0.88);
       border: 1px solid rgba(214, 225, 232, 0.92);
     }
 
-    .knowledge-entry strong {
+    .evidence-summary-top {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .evidence-summary strong {
       display: block;
       margin-bottom: 4px;
       color: var(--text);
       font-size: 14px;
     }
 
-    .knowledge-entry span {
+    .evidence-summary span {
       color: var(--text-muted);
       font-size: 12px;
       line-height: 1.55;
     }
 
-    .citation-card {
+    .evidence-score {
+      min-width: 76px;
+      padding: 10px 12px;
+      border-radius: 16px;
+      background: rgba(15, 109, 116, 0.08);
+      color: var(--teal);
+      text-align: center;
+    }
+
+    .evidence-score strong {
+      margin: 0;
+      font-size: 11px;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+    }
+
+    .evidence-score span {
+      display: block;
+      margin-top: 6px;
+      color: var(--text);
+      font-size: 18px;
+      font-weight: 800;
+    }
+
+    .evidence-counts {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .evidence-pill {
+      min-height: 28px;
+      padding: 0 10px;
+      border-radius: 999px;
+      background: rgba(20, 32, 51, 0.06);
+      color: var(--text-muted);
+      display: inline-flex;
+      align-items: center;
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+
+    .citation-list {
       display: grid;
       gap: 10px;
-      padding: 14px 16px;
+    }
+
+    .citation-card {
+      display: grid;
+      gap: 8px;
+      padding: 12px 14px;
       border-radius: 18px;
       background: rgba(255, 255, 255, 0.92);
       border: 1px solid rgba(214, 225, 232, 0.92);
@@ -681,12 +852,12 @@
     .citation-meta-grid {
       display: grid;
       grid-template-columns: repeat(3, minmax(0, 1fr));
-      gap: 10px;
+      gap: 8px;
     }
 
     .citation-meta {
-      padding: 10px 12px;
-      border-radius: 14px;
+      padding: 9px 10px;
+      border-radius: 12px;
       background: rgba(244, 248, 251, 0.94);
       border: 1px solid rgba(214, 225, 232, 0.92);
     }
@@ -710,8 +881,8 @@
     }
 
     .citation-snippet {
-      padding: 12px 14px;
-      border-radius: 16px;
+      padding: 10px 12px;
+      border-radius: 14px;
       background: rgba(223, 242, 240, 0.46);
       border: 1px solid rgba(177, 220, 223, 0.92);
     }
@@ -908,7 +1079,6 @@
         padding-right: 18px;
       }
 
-      .topbar,
       .composer-topline {
         flex-direction: column;
         align-items: stretch;
@@ -922,6 +1092,25 @@
 
       .topbar-actions {
         justify-content: flex-start;
+      }
+
+      .board-head {
+        align-items: stretch;
+      }
+
+      .board-head-actions {
+        width: 100%;
+        justify-content: stretch;
+      }
+
+      .mount-trigger {
+        width: 100%;
+      }
+
+      .mount-menu {
+        left: 0;
+        right: auto;
+        width: 100%;
       }
 
       .detail-grid {
@@ -981,32 +1170,48 @@
             <a class="workspace-button primary" href="./knowledge-manager.html">前往知识库管理</a>
           </div>
         </div>
-
-        <section class="mount-panel" aria-label="知识源挂载设置">
-          <p class="mount-panel-title">知识源挂载</p>
-          <div class="mount-options">
-            <label class="mount-option">
-              <input id="mountDocuments" type="checkbox" checked />
-              <span>
-                <strong>documents</strong>
-                文档知识库，默认启用。
-              </span>
-            </label>
-            <label class="mount-option">
-              <input id="mountEcommerce" type="checkbox" />
-              <span>
-                <strong>ecommerce</strong>
-                电商知识，可查询商品、评论、订单和库存。
-              </span>
-            </label>
-          </div>
-        </section>
       </header>
 
       <section class="conversation-board">
         <div class="board-panel">
           <div class="board-head">
             <h2 id="sceneHeadline">对话主线程</h2>
+            <div class="board-head-actions">
+              <div id="mountDropdown" class="mount-dropdown">
+                <button id="mountTrigger" class="mount-trigger" type="button" aria-haspopup="true" aria-expanded="false">
+                  <span class="mount-trigger-copy">
+                    <strong>知识源挂载</strong>
+                    <span id="mountTriggerLabel">documents</span>
+                  </span>
+                  <span class="mount-trigger-caret">▼</span>
+                </button>
+                <div id="mountMenu" class="mount-menu" aria-label="知识源挂载设置" hidden>
+                  <div class="mount-menu-head">
+                    <div>
+                      <strong>选择会话知识源</strong>
+                      <span>新建会话时按当前勾选挂载，至少保留一个知识源。</span>
+                    </div>
+                    <span class="mount-menu-tip">会话级</span>
+                  </div>
+                  <div class="mount-options">
+                    <label class="mount-option">
+                      <input id="mountDocuments" type="checkbox" checked />
+                      <span>
+                        <strong>documents</strong>
+                        文档知识库，默认启用。
+                      </span>
+                    </label>
+                    <label class="mount-option">
+                      <input id="mountEcommerce" type="checkbox" />
+                      <span>
+                        <strong>ecommerce</strong>
+                        电商知识，可查询商品、评论、订单和库存。
+                      </span>
+                    </label>
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
 
           <div class="feed-shell">
@@ -1064,6 +1269,10 @@
       sessionIdBadge: document.getElementById("sessionIdBadge"),
       chatFeed: document.getElementById("chatFeed"),
       sceneSelect: document.getElementById("sceneSelect"),
+      mountDropdown: document.getElementById("mountDropdown"),
+      mountTrigger: document.getElementById("mountTrigger"),
+      mountMenu: document.getElementById("mountMenu"),
+      mountTriggerLabel: document.getElementById("mountTriggerLabel"),
       documentsMount: document.getElementById("mountDocuments"),
       ecommerceMount: document.getElementById("mountEcommerce"),
       input: document.getElementById("messageInput"),
@@ -1090,6 +1299,28 @@
       return defaultScene || (scenes[0] && scenes[0].scene) || "";
     }
 
+    function formatMountedSourceLabel(sources) {
+      const normalized = Array.isArray(sources) && sources.length ? sources : ["documents"];
+      if (normalized.length === 1) {
+        return normalized[0];
+      }
+      return normalized.join(" + ");
+    }
+
+    function setMountMenuOpen(open) {
+      refs.mountDropdown.classList.toggle("open", open);
+      refs.mountTrigger.setAttribute("aria-expanded", open ? "true" : "false");
+      if (open) {
+        refs.mountMenu.removeAttribute("hidden");
+      } else {
+        refs.mountMenu.setAttribute("hidden", "");
+      }
+    }
+
+    function updateMountTriggerLabel() {
+      refs.mountTriggerLabel.textContent = formatMountedSourceLabel(getSelectedMountedKnowledgeSources());
+    }
+
     // 读取当前勾选的知识源，用于创建新会话。
     function getSelectedMountedKnowledgeSources() {
       const selected = [];
@@ -1111,6 +1342,7 @@
       state.mountedKnowledgeSources = normalized.slice();
       refs.documentsMount.checked = normalized.indexOf("documents") >= 0;
       refs.ecommerceMount.checked = normalized.indexOf("ecommerce") >= 0;
+      updateMountTriggerLabel();
     }
 
     function setComposerStatus(message) {
@@ -1152,6 +1384,7 @@
       refs.newChat.disabled = state.sceneLoading || !state.activeScene;
       refs.documentsMount.disabled = state.sceneLoading;
       refs.ecommerceMount.disabled = state.sceneLoading;
+      refs.mountTrigger.disabled = state.sceneLoading;
     }
 
     function updateSessionBadge() {
@@ -1221,34 +1454,35 @@
       return citation.source_name || citation.citation_id || citation.namespace || "未命名来源";
     }
 
-    function renderKnowledgeCard(message) {
+    function renderEvidenceSummary(message) {
       if (!message.citations.length) {
         return "";
       }
       const first = message.citations[0];
       return (
-        '<section class="support-card-inline">' +
-          '<div class="support-head-inline">' +
-            '<h4>知识卡片</h4>' +
-            '<span>引用自知识库</span>' +
-          '</div>' +
-          '<div class="support-body-inline">' +
-            '<div class="knowledge-entry">' +
-              '<div>' +
-                '<strong>[' + escapeHtml(first.index || 1) + '] ' + escapeHtml(formatCitationSource(first)) + '</strong>' +
-                '<span>来源路径：' + escapeHtml(formatCitationPath(first)) + '</span>' +
-                '<span>Chunk：' + escapeHtml(formatCitationChunk(first)) + "</span>" +
-                '<span>' + escapeHtml(first.snippet || "命中知识证据片段") + '</span>' +
-              '</div>' +
-              '<a class="workspace-button primary" href="./knowledge-manager.html">知识库管理</a>' +
+        '<div class="evidence-summary">' +
+          '<div class="evidence-summary-top">' +
+            '<div>' +
+            '<strong>[' + escapeHtml(first.index || 1) + '] ' + escapeHtml(formatCitationSource(first)) + '</strong>' +
+            '<span>来源路径：' + escapeHtml(formatCitationPath(first)) + '</span>' +
+            '<span>Chunk：' + escapeHtml(formatCitationChunk(first)) + "</span>" +
             '</div>' +
-            '<div class="card-actions">' +
-              '<span class="action-chip">插入证据回复</span>' +
-              '<span class="action-chip">展开更多片段</span>' +
-              '<span class="action-chip">查看命中来源</span>' +
+            '<div class="evidence-score">' +
+              '<strong>Score</strong>' +
+              '<span>' + escapeHtml(formatCitationScore(first)) + '</span>' +
             '</div>' +
           '</div>' +
-        '</section>'
+          '<span>' + escapeHtml(summarizeSnippet(first.snippet, 140)) + '</span>' +
+          '<div class="evidence-counts">' +
+            '<span class="evidence-pill">Top ' + escapeHtml(message.citations.length) + ' Hits</span>' +
+            '<span class="evidence-pill">' + escapeHtml(first.source_kind || first.namespace || "unknown") + '</span>' +
+          '</div>' +
+        '</div>' +
+        '<div class="card-actions">' +
+          '<span class="action-chip">插入证据回复</span>' +
+          '<span class="action-chip">展开更多片段</span>' +
+          '<span class="action-chip">查看命中来源</span>' +
+        '</div>'
       );
     }
 
@@ -1312,9 +1546,6 @@
       }
       if (state.activeScene === "ecommerce" && shouldShowProductCard({ text: promptText })) {
         blocks.push(renderProductCard());
-      }
-      if (message.knowledgeUsed && message.citations.length && state.expandedKnowledge[message.id]) {
-        blocks.push(renderKnowledgeCard(message));
       }
       return blocks.join("");
     }
@@ -1398,10 +1629,14 @@
             '<section class="support-card-inline">' +
               '<div class="support-head-inline">' +
                 '<h4>证据片段</h4>' +
-                '<span>知识命中</span>' +
+                '<div class="support-head-actions">' +
+                  '<span>知识命中</span>' +
+                  '<a class="support-link" href="./knowledge-manager.html">知识库管理</a>' +
+                '</div>' +
               '</div>' +
               '<div class="support-body-inline">' +
-                '<div class="detail-grid">' + message.citations.map(renderCitation).join("") + '</div>' +
+                renderEvidenceSummary(message) +
+                '<div class="citation-list">' + message.citations.map(renderCitation).join("") + '</div>' +
               '</div>' +
             '</section>'
           )
@@ -1432,6 +1667,13 @@
           toggleKnowledgeDetails(button.getAttribute("data-knowledge-toggle"));
         });
       });
+    }
+
+    function toggleSourceSelection(target) {
+      if (!refs.documentsMount.checked && !refs.ecommerceMount.checked) {
+        target.checked = true;
+      }
+      updateMountTriggerLabel();
     }
 
     function renderSceneOptions() {
@@ -1631,6 +1873,12 @@
       refs.newChat.addEventListener("click", function () {
         newConversation();
       });
+      refs.mountTrigger.addEventListener("click", function () {
+        if (refs.mountTrigger.disabled) {
+          return;
+        }
+        setMountMenuOpen(!refs.mountDropdown.classList.contains("open"));
+      });
       refs.sceneSelect.addEventListener("change", function () {
         handleSceneChange();
       });
@@ -1641,19 +1889,27 @@
         }
       });
       refs.documentsMount.addEventListener("change", function () {
-        if (!refs.documentsMount.checked && !refs.ecommerceMount.checked) {
-          refs.documentsMount.checked = true;
-        }
+        toggleSourceSelection(refs.documentsMount);
       });
       refs.ecommerceMount.addEventListener("change", function () {
-        if (!refs.documentsMount.checked && !refs.ecommerceMount.checked) {
-          refs.documentsMount.checked = true;
+        toggleSourceSelection(refs.ecommerceMount);
+      });
+      document.addEventListener("click", function (event) {
+        if (!refs.mountDropdown.contains(event.target)) {
+          setMountMenuOpen(false);
+        }
+      });
+      document.addEventListener("keydown", function (event) {
+        if (event.key === "Escape") {
+          setMountMenuOpen(false);
         }
       });
     }
 
     async function init() {
       bindEvents();
+      updateMountTriggerLabel();
+      setMountMenuOpen(false);
       renderSceneConfig();
       renderMessages();
       setInteractiveState();
