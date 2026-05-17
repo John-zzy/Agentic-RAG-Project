@@ -21,8 +21,8 @@
 
 - 统一 `/chat` 入口，按会话绑定场景处理请求
 - 会话创建、查询、删除与场景选择
-- 本地知识文件上传、下载、删除与索引管理
-- 文档切块、重建索引、向量检索
+- 本地知识文件上传、下载、删除、预处理预览与索引管理
+- 文档清洗、规则化处理、版本化切块与向量检索
 - `Chroma` 与 `Elasticsearch` 两种向量存储实现
 - 基于 `SQLite` 的会话记忆
 
@@ -76,13 +76,13 @@
 已支持：
 
 - 支持本地知识文件上传、下载、删除与索引管理。
-- 支持文档切块、索引重建和向量检索，RAG 主链路已经跑通。
+- 支持上传后预处理预览、规则选择、正式入库、重处理和重切块。
+- 支持文档切块、索引重建、向量检索和版本切换，RAG 主链路已经跑通。
 - 向量存储已支持 `Chroma` 和 `Elasticsearch` 两种实现。
 - 已补充 `agentic_rag.md`，说明多轮召回、工具切换、Query Rewrite 和证据聚合思路。
 
 当前缺口：
 
-- 还没有体现数据接入、清洗、Chunk 策略和引用溯源等更完整的数据处理能力。
 - 还缺少 `Hybrid Search`、`ReRank`、缓存、增量更新等工程化 RAG 优化能力。
 - 还缺少评测集、效果指标和可重复执行的 Evaluation Harness。
 - 还缺少错误样本沉淀、版本对比和数据回放形成的数据闭环。
@@ -212,8 +212,10 @@
 - `base/store.py`
   - 保留 `KnowledgeRetriever` 和 `KnowledgeDocumentRepository` 两套接口
   - provider 可以同时实现两套接口，但调用方按职责分别依赖
+- `processing/`
+  - 负责标准化、规则清洗、预处理预览、处理统计和 provenance 元数据生成
 - `documents/application_service.py`
-  - 负责注册文档、删除文档、重切块这些写流程
+  - 负责预处理预览、注册文档、删除文档、重处理和重切块这些写流程
 - `documents/query_service.py`
   - 负责文档列表、文档详情、文件索引状态聚合
 - `documents/publisher.py`
@@ -342,7 +344,16 @@ backend\.venv\Scripts\python.exe backend\run.py
 1. 启动服务
 2. 通过 `POST /sessions` 创建会话并指定场景
 3. 通过 `POST /chat` 发起对话
-4. 如需知识增强，先上传文件或创建知识文档索引
+4. 如需知识增强，先通过 `POST /files/upload` 上传知识文件
+5. 通过 `POST /knowledge/documents/preprocess-preview` 预览清洗规则、样本和统计
+6. 通过 `POST /knowledge/documents` 确认入库；后续按需调用 `.../reprocess` 或 `.../rechunk`
+
+知识库管理页当前交互：
+
+- 上传 `json`、`csv`、`txt`、`md` 后会自动打开“数据预处理”弹窗
+- 弹窗中可查看 `supported_rules`、切换 `processing_rules`、刷新预览并确认入库
+- 未入库但可处理的文件状态为 `awaiting_processing`
+- `pdf`、`docx`、`xlsx` 当前允许上传，但仅显示 `unsupported`，不会进入预处理与索引链路
 
 ## 向量存储
 
@@ -385,7 +396,8 @@ backend\.venv\Scripts\python.exe -m pytest backend\tests\test_chat_api.py -q -c 
 - 后端顶层代码以 `application / platform / scenes` 三层为核心组织方式
 - 修改架构、启动方式、环境变量或测试命令时，应同步更新 `README.md`、`AGENTS.md` 和 `backend/.env.example`
 - `__init__.py` 应保持轻量，避免在包初始化阶段引入运行时装配逻辑
-- 如果继续实现 `add-knowledge-processing-layer`，推荐直接把处理步骤挂到 `KnowledgeDocumentApplicationService` 和 `KnowledgeDocumentPublisher`，不要重新做一个聚合式文档服务
+- 知识文档写流程统一由 `KnowledgeDocumentApplicationService` 编排，并通过 `KnowledgeDocumentPublisher` 发布新版本；不要恢复聚合式文档服务
+- 文档预处理能力位于 `backend/platform/knowledge/processing`，新增规则或统计逻辑优先落在该层
 
 ## 适用场景
 

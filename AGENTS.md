@@ -63,7 +63,7 @@
 - `api/file/`
   - 文件上传、列表、删除、下载接口。
 - `api/knowledge/`
-  - 知识文档注册、列表、详情、删除、重分块接口。
+  - 知识文档预处理预览、注册、列表、详情、删除、重处理、重分块接口。
 
 ### `backend/platform`
 
@@ -76,9 +76,10 @@
 - `memory/`
   - SQLite 会话、轮次、消息历史持久化。
 - `knowledge/`
-  - 通用知识文件读取、切块、索引管理、向量存储抽象。
+  - 通用知识文件读取、预处理、切块、索引管理、向量存储抽象。
   - `base/store.py` 里已经拆出 `KnowledgeRetriever` 和 `KnowledgeDocumentRepository` 两套接口。
-  - `documents/application_service.py` 负责注册、删除、重切块这类写流程。
+  - `processing/` 负责标准化、规则清洗、预览、统计和 provenance 元数据生成。
+  - `documents/application_service.py` 负责预处理预览、注册、删除、重处理、重切块这类写流程。
   - `documents/query_service.py` 负责文档列表、详情和文件索引状态聚合查询。
   - `documents/publisher.py` 负责新版本发布、旧版本失活、失败恢复和清理。
   - `documents/mappers.py` 负责 DTO 映射，不要再把映射逻辑塞回应用服务。
@@ -172,6 +173,13 @@ backend\.venv\Scripts\python.exe backend\run.py
 - API 调试页: `http://127.0.0.1:8000/frontend/api-tester.html`
 - 知识库管理页: `http://127.0.0.1:8000/frontend/knowledge-manager.html`
 
+知识库管理页当前流程：
+
+- 上传 `json`、`csv`、`txt`、`md` 文件后会自动打开“数据预处理”弹窗
+- 通过 `preprocess-preview` 预览规则、样本和统计，再确认正式入库
+- 未入库但可处理文件状态为 `awaiting_processing`
+- `pdf`、`docx`、`xlsx` 当前允许上传，但不会进入预处理与索引链路
+
 ### 4. 切换到 Elasticsearch
 
 本地启动：
@@ -210,7 +218,7 @@ backend\.venv\Scripts\python.exe -m pytest backend\tests\test_chat_api.py -q -c 
 - 避免大面积无关格式化 diff
 - 修改 `__init__.py` 时保持最小化，避免引入运行时依赖导致循环导入
 - 如果改动了架构、启动方式、环境变量或测试命令，要同步检查 `README.md`、`AGENTS.md`、`backend/.env.example`
-- 如果后续实现 `add-knowledge-processing-layer`，优先接到 `KnowledgeDocumentApplicationService` 和 `KnowledgeDocumentPublisher`，不要恢复聚合式文档服务
+- 知识文档写流程统一接到 `KnowledgeDocumentApplicationService` 和 `KnowledgeDocumentPublisher`，不要恢复聚合式文档服务
 
 ### 高频错误
 

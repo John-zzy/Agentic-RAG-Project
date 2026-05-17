@@ -107,17 +107,36 @@
 
 统一前缀：`/knowledge/documents`
 
-### `POST /knowledge/documents`
+### `POST /knowledge/documents/preprocess-preview`
 
-- 一句话说明：注册知识文档并建立索引版本。
+- 一句话说明：在正式入库前预览知识文档的预处理结果。
 - 主要入参：
   - Body `namespace`: 知识命名空间，必填。
   - Body `source_path`: 源文件路径，必填。
+  - Body `processing_rules`: 本次启用的规则 ID 列表，可选，默认空列表。
+  - Body `chunk_size`: 预览使用的切块大小，可选，`> 0`；缺省时使用数据预处理模块默认值。
+  - Body `chunk_overlap`: 预览使用的切块重叠长度，可选，`>= 0` 且必须小于 `chunk_size`；缺省时使用数据预处理模块默认值。
+- 返回结构：
+  - `namespace`、`source_path`、`source_type`、`chunk_size`、`chunk_overlap`。
+  - `supported_rules`: 当前文件类型支持的规则列表，每项包含 `rule_id`、`display_name`、`description`、`supported_source_types`、`level`。
+  - `selected_rules`: 本次实际生效的规则定义列表。
+  - `processing_stats`: 处理统计，包含 `raw_record_count`、`processed_record_count`、`removed_record_count`、`raw_char_count`、`processed_char_count`。
+  - `original_samples`、`processed_samples`: 预览样本列表，每项包含 `sample_index`、`source_record_id`、`record_index`、`content`、`content_hash`、`applied_rules`、`dropped`。
+  - `can_index`: 当前文件是否允许继续入库。
+  - `warnings`: 结构化 warning 列表，每项包含 `code`、`message`、`severity`、`source_record_id`、`record_index`。
+
+### `POST /knowledge/documents`
+
+- 一句话说明：按给定预处理规则注册知识文档并建立索引版本。
+- 主要入参：
+  - Body `namespace`: 知识命名空间，必填。
+  - Body `source_path`: 源文件路径，必填。
+  - Body `processing_rules`: 本次启用的规则 ID 列表，可选，默认空列表。
   - Body `chunk_size`: 切块大小，可选，`> 0`；缺省时使用数据预处理模块默认值。
   - Body `chunk_overlap`: 切块重叠长度，可选，`>= 0` 且必须小于 `chunk_size`；缺省时使用数据预处理模块默认值。
   - Body `keep_version`: 是否保留旧版本，默认 `false`。
 - 返回结构：
-  - 文档详情字段：`document_id`、`namespace`、`source_path`、`status`、`active_version`、`chunk_count`、`updated_at`、`source_type`、`chunk_size`、`chunk_overlap`、`last_error`、`versions`。
+  - 文档详情字段：`document_id`、`namespace`、`source_path`、`status`、`active_version`、`chunk_count`、`updated_at`、`source_type`、`chunk_size`、`chunk_overlap`、`processing_rules`、`processing_stats`、`provenance_enabled`、`last_error`、`versions`。
   - 额外字段 `document_version`: 本次生成的文档版本号。
 
 ### `GET /knowledge/documents`
@@ -126,7 +145,7 @@
 - 主要入参：
   - Query `namespace`: 命名空间，可选。
 - 返回结构：
-  - `documents`: 文档列表，每项包含 `document_id`、`namespace`、`source_path`、`status`、`active_version`、`chunk_count`、`updated_at`。
+  - `documents`: 文档列表，每项包含 `document_id`、`namespace`、`source_path`、`status`、`source_type`、`processing_rules`、`processing_stats`、`provenance_enabled`、`active_version`、`chunk_count`、`updated_at`。
 
 ### `GET /knowledge/documents/files`
 
@@ -135,6 +154,7 @@
   - Query `namespace`: 命名空间，可选。
 - 返回结构：
   - `items`: 文件索引状态列表，每项包含 `filename`、`source_path`、`file_size`、`created_at`、`namespace`、`document_id`、`indexed`、`status`、`active_version`、`chunk_count`、`updated_at`、`last_error`、`can_index`。
+  - 状态补充：可处理但未入库文件返回 `awaiting_processing`；当前不支持预处理的文件返回 `unsupported`。
 
 ### `GET /knowledge/documents/{document_id}`
 
@@ -143,8 +163,8 @@
   - Path `document_id`: 文档 ID。
 - 返回结构：
   - `document_id`、`namespace`、`source_path`、`status`、`active_version`、`chunk_count`、`updated_at`。
-  - `source_type`、`chunk_size`、`chunk_overlap`、`last_error`。
-  - `versions`: 版本列表，每项包含 `document_version`、`status`、`chunk_count`、`chunk_size`、`chunk_overlap`、`created_at`、`last_error`。
+  - `source_type`、`chunk_size`、`chunk_overlap`、`processing_rules`、`processing_stats`、`provenance_enabled`、`last_error`。
+  - `versions`: 版本列表，每项包含 `document_version`、`status`、`chunk_count`、`chunk_size`、`chunk_overlap`、`created_at`、`source_type`、`processing_rules`、`processing_stats`、`provenance_enabled`、`last_error`。
 
 ### `DELETE /knowledge/documents/{document_id}`
 
@@ -156,9 +176,21 @@
 
 ### `POST /knowledge/documents/{document_id}/rechunk`
 
-- 一句话说明：按新的切块参数重建指定知识文档的分块与索引版本。
+- 一句话说明：沿用当前活动版本的处理规则，按新的切块参数重建指定知识文档的分块与索引版本。
 - 主要入参：
   - Path `document_id`: 文档 ID。
+  - Body `chunk_size`: 新切块大小，可选，`> 0`；缺省时使用数据预处理模块默认值。
+  - Body `chunk_overlap`: 新切块重叠长度，可选，`>= 0` 且必须小于 `chunk_size`；缺省时使用数据预处理模块默认值。
+  - Body `keep_version`: 是否保留旧版本，默认 `false`。
+- 返回结构：
+  - 与注册接口一致，返回最新文档详情和 `document_version`。
+
+### `POST /knowledge/documents/{document_id}/reprocess`
+
+- 一句话说明：按新的预处理规则或切块参数重跑指定知识文档，并生成新的活动版本。
+- 主要入参：
+  - Path `document_id`: 文档 ID。
+  - Body `processing_rules`: 本次启用的规则 ID 列表，可选，默认空列表。
   - Body `chunk_size`: 新切块大小，可选，`> 0`；缺省时使用数据预处理模块默认值。
   - Body `chunk_overlap`: 新切块重叠长度，可选，`>= 0` 且必须小于 `chunk_size`；缺省时使用数据预处理模块默认值。
   - Body `keep_version`: 是否保留旧版本，默认 `false`。

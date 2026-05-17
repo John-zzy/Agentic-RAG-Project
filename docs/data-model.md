@@ -87,20 +87,23 @@
 
 ### 4. `KnowledgeDocumentRecord`
 
-一句话说明：知识文档的主记录，描述某个源文件当前激活版本和索引状态。
+一句话说明：知识文档的主记录，描述某个源文件当前激活版本、处理配置和索引状态。
 
 来源：
 
-- `KnowledgeDocumentService._build_record()`
+- `KnowledgeDocumentPublisher`
 - `VectorStore.upsert_document_record()`
 
 | 字段 | 类型 | 约束 | 说明 |
 | --- | --- | --- | --- |
 | `document_id` | `str` | PK | 文档主键，基于 `namespace + source_path` 的 SHA256。 |
 | `namespace` | `str` |  | 业务命名空间，如 `products`、`reviews`、`orders`。 |
-| `source_type` | `str` |  | 源文件类型；当前实现写死为 `json`。 |
+| `source_type` | `str` |  | 源文件类型，按 `source_path` 后缀解析，如 `json`、`csv`、`txt`、`md`。 |
 | `source_path` | `str` |  | 相对数据根目录的源文件路径。 |
 | `status` | `str` | 枚举 | 文档当前状态。 |
+| `processing_rules` | `list[str]` |  | 当前活动版本沿用的处理规则 ID 列表。 |
+| `processing_stats` | `ProcessingStats \| null` | 可空 | 当前活动版本的处理统计摘要。 |
+| `provenance_enabled` | `bool` |  | 当前版本 chunk metadata 是否写入完整溯源字段。 |
 | `active_version` | `int` |  | 当前激活版本号。 |
 | `chunk_count` | `int` |  | 当前激活版本的分块数。 |
 | `chunk_size` | `int` |  | 当前激活版本的切块大小。 |
@@ -116,7 +119,7 @@
 
 ### 5. `KnowledgeDocumentVersion`
 
-一句话说明：知识文档某个版本的分块参数和结果摘要。
+一句话说明：知识文档某个版本的分块参数、处理配置和结果摘要。
 
 来源：
 
@@ -131,6 +134,10 @@
 | `chunk_size` | `int` |  | 该版本切块大小。 |
 | `chunk_overlap` | `int` |  | 该版本切块重叠长度。 |
 | `created_at` | `str` |  | 版本创建时间。 |
+| `source_type` | `str` |  | 该版本对应的源文件类型。 |
+| `processing_rules` | `list[str]` |  | 该版本实际生效的处理规则 ID 列表。 |
+| `processing_stats` | `ProcessingStats \| null` | 可空 | 该版本处理统计摘要。 |
+| `provenance_enabled` | `bool` |  | 该版本是否启用完整 provenance 写入。 |
 | `last_error` | `str \| null` | 可空 | 该版本失败原因。 |
 
 枚举值：
@@ -155,7 +162,32 @@
 | `content` | `str` |  | 参与向量化和切块的文本内容。 |
 | `record` | `dict[str, Any]` |  | 原始结构化记录。 |
 
-### 7. `DocumentChunk`
+### 7. `ProcessedDocumentRecord`
+
+一句话说明：预处理流水线输出的标准记录，是切块器唯一消费的中间模型。
+
+来源：
+
+- `backend/platform/knowledge/processing/schemas.py`
+- `process_document_records()`
+
+| 字段 | 类型 | 约束 | 说明 |
+| --- | --- | --- | --- |
+| `namespace` | `str` |  | 所属命名空间。 |
+| `source_path` | `str` |  | 源文件路径。 |
+| `source_type` | `str` |  | 源文件类型。 |
+| `source_record_id` | `str` | 逻辑 FK -> `DocumentRecord.source_record_id` | 原始记录稳定 ID。 |
+| `record_index` | `int` |  | 在源文件中的记录序号。 |
+| `raw_content` | `str` |  | 规则处理前的原始内容。 |
+| `processed_content` | `str` |  | 标准化和规则处理后的内容。 |
+| `applied_rules` | `list[str]` |  | 对该记录生效的规则 ID 列表。 |
+| `raw_content_hash` | `str` |  | 原始内容哈希。 |
+| `processed_content_hash` | `str` |  | 处理后内容哈希。 |
+| `dropped` | `bool` |  | 该记录是否在处理中被判定丢弃。 |
+| `record` | `dict[str, object]` |  | 原始结构化记录快照。 |
+| `warnings` | `list[ProcessingWarning]` |  | 记录级 warning。 |
+
+### 8. `DocumentChunk`
 
 一句话说明：文档切块后的标准模型，是写入向量库的最小单元。
 
@@ -181,10 +213,64 @@
 | `source_type` | `str` |  | 源类型。 |
 | `source_path` | `str` |  | 源文件路径。 |
 | `source_record_id` | `str` | 逻辑 FK -> `DocumentRecord.source_record_id` | 来源记录。 |
+| `source_record_index` | `int` |  | 来源记录在原文件中的序号。 |
 | `chunk_id` | `str` |  | 当前分块 ID。 |
 | `chunk_index` | `int` |  | 当前分块序号。 |
+| `applied_rules` | `list[str]` |  | 生成该 chunk 时继承的处理规则。 |
+| `raw_content_hash` | `str` |  | 来源记录原始内容哈希。 |
+| `processed_content_hash` | `str` |  | 来源记录处理后内容哈希。 |
 | `updated_at` | `str` |  | 最近更新时间。 |
 | `is_active` | `bool` | 运行时附加 | 是否为当前激活分块，写入向量库时追加。 |
+
+### 9. `ProcessingRuleDefinition`
+
+一句话说明：平台内置预处理规则的定义对象。
+
+| 字段 | 类型 | 约束 | 说明 |
+| --- | --- | --- | --- |
+| `rule_id` | `Literal[...]` |  | 稳定规则 ID。 |
+| `display_name` | `str` |  | 前端展示名。 |
+| `description` | `str` |  | 规则说明。 |
+| `supported_source_types` | `list[str]` |  | 允许应用该规则的源文件类型。 |
+| `level` | `str` | 枚举 | 规则作用层级，当前为 `record` 或 `document`。 |
+
+### 10. `ProcessingWarning`
+
+一句话说明：预处理阶段返回的结构化提示对象。
+
+| 字段 | 类型 | 约束 | 说明 |
+| --- | --- | --- | --- |
+| `code` | `str` |  | 稳定 warning 代码。 |
+| `message` | `str` |  | 面向调用方的提示文本。 |
+| `severity` | `str` | 枚举 | 严重级别，当前为 `info`、`warning`、`error`。 |
+| `source_record_id` | `str \| null` | 可空 | 若与单条记录相关，返回源记录 ID。 |
+| `record_index` | `int \| null` | 可空 | 若与单条记录相关，返回记录序号。 |
+
+### 11. `ProcessingStats`
+
+一句话说明：一次预处理或某个文档版本的处理统计摘要。
+
+| 字段 | 类型 | 约束 | 说明 |
+| --- | --- | --- | --- |
+| `raw_record_count` | `int` |  | 原始记录数。 |
+| `processed_record_count` | `int` |  | 处理后保留记录数。 |
+| `removed_record_count` | `int` |  | 被删除记录数。 |
+| `raw_char_count` | `int` |  | 原始字符总数。 |
+| `processed_char_count` | `int` |  | 处理后字符总数。 |
+
+### 12. `ProcessingSample`
+
+一句话说明：预处理预览里展示的样本记录。
+
+| 字段 | 类型 | 约束 | 说明 |
+| --- | --- | --- | --- |
+| `sample_index` | `int` |  | 样本序号。 |
+| `source_record_id` | `str` |  | 样本对应的源记录 ID。 |
+| `record_index` | `int` |  | 样本对应的源记录序号。 |
+| `content` | `str` |  | 样本文本内容。 |
+| `content_hash` | `str` |  | 样本文本哈希。 |
+| `applied_rules` | `list[str]` |  | 样本对应的生效规则列表。 |
+| `dropped` | `bool` |  | 样本是否被标记为移除。 |
 
 ## 三、关键 API DTO
 
@@ -356,11 +442,35 @@
 | --- | --- | --- | --- |
 | `namespace` | `str` | 必填 | 目标命名空间。 |
 | `source_path` | `str` | 必填 | 源文件路径。 |
+| `processing_rules` | `list[str]` |  | 本次启用的处理规则 ID 列表，默认空列表。 |
 | `chunk_size` | `int \| null` | `> 0` | 切块大小；缺省时使用数据预处理模块默认值。 |
 | `chunk_overlap` | `int \| null` | `>= 0` | 切块重叠长度，且必须小于 `chunk_size`；缺省时使用数据预处理模块默认值。 |
 | `keep_version` | `bool` |  | 是否保留旧版本。 |
 
-### 24. `KnowledgeDocumentRechunkRequest`
+### 24. `KnowledgeDocumentPreprocessPreviewRequest`
+
+一句话说明：知识文档预处理预览请求 DTO。
+
+| 字段 | 类型 | 约束 | 说明 |
+| --- | --- | --- | --- |
+| `namespace` | `str` | 必填 | 目标命名空间。 |
+| `source_path` | `str` | 必填 | 源文件路径。 |
+| `processing_rules` | `list[str]` |  | 本次启用的处理规则 ID 列表，默认空列表。 |
+| `chunk_size` | `int \| null` | `> 0` | 预览使用的切块大小；缺省时使用数据预处理模块默认值。 |
+| `chunk_overlap` | `int \| null` | `>= 0` | 预览使用的切块重叠长度，且必须小于 `chunk_size`；缺省时使用数据预处理模块默认值。 |
+
+### 25. `KnowledgeDocumentReprocessRequest`
+
+一句话说明：知识文档重处理请求 DTO。
+
+| 字段 | 类型 | 约束 | 说明 |
+| --- | --- | --- | --- |
+| `processing_rules` | `list[str]` |  | 本次启用的处理规则 ID 列表，默认空列表。 |
+| `chunk_size` | `int \| null` | `> 0` | 新切块大小；缺省时使用数据预处理模块默认值。 |
+| `chunk_overlap` | `int \| null` | `>= 0` | 新切块重叠长度，且必须小于 `chunk_size`；缺省时使用数据预处理模块默认值。 |
+| `keep_version` | `bool` |  | 是否保留旧版本。 |
+
+### 26. `KnowledgeDocumentRechunkRequest`
 
 一句话说明：知识文档重分块请求 DTO。
 
@@ -370,7 +480,26 @@
 | `chunk_overlap` | `int \| null` | `>= 0` | 新切块重叠长度，且必须小于 `chunk_size`；缺省时使用数据预处理模块默认值。 |
 | `keep_version` | `bool` |  | 是否保留旧版本。 |
 
-### 25. `KnowledgeDocumentVersionResponse`
+### 27. `KnowledgeDocumentPreprocessPreviewResponse`
+
+一句话说明：知识文档预处理预览响应 DTO。
+
+| 字段 | 类型 | 约束 | 说明 |
+| --- | --- | --- | --- |
+| `namespace` | `str` |  | 目标命名空间。 |
+| `source_path` | `str` |  | 源文件路径。 |
+| `source_type` | `str` |  | 实际源文件类型。 |
+| `chunk_size` | `int` |  | 当前预览使用的切块大小。 |
+| `chunk_overlap` | `int` |  | 当前预览使用的切块重叠长度。 |
+| `supported_rules` | `list[ProcessingRuleDefinition]` |  | 当前文件类型支持的规则列表。 |
+| `selected_rules` | `list[ProcessingRuleDefinition]` |  | 当前请求实际生效的规则定义列表。 |
+| `processing_stats` | `ProcessingStats \| null` | 可空 | 处理统计摘要。 |
+| `original_samples` | `list[ProcessingSample]` |  | 原始样本列表。 |
+| `processed_samples` | `list[ProcessingSample]` |  | 处理后样本列表。 |
+| `can_index` | `bool` |  | 是否允许继续入库。 |
+| `warnings` | `list[ProcessingWarning]` |  | 结构化提示列表。 |
+
+### 28. `KnowledgeDocumentVersionResponse`
 
 一句话说明：知识文档版本响应 DTO。
 
@@ -382,9 +511,13 @@
 | `chunk_size` | `int` |  | 切块大小。 |
 | `chunk_overlap` | `int` |  | 切块重叠。 |
 | `created_at` | `str` |  | 版本创建时间。 |
+| `source_type` | `str` |  | 该版本对应的源文件类型。 |
+| `processing_rules` | `list[str]` |  | 该版本生效的处理规则列表。 |
+| `processing_stats` | `ProcessingStats \| null` | 可空 | 该版本处理统计摘要。 |
+| `provenance_enabled` | `bool` |  | 该版本是否写入完整 provenance。 |
 | `last_error` | `str \| null` | 可空 | 错误信息。 |
 
-### 26. `KnowledgeDocumentSummaryResponse`
+### 29. `KnowledgeDocumentSummaryResponse`
 
 一句话说明：知识文档列表项 DTO。
 
@@ -394,11 +527,15 @@
 | `namespace` | `str` |  | 命名空间。 |
 | `source_path` | `str` |  | 源路径。 |
 | `status` | `str` | 枚举 | 当前状态。 |
+| `source_type` | `str` |  | 当前活动版本的源文件类型。 |
+| `processing_rules` | `list[str]` |  | 当前活动版本沿用的处理规则列表。 |
+| `processing_stats` | `ProcessingStats \| null` | 可空 | 当前活动版本处理统计。 |
+| `provenance_enabled` | `bool` |  | 当前活动版本是否写入完整 provenance。 |
 | `active_version` | `int` |  | 当前版本。 |
 | `chunk_count` | `int` |  | 当前分块数。 |
 | `updated_at` | `str` |  | 更新时间。 |
 
-### 27. `KnowledgeDocumentListResponse`
+### 30. `KnowledgeDocumentListResponse`
 
 一句话说明：知识文档列表响应 DTO。
 
@@ -406,7 +543,7 @@
 | --- | --- | --- | --- |
 | `documents` | `list[KnowledgeDocumentSummaryResponse]` |  | 文档列表。 |
 
-### 28. `KnowledgeFileIndexSummaryResponse`
+### 31. `KnowledgeFileIndexSummaryResponse`
 
 一句话说明：按上传文件聚合的索引状态 DTO。
 
@@ -419,14 +556,14 @@
 | `namespace` | `str \| null` | 可空 | 命名空间。 |
 | `document_id` | `str \| null` | 可空 | 对应文档 ID。 |
 | `indexed` | `bool` |  | 是否已建索引。 |
-| `status` | `str` | 枚举 | 索引状态。 |
+| `status` | `str` | 枚举 | 索引状态，常见值包括 `awaiting_processing`、`unsupported`、`active`、`failed`、`deleted`。 |
 | `active_version` | `int \| null` | 可空 | 当前激活版本。 |
 | `chunk_count` | `int \| null` | 可空 | 当前分块数。 |
 | `updated_at` | `str \| null` | 可空 | 更新时间。 |
 | `last_error` | `str \| null` | 可空 | 错误信息。 |
 | `can_index` | `bool` |  | 当前文件是否允许建索引。 |
 
-### 29. `KnowledgeFileIndexListResponse`
+### 32. `KnowledgeFileIndexListResponse`
 
 一句话说明：文件索引状态列表响应 DTO。
 
@@ -434,7 +571,7 @@
 | --- | --- | --- | --- |
 | `items` | `list[KnowledgeFileIndexSummaryResponse]` |  | 文件索引状态列表。 |
 
-### 30. `KnowledgeDocumentDetailResponse`
+### 33. `KnowledgeDocumentDetailResponse`
 
 一句话说明：知识文档详情响应 DTO。
 
@@ -450,10 +587,13 @@
 | `source_type` | `str` |  | 源类型。 |
 | `chunk_size` | `int` |  | 切块大小。 |
 | `chunk_overlap` | `int` |  | 切块重叠。 |
+| `processing_rules` | `list[str]` |  | 当前活动版本沿用的处理规则列表。 |
+| `processing_stats` | `ProcessingStats \| null` | 可空 | 当前活动版本处理统计。 |
+| `provenance_enabled` | `bool` |  | 当前活动版本是否写入完整 provenance。 |
 | `last_error` | `str \| null` | 可空 | 错误信息。 |
 | `versions` | `list[KnowledgeDocumentVersionResponse]` |  | 版本列表。 |
 
-### 31. `KnowledgeDocumentOperationResponse`
+### 34. `KnowledgeDocumentOperationResponse`
 
 一句话说明：知识文档写操作响应 DTO，返回文档当前状态和版本信息。
 
@@ -469,11 +609,14 @@
 | `source_type` | `str` |  | 源类型。 |
 | `chunk_size` | `int` |  | 切块大小。 |
 | `chunk_overlap` | `int` |  | 切块重叠。 |
+| `processing_rules` | `list[str]` |  | 当前活动版本沿用的处理规则列表。 |
+| `processing_stats` | `ProcessingStats \| null` | 可空 | 当前活动版本处理统计。 |
+| `provenance_enabled` | `bool` |  | 当前活动版本是否写入完整 provenance。 |
 | `last_error` | `str \| null` | 可空 | 最近错误。 |
 | `versions` | `list[KnowledgeDocumentVersionResponse]` |  | 版本历史。 |
 | `document_version` | `int` |  | 本次操作对应版本。 |
 
-### 32. `KnowledgeDocumentDeleteResponse`
+### 35. `KnowledgeDocumentDeleteResponse`
 
 一句话说明：知识文档删除响应 DTO。
 
@@ -489,6 +632,9 @@
 | `source_type` | `str` |  | 源类型。 |
 | `chunk_size` | `int` |  | 切块大小。 |
 | `chunk_overlap` | `int` |  | 切块重叠。 |
+| `processing_rules` | `list[str]` |  | 当前活动版本沿用的处理规则列表。 |
+| `processing_stats` | `ProcessingStats \| null` | 可空 | 当前活动版本处理统计。 |
+| `provenance_enabled` | `bool` |  | 当前活动版本是否写入完整 provenance。 |
 | `last_error` | `str \| null` | 可空 | 错误信息。 |
 | `versions` | `list[KnowledgeDocumentVersionResponse]` |  | 版本历史。 |
 | `document_version` | `int` |  | 当前操作对应版本。 |
@@ -500,7 +646,7 @@
 - 这些模型来自 `backend/data/*.json` 和 `commerce_tools.py`。
 - 它们是示例业务数据，不是统一数据库实体。
 
-### 33. `Product`
+### 36. `Product`
 
 一句话说明：电商商品主数据，包含规格和库存。
 
@@ -520,7 +666,7 @@
 - `in_stock`
 - `low_stock`
 
-### 34. `Review`
+### 37. `Review`
 
 一句话说明：商品评论数据。
 
@@ -534,7 +680,7 @@
 | `user_name` | `str` |  | 评论用户昵称。 |
 | `created_at` | `str` |  | 评论时间。 |
 
-### 35. `Order`
+### 38. `Order`
 
 一句话说明：订单主数据，包含用户、配送和订单状态。
 
@@ -562,7 +708,7 @@
 - `运输中`
 - `已签收`
 
-### 36. `OrderItem`
+### 39. `OrderItem`
 
 一句话说明：订单中的商品明细行。
 
@@ -573,7 +719,7 @@
 | `quantity` | `int` |  | 购买数量。 |
 | `unit_price` | `number` |  | 下单单价。 |
 
-### 37. `ServiceTicket`
+### 40. `ServiceTicket`
 
 一句话说明：售后或投诉工单，由工具运行时写入 `service_tickets.json`。
 
@@ -607,7 +753,8 @@
 - `sessions` 1 对多 `chat_messages`
 - `KnowledgeDocumentRecord` 1 对多 `KnowledgeDocumentVersion`
 - `KnowledgeDocumentRecord` 1 对多 `DocumentChunk`
-- `DocumentRecord` 1 对多 `DocumentChunk`
+- `DocumentRecord` 1 对多 `ProcessedDocumentRecord`
+- `ProcessedDocumentRecord` 1 对多 `DocumentChunk`
 
 ### 电商示例链路
 
@@ -649,7 +796,10 @@
 - `FileInfo`
 - `FileListResponse`
 - `FileDeleteResponse`
+- `KnowledgeDocumentPreprocessPreviewRequest`
+- `KnowledgeDocumentReprocessRequest`
 - `KnowledgeDocumentRechunkRequest`
+- `KnowledgeDocumentPreprocessPreviewResponse`
 - `KnowledgeDocumentVersionResponse`
 - `KnowledgeDocumentSummaryResponse`
 - `KnowledgeDocumentListResponse`
