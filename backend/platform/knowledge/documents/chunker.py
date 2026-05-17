@@ -118,6 +118,9 @@ def _build_chunk_metadata(
         "document_id": document_id,
         "document_version": document_version,
         "namespace": record.namespace,
+        # 标记这个分块来自“用户上传并正式入库”的文档链路。
+        # 检索阶段会优先相信这个标记，避免把内置业务数据误当成上传文档召回。
+        "is_managed_document": True,
         "source_type": record.source_type,
         "source_path": record.source_path,
         "source_record_id": record.source_record_id,

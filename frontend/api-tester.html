@@ -223,13 +223,18 @@
     }
 
     .topbar {
+      display: grid;
+      gap: 16px;
+      padding: 20px 28px 16px;
+      background: rgba(255, 255, 255, 0.68);
+      border-bottom: 1px solid rgba(216, 227, 235, 0.9);
+    }
+
+    .topbar-row {
       display: flex;
       align-items: flex-start;
       justify-content: space-between;
       gap: 20px;
-      padding: 20px 28px 16px;
-      background: rgba(255, 255, 255, 0.68);
-      border-bottom: 1px solid rgba(216, 227, 235, 0.9);
     }
 
     .page-title {
@@ -290,6 +295,60 @@
       background: linear-gradient(135deg, var(--teal), #1f878c);
       color: #ffffff;
       border: 0;
+    }
+
+    .mount-panel {
+      display: grid;
+      gap: 10px;
+      padding: 14px 16px;
+      border: 1px solid rgba(214, 225, 232, 0.92);
+      border-radius: 18px;
+      background: rgba(255, 255, 255, 0.76);
+      box-shadow: var(--shadow-soft);
+    }
+
+    .mount-panel-title {
+      margin: 0;
+      color: var(--text);
+      font-size: 14px;
+      font-weight: 800;
+    }
+
+    .mount-options {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+    }
+
+    .mount-option {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      min-width: 220px;
+      padding: 12px 14px;
+      border: 1px solid rgba(214, 225, 232, 0.92);
+      border-radius: 16px;
+      background: rgba(244, 248, 251, 0.94);
+    }
+
+    .mount-option input {
+      margin-top: 2px;
+      accent-color: var(--teal);
+    }
+
+    .mount-option strong {
+      display: block;
+      color: var(--text);
+      font-size: 13px;
+      font-weight: 800;
+    }
+
+    .mount-option span {
+      display: block;
+      margin-top: 4px;
+      color: var(--text-muted);
+      font-size: 12px;
+      line-height: 1.5;
     }
 
     .conversation-board {
@@ -566,6 +625,114 @@
       line-height: 1.55;
     }
 
+    .citation-card {
+      display: grid;
+      gap: 10px;
+      padding: 14px 16px;
+      border-radius: 18px;
+      background: rgba(255, 255, 255, 0.92);
+      border: 1px solid rgba(214, 225, 232, 0.92);
+    }
+
+    .citation-card-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .citation-index {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 34px;
+      height: 34px;
+      padding: 0 10px;
+      border-radius: 999px;
+      color: #ffffff;
+      background: linear-gradient(135deg, var(--teal), #1f878c);
+      font-size: 13px;
+      font-weight: 800;
+    }
+
+    .citation-title {
+      flex: 1 1 auto;
+      min-width: 0;
+    }
+
+    .citation-title strong {
+      display: block;
+      color: var(--text);
+      font-size: 14px;
+      font-weight: 800;
+      word-break: break-word;
+    }
+
+    .citation-title span {
+      display: block;
+      margin-top: 4px;
+      color: var(--text-muted);
+      font-size: 12px;
+      line-height: 1.5;
+      word-break: break-word;
+    }
+
+    .citation-meta-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .citation-meta {
+      padding: 10px 12px;
+      border-radius: 14px;
+      background: rgba(244, 248, 251, 0.94);
+      border: 1px solid rgba(214, 225, 232, 0.92);
+    }
+
+    .citation-meta strong {
+      display: block;
+      margin-bottom: 4px;
+      color: var(--text-muted);
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+
+    .citation-meta span {
+      color: var(--text);
+      font-size: 13px;
+      font-weight: 700;
+      line-height: 1.5;
+      word-break: break-word;
+    }
+
+    .citation-snippet {
+      padding: 12px 14px;
+      border-radius: 16px;
+      background: rgba(223, 242, 240, 0.46);
+      border: 1px solid rgba(177, 220, 223, 0.92);
+    }
+
+    .citation-snippet strong {
+      display: block;
+      margin-bottom: 6px;
+      color: var(--teal);
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+
+    .citation-snippet span {
+      color: #13374f;
+      font-size: 13px;
+      line-height: 1.7;
+      word-break: break-word;
+    }
+
     .card-actions {
       display: flex;
       gap: 10px;
@@ -747,13 +914,21 @@
         align-items: stretch;
       }
 
+      .topbar-row,
       .topbar-actions,
       .composer-grid {
-        grid-template-columns: 1fr;
         width: 100%;
       }
 
+      .topbar-actions {
+        justify-content: flex-start;
+      }
+
       .detail-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .citation-meta-grid {
         grid-template-columns: 1fr;
       }
 
@@ -794,16 +969,38 @@
 
     <section class="workspace">
       <header class="topbar">
-        <div>
-          <h1 class="page-title">连续对话工作台</h1>
+        <div class="topbar-row">
+          <div>
+            <h1 class="page-title">连续对话工作台</h1>
+          </div>
+
+          <div class="topbar-actions">
+            <div class="topbar-pill">当前会话：<strong id="sessionIdBadge">未建立</strong></div>
+            <select id="sceneSelect" class="scene-select" aria-label="场景切换"></select>
+            <button id="newChat" class="workspace-button" type="button">新会话</button>
+            <a class="workspace-button primary" href="./knowledge-manager.html">前往知识库管理</a>
+          </div>
         </div>
 
-        <div class="topbar-actions">
-          <div class="topbar-pill">当前会话：<strong id="sessionIdBadge">未建立</strong></div>
-          <select id="sceneSelect" class="scene-select" aria-label="场景切换"></select>
-          <button id="newChat" class="workspace-button" type="button">新会话</button>
-          <a class="workspace-button primary" href="./knowledge-manager.html">前往知识库管理</a>
-        </div>
+        <section class="mount-panel" aria-label="知识源挂载设置">
+          <p class="mount-panel-title">知识源挂载</p>
+          <div class="mount-options">
+            <label class="mount-option">
+              <input id="mountDocuments" type="checkbox" checked />
+              <span>
+                <strong>documents</strong>
+                文档知识库，默认启用。
+              </span>
+            </label>
+            <label class="mount-option">
+              <input id="mountEcommerce" type="checkbox" />
+              <span>
+                <strong>ecommerce</strong>
+                电商知识，可查询商品、评论、订单和库存。
+              </span>
+            </label>
+          </div>
+        </section>
       </header>
 
       <section class="conversation-board">
@@ -857,7 +1054,8 @@
       sending: false,
       scenes: [],
       activeScene: "",
-      sceneLoading: false
+      sceneLoading: false,
+      mountedKnowledgeSources: ["documents"]
     };
 
     const refs = {
@@ -866,6 +1064,8 @@
       sessionIdBadge: document.getElementById("sessionIdBadge"),
       chatFeed: document.getElementById("chatFeed"),
       sceneSelect: document.getElementById("sceneSelect"),
+      documentsMount: document.getElementById("mountDocuments"),
+      ecommerceMount: document.getElementById("mountEcommerce"),
       input: document.getElementById("messageInput"),
       sendButton: document.getElementById("sendButton"),
       newChat: document.getElementById("newChat"),
@@ -887,15 +1087,30 @@
     }
 
     function pickPreferredScene(defaultScene, scenes) {
-      const hasScene = function (name) {
-        return scenes.some(function (item) {
-          return item.scene === name;
-        });
-      };
-      if (hasScene("ecommerce")) {
-        return "ecommerce";
-      }
       return defaultScene || (scenes[0] && scenes[0].scene) || "";
+    }
+
+    // 读取当前勾选的知识源，用于创建新会话。
+    function getSelectedMountedKnowledgeSources() {
+      const selected = [];
+      if (refs.documentsMount.checked) {
+        selected.push("documents");
+      }
+      if (refs.ecommerceMount.checked) {
+        selected.push("ecommerce");
+      }
+      if (!selected.length) {
+        selected.push("documents");
+      }
+      return selected;
+    }
+
+    // 把后端返回的知识源状态同步回页面，避免前后端显示不一致。
+    function syncMountedKnowledgeSources(sources) {
+      const normalized = Array.isArray(sources) && sources.length ? sources : ["documents"];
+      state.mountedKnowledgeSources = normalized.slice();
+      refs.documentsMount.checked = normalized.indexOf("documents") >= 0;
+      refs.ecommerceMount.checked = normalized.indexOf("ecommerce") >= 0;
     }
 
     function setComposerStatus(message) {
@@ -935,6 +1150,8 @@
       refs.input.disabled = state.sceneLoading || !state.activeScene;
       refs.sceneSelect.disabled = state.sceneLoading || !state.scenes.length;
       refs.newChat.disabled = state.sceneLoading || !state.activeScene;
+      refs.documentsMount.disabled = state.sceneLoading;
+      refs.ecommerceMount.disabled = state.sceneLoading;
     }
 
     function updateSessionBadge() {
@@ -986,6 +1203,24 @@
       return normalized.length > maxLength ? normalized.slice(0, maxLength) + "..." : normalized;
     }
 
+    function formatCitationPath(citation) {
+      return citation.source_path || citation.document_id || citation.namespace || "未提供";
+    }
+
+    function formatCitationChunk(citation) {
+      const chunkId = citation.chunk_id || "N/A";
+      const chunkIndex = typeof citation.chunk_index === "number" ? "#" + citation.chunk_index : "#N/A";
+      return chunkId + " / " + chunkIndex;
+    }
+
+    function formatCitationScore(citation) {
+      return typeof citation.score === "number" ? citation.score.toFixed(2) : "N/A";
+    }
+
+    function formatCitationSource(citation) {
+      return citation.source_name || citation.citation_id || citation.namespace || "未命名来源";
+    }
+
     function renderKnowledgeCard(message) {
       if (!message.citations.length) {
         return "";
@@ -1000,7 +1235,9 @@
           '<div class="support-body-inline">' +
             '<div class="knowledge-entry">' +
               '<div>' +
-                '<strong>' + escapeHtml(first.source_path || first.namespace || "知识文档") + '</strong>' +
+                '<strong>[' + escapeHtml(first.index || 1) + '] ' + escapeHtml(formatCitationSource(first)) + '</strong>' +
+                '<span>来源路径：' + escapeHtml(formatCitationPath(first)) + '</span>' +
+                '<span>Chunk：' + escapeHtml(formatCitationChunk(first)) + "</span>" +
                 '<span>' + escapeHtml(first.snippet || "命中知识证据片段") + '</span>' +
               '</div>' +
               '<a class="workspace-button primary" href="./knowledge-manager.html">知识库管理</a>' +
@@ -1084,9 +1321,23 @@
 
     function renderCitation(citation) {
       return (
-        '<div class="detail-item full">' +
-          '<strong>' + escapeHtml(citation.namespace || "source") + " / " + escapeHtml(citation.citation_id || "evidence") + '</strong>' +
-          '<span>' + escapeHtml(citation.snippet || "命中证据片段") + '</span>' +
+        '<div class="citation-card">' +
+          '<div class="citation-card-header">' +
+            '<span class="citation-index">[' + escapeHtml(citation.index || 1) + ']</span>' +
+            '<div class="citation-title">' +
+              '<strong>' + escapeHtml(formatCitationSource(citation)) + '</strong>' +
+              '<span>来源路径：' + escapeHtml(formatCitationPath(citation)) + '</span>' +
+            '</div>' +
+          '</div>' +
+          '<div class="citation-meta-grid">' +
+            '<div class="citation-meta"><strong>来源类型</strong><span>' + escapeHtml(citation.source_kind || citation.namespace || "unknown") + '</span></div>' +
+            '<div class="citation-meta"><strong>Chunk</strong><span>' + escapeHtml(formatCitationChunk(citation)) + '</span></div>' +
+            '<div class="citation-meta"><strong>Score</strong><span>' + escapeHtml(formatCitationScore(citation)) + '</span></div>' +
+          '</div>' +
+          '<div class="citation-snippet">' +
+            '<strong>片段内容</strong>' +
+            '<span>' + escapeHtml(citation.snippet || "命中证据片段") + '</span>' +
+          '</div>' +
         '</div>'
       );
     }
@@ -1117,7 +1368,7 @@
         '<div class="bubble-actions">' +
           '<button class="knowledge-toggle' + (expanded ? " is-open" : "") + '" type="button" data-knowledge-toggle="' + escapeHtml(message.id) + '">' +
             '<strong>' + (expanded ? "收起知识命中详情" : "展开知识命中详情") + '</strong>' +
-            '<span>' + escapeHtml(first.source_path || first.namespace || "知识文档") + ' · ' + escapeHtml(summarizeSnippet(first.snippet, 56)) + '</span>' +
+            '<span>[' + escapeHtml(first.index || 1) + '] ' + escapeHtml(formatCitationSource(first)) + ' · ' + escapeHtml(summarizeSnippet(first.snippet, 56)) + '</span>' +
           '</button>' +
         '</div>'
       );
@@ -1258,7 +1509,7 @@
           { scene: "ecommerce", name: "Ecommerce Customer Service" },
           { scene: "generic_assistant", name: "Generic Knowledge Assistant" }
         ];
-        state.activeScene = "ecommerce";
+        state.activeScene = "generic_assistant";
         renderSceneOptions();
       } finally {
         state.sceneLoading = false;
@@ -1280,24 +1531,29 @@
       setComposerStatus("正在创建会话...");
 
       try {
+        const mountedKnowledgeSources = getSelectedMountedKnowledgeSources();
         const data = await apiRequest("/sessions", {
           method: "POST",
-          body: JSON.stringify({ scene: scene })
+          body: JSON.stringify({
+            scene: scene,
+            mounted_knowledge_sources: mountedKnowledgeSources
+          })
         });
         state.sessionId = data.session_id || "";
         state.activeScene = data.scene || scene;
+        syncMountedKnowledgeSources(data.mounted_knowledge_sources);
         refs.sceneSelect.value = state.activeScene;
         renderSceneConfig();
         renderMessages();
         updateSessionBadge();
         setServiceStatus(true);
-        setComposerStatus("会话已就绪");
-      } catch (_) {
+        setComposerStatus("会话已就绪，知识源已挂载");
+      } catch (error) {
         state.sessionId = "";
         updateSessionBadge();
         setServiceStatus(false);
         setComposerStatus("会话创建失败");
-        showError("场景切换失败，请检查后端是否可用后重试。");
+        showError("会话创建失败，请检查场景和知识源配置后重试。");
       } finally {
         state.sceneLoading = false;
         setInteractiveState();
@@ -1382,6 +1638,16 @@
         if (event.key === "Enter" && !event.shiftKey) {
           event.preventDefault();
           sendMessage();
+        }
+      });
+      refs.documentsMount.addEventListener("change", function () {
+        if (!refs.documentsMount.checked && !refs.ecommerceMount.checked) {
+          refs.documentsMount.checked = true;
+        }
+      });
+      refs.ecommerceMount.addEventListener("change", function () {
+        if (!refs.documentsMount.checked && !refs.ecommerceMount.checked) {
+          refs.documentsMount.checked = true;
         }
       });
     }

@@ -8,6 +8,11 @@ from langchain_core.tools import BaseTool
 from pydantic import BaseModel, ConfigDict, Field
 
 from backend.platform.config.settings import AppSettings, settings
+from backend.platform.knowledge.base.relevance import (
+    DOCUMENT_MINIMUM_RELEVANCE,
+    filter_managed_document_results,
+    filter_low_relevance_document_results,
+)
 from backend.scenes.base import (
     SceneBootstrapResult,
     SceneDefinition,
@@ -44,8 +49,9 @@ class GenericKnowledgeDocumentRetriever(BaseRetriever):
     """通用助手默认 retriever，只依赖文档知识库。"""
 
     knowledge_service: Any = Field(exclude=True)
+    files_root: str = Field(exclude=True)
     default_top_k: int = 5
-    minimum_relevance: float = 0.18
+    minimum_relevance: float = DOCUMENT_MINIMUM_RELEVANCE
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
@@ -57,11 +63,14 @@ class GenericKnowledgeDocumentRetriever(BaseRetriever):
         """仅在已上传文档知识中检索证据。"""
         requested_top_k = top_k or self.default_top_k
         results = self.knowledge_service.search_document_chunks(query=query, top_k=requested_top_k)
+        results = filter_managed_document_results(results, files_root=self.files_root)
+        results = filter_low_relevance_document_results(
+            results,
+            minimum_relevance=self.minimum_relevance,
+        )
         documents: list[Document] = []
         for result in results:
             score = float(result.score) if result.score is not None else None
-            if score is not None and score < self.minimum_relevance:
-                continue
             snippet = truncate_snippet(result.document.content)
             if not snippet:
                 continue
@@ -69,6 +78,7 @@ class GenericKnowledgeDocumentRetriever(BaseRetriever):
                 Document(
                     page_content=snippet,
                     metadata={
+                        **result.document.metadata,
                         "namespace": _resolve_document_namespace(result),
                         "citation_id": _resolve_document_citation_id(result),
                         "score": score,
@@ -84,6 +94,7 @@ class GenericKnowledgeDocumentSearchTool(RetrievalTool):
     name: str = "knowledge_document_search"
     description: str = "Search semantically relevant uploaded knowledge documents."
     knowledge_service: Any = Field(exclude=True)
+    files_root: str = Field(exclude=True)
     default_top_k: int = 5
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -91,13 +102,18 @@ class GenericKnowledgeDocumentSearchTool(RetrievalTool):
     def retrieve(self, query: str, *, run_manager: Any | None = None) -> RetrievalResult:
         """在上传文档分块中检索并返回标准化结果。"""
         vector_results = self.knowledge_service.search_document_chunks(query=query, top_k=self.default_top_k)
+        vector_results = filter_managed_document_results(vector_results, files_root=self.files_root)
+        vector_results = filter_low_relevance_document_results(vector_results)
         records = [_build_document_record(result) for result in vector_results]
         citations = [
             RetrievalCitation(
                 citation_id=record["citation_id"],
                 snippet=record["snippet"],
                 source_type=record["namespace"],
-                metadata={"score": record.get("score")},
+                metadata={
+                    **record.get("metadata", {}),
+                    "score": record.get("score"),
+                },
             )
             for record in records
         ]
@@ -105,6 +121,7 @@ class GenericKnowledgeDocumentSearchTool(RetrievalTool):
             Document(
                 page_content=record["snippet"],
                 metadata={
+                    **record.get("metadata", {}),
                     "namespace": record["namespace"],
                     "citation_id": record["citation_id"],
                     "score": record.get("score"),
@@ -142,9 +159,15 @@ def build_generic_assistant_scene_definition(
         build_retriever=lambda: _build_generic_agentic_retriever(
             knowledge_service=resolved_knowledge_service,
             product_store=resolved_product_store,
+            files_root=str(current_settings.data_dir / "files"),
             max_rounds=max_rounds,
         ),
-        build_tools=lambda: (build_generic_knowledge_document_tool(resolved_knowledge_service),),
+        build_tools=lambda: (
+            build_generic_knowledge_document_tool(
+                resolved_knowledge_service,
+                files_root=str(current_settings.data_dir / "files"),
+            ),
+        ),
         system_prompt=GENERIC_ASSISTANT_SYSTEM_PROMPT,
         fallback_policy=SceneFallbackPolicy(
             no_hit_message="暂时没有检索到足够相关的文档知识。请补充更具体的主题、术语或文档范围，我再继续帮你查。"
@@ -162,11 +185,15 @@ def build_generic_assistant_scene_definition(
 
 def build_generic_knowledge_document_tool(
     knowledge_service: KnowledgeService,
+    *,
+    files_root: str,
 ) -> BaseTool:
     """构建面向通用知识助手的文档检索工具。"""
 
     def knowledge_document_search(query: str, top_k: int = 5) -> ToolResult:
         vector_results = knowledge_service.search_document_chunks(query=query, top_k=top_k)
+        vector_results = filter_managed_document_results(vector_results, files_root=files_root)
+        vector_results = filter_low_relevance_document_results(vector_results)
         records = [_build_document_record(result) for result in vector_results]
         return ToolResult.ok(
             tool_name="knowledge_document_search",
@@ -210,12 +237,14 @@ def _build_generic_agentic_retriever(
     *,
     knowledge_service: KnowledgeService,
     product_store: ProductCatalogStore,
+    files_root: str,
     max_rounds: int,
 ) -> AgenticRetriever:
     """为通用场景构建文档优先的 AgenticRetriever。"""
     tools = build_agentic_retrieval_tools(
         knowledge_service=knowledge_service,
         product_store=product_store,
+        files_root=files_root,
     )
     return AgenticRetriever(
         tools={tool.name: tool for tool in tools},

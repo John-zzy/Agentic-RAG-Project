@@ -127,15 +127,37 @@ class EcommerceSufficiencyJudge(SufficiencyJudge):
         has_ecommerce_intent = self._is_ecommerce_intent(normalized_query)
         is_document_question = self._contains_any(normalized_query, self.document_keywords)
         has_document_evidence = self._has_document_evidence(input)
+        preferred_ecommerce_tool = self._resolve_preferred_ecommerce_tool(
+            normalized_query,
+            plan.candidate_tools,
+        )
 
         if result_count == 0:
-            if is_document_round and can_use_ecommerce and has_ecommerce_intent:
+            if (
+                is_document_round
+                and can_use_ecommerce
+                and has_ecommerce_intent
+                and preferred_ecommerce_tool is not None
+            ):
                 return SufficiencyDecision(
                     is_sufficient=False,
                     next_action="switch_tool",
                     reason="文档知识没有命中，且问题带有明显电商意图，继续尝试电商知识源。",
-                    suggested_tool="product_semantic_search",
+                    suggested_tool=preferred_ecommerce_tool,
                 )
+            if current_tool == "product_semantic_search":
+                fallback_tool = self._resolve_followup_ecommerce_tool(
+                    normalized_query,
+                    plan.candidate_tools,
+                    plan.attempted_tools,
+                )
+                if fallback_tool is not None:
+                    return SufficiencyDecision(
+                        is_sufficient=False,
+                        next_action="switch_tool",
+                        reason="商品检索没有命中，改查更贴近当前问题类型的电商知识源。",
+                        suggested_tool=fallback_tool,
+                    )
             if plan.round_index >= plan.max_rounds:
                 return SufficiencyDecision(
                     is_sufficient=False,
@@ -157,12 +179,16 @@ class EcommerceSufficiencyJudge(SufficiencyJudge):
                     reason="当前问题更偏文档问答，文档证据已足够支持回答。",
                     confidence=result.confidence,
                 )
-            if can_use_ecommerce and has_ecommerce_intent:
+            if (
+                can_use_ecommerce
+                and has_ecommerce_intent
+                and preferred_ecommerce_tool is not None
+            ):
                 return SufficiencyDecision(
                     is_sufficient=False,
                     next_action="switch_tool",
                     reason="当前问题带有明显电商意图，继续补充电商知识以获得更直接的答案。",
-                    suggested_tool="product_semantic_search",
+                    suggested_tool=preferred_ecommerce_tool,
                 )
             return SufficiencyDecision(
                 is_sufficient=True,
@@ -255,6 +281,39 @@ class EcommerceSufficiencyJudge(SufficiencyJudge):
             str(document.metadata.get("namespace")) == "documents"
             for document in context.documents
         )
+
+    def _resolve_preferred_ecommerce_tool(
+        self,
+        query: str,
+        candidate_tools: tuple[str, ...],
+    ) -> str | None:
+        """按问题类型挑选最适合的首个电商检索工具。"""
+        if self._contains_any(query, self.order_keywords) and "order_semantic_search" in candidate_tools:
+            return "order_semantic_search"
+        if self._contains_any(query, self.review_keywords) and "review_semantic_search" in candidate_tools:
+            return "review_semantic_search"
+        if any(
+            tool_name in candidate_tools
+            for tool_name in ("product_semantic_search", "inventory_lookup", "product_detail_lookup")
+        ):
+            return "product_semantic_search" if "product_semantic_search" in candidate_tools else None
+        return None
+
+    def _resolve_followup_ecommerce_tool(
+        self,
+        query: str,
+        candidate_tools: tuple[str, ...],
+        attempted_tools: tuple[str, ...],
+    ) -> str | None:
+        """当商品检索没有命中时，尝试切到更匹配的电商知识源。"""
+        attempted = set(attempted_tools)
+        if self._contains_any(query, self.order_keywords):
+            if "order_semantic_search" in candidate_tools and "order_semantic_search" not in attempted:
+                return "order_semantic_search"
+        if self._contains_any(query, self.review_keywords):
+            if "review_semantic_search" in candidate_tools and "review_semantic_search" not in attempted:
+                return "review_semantic_search"
+        return None
 
     def _resolve_top_product_id(self, records: list[dict[str, Any]]) -> str | None:
         for record in records:

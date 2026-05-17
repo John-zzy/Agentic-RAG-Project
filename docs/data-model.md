@@ -29,12 +29,13 @@
 
 ### 1. `sessions`
 
-一句话说明：聊天会话主表，记录会话归属场景、状态和活跃时间。
+一句话说明：聊天会话主表，记录会话归属场景、挂载知识源、状态和活跃时间。
 
 | 字段 | 类型 | 约束 | 说明 |
 | --- | --- | --- | --- |
 | `session_id` | `TEXT` | PK | 会话主键，UUID 字符串。 |
 | `scene` | `TEXT` |  | 会话绑定场景，如 `generic_assistant`、`ecommerce`。 |
+| `mounted_knowledge_sources` | `TEXT` | NOT NULL | JSON 字符串，保存规范化后的知识源列表，默认值为 `["documents"]`。 |
 | `status` | `TEXT` | 枚举 | 会话状态。 |
 | `created_at` | `TEXT` |  | 会话创建时间，ISO 8601。 |
 | `updated_at` | `TEXT` |  | 最近一次更新记录时间。 |
@@ -56,7 +57,7 @@
 | `request_id` | `TEXT` |  | 本轮请求 ID。 |
 | `user_message` | `TEXT` |  | 用户输入。 |
 | `assistant_answer` | `TEXT` |  | 助手回答。 |
-| `retrieval_snippets` | `TEXT` |  | JSON 字符串，保存引用片段列表。 |
+| `retrieval_snippets` | `TEXT` |  | JSON 字符串，保存与当前 `Citation` 契约兼容的引用片段列表。 |
 | `created_at` | `TEXT` |  | 本轮创建时间，ISO 8601。 |
 
 ### 3. `chat_messages`
@@ -304,10 +305,18 @@
 
 | 字段 | 类型 | 约束 | 说明 |
 | --- | --- | --- | --- |
+| `index` | `int` | `>= 1` | 回答中展示的引用编号，从 1 开始。 |
 | `citation_id` | `str` |  | 引用 ID。 |
 | `namespace` | `str` |  | 引用所属命名空间。 |
+| `source_kind` | `str` |  | 来源类型，如 `document_chunk`、`product`、`order`。 |
+| `source_name` | `str` |  | 前端展示用的来源名称。 |
+| `source_path` | `str \| null` | 可空 | 来源路径或来源主键。 |
+| `document_id` | `str \| null` | 可空 | 文档来源对应的文档 ID。 |
+| `chunk_id` | `str \| null` | 可空 | 文档分块 ID。 |
+| `chunk_index` | `int \| null` | 可空 | 文档分块序号。 |
 | `snippet` | `str` |  | 引用摘要文本。 |
 | `score` | `float \| null` | 可空 | 检索得分。 |
+| `rank` | `int` | `>= 1` | 原始检索排序位置，从 1 开始。 |
 
 ### 11. `ChatResponse`
 
@@ -317,7 +326,7 @@
 | --- | --- | --- | --- |
 | `session_id` | `str` |  | 会话 ID。 |
 | `request_id` | `str` |  | 请求 ID。 |
-| `answer` | `str` |  | 回答文本。 |
+| `answer` | `str` |  | 回答文本；有引用时应包含可见编号，必要时尾部补 `参考来源`。 |
 | `knowledge_used` | `bool` |  | 是否命中知识。 |
 | `scene` | `str` |  | 当前场景。 |
 | `agent` | `str \| null` | 可空 | 当前代理标识。 |
@@ -350,6 +359,7 @@
 | 字段 | 类型 | 约束 | 说明 |
 | --- | --- | --- | --- |
 | `scene` | `str \| null` | 可空 | 期望绑定的场景。 |
+| `mounted_knowledge_sources` | `list[str] \| null` | 可空 | 会话允许使用的知识源列表；缺省时回退到 `["documents"]`。 |
 
 ### 15. `SessionCreateResponse`
 
@@ -359,6 +369,7 @@
 | --- | --- | --- | --- |
 | `session_id` | `str` |  | 新建会话 ID。 |
 | `scene` | `str` |  | 绑定场景。 |
+| `mounted_knowledge_sources` | `list[str]` |  | 规范化后的挂载知识源列表。 |
 
 ### 16. `SessionTurnResponse`
 
@@ -369,7 +380,7 @@
 | `request_id` | `str` |  | 请求 ID。 |
 | `user_message` | `str` |  | 用户消息。 |
 | `assistant_answer` | `str` |  | 助手回答。 |
-| `retrieval_snippets` | `list[dict[str, Any]]` |  | 引用片段原始列表。 |
+| `retrieval_snippets` | `list[dict[str, Any]]` |  | 与 `Citation` 契约兼容的历史引用列表；读取旧数据时会做兼容归一化。 |
 | `timestamp` | `str` |  | 轮次时间。 |
 
 ### 17. `SessionDetailResponse`
@@ -380,6 +391,7 @@
 | --- | --- | --- | --- |
 | `session_id` | `str` |  | 会话 ID。 |
 | `scene` | `str` |  | 会话场景。 |
+| `mounted_knowledge_sources` | `list[str]` |  | 该会话挂载的知识源列表。 |
 | `total_turns` | `int` |  | 历史总轮数。 |
 | `turns` | `list[SessionTurnResponse]` |  | 历史轮次列表。 |
 

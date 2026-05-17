@@ -9,6 +9,10 @@ from langchain_core.tools import BaseTool
 from pydantic import BaseModel, ConfigDict, Field
 
 from backend.platform.config.settings import AppSettings, settings
+from backend.platform.knowledge.base.relevance import (
+    filter_managed_document_results,
+    filter_low_relevance_document_results,
+)
 from backend.platform.knowledge.base.store import VectorSearchResult, VectorStoreDocument
 from backend.platform.knowledge.base.text import truncate_snippet
 from backend.platform.rag.core import RetrievalCitation, RetrievalResult, RetrievalTool
@@ -130,7 +134,12 @@ def build_generic_document_retrieval_tools(
     """构建通用知识助手场景默认使用的最小文档检索工具集。"""
     current_settings = app_settings or settings
     resolved_knowledge_service = knowledge_service or create_knowledge_service(current_settings)
-    return (_build_knowledge_document_tool(resolved_knowledge_service),)
+    return (
+        _build_knowledge_document_tool(
+            resolved_knowledge_service,
+            files_root=str(current_settings.data_dir / "files"),
+        ),
+    )
 
 
 class SemanticRetrievalTool(RetrievalTool):
@@ -153,6 +162,8 @@ class SemanticRetrievalTool(RetrievalTool):
         
         if self.namespace == "products" and self.product_store:
             vector_results = _inject_named_product_match(query, vector_results, self.product_store)
+        if self.namespace == "orders":
+            vector_results = _rank_order_results(query, vector_results)
         
         return build_retrieval_result(
             tool_name=self.name,
@@ -168,6 +179,7 @@ class KnowledgeDocumentSemanticRetrievalTool(RetrievalTool):
     name: str = "knowledge_document_search"
     description: str = "Search semantically relevant user-uploaded knowledge documents."
     knowledge_service: Any = Field(exclude=True)
+    files_root: str = Field(exclude=True)
     default_top_k: int = 5
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -175,6 +187,8 @@ class KnowledgeDocumentSemanticRetrievalTool(RetrievalTool):
     def retrieve(self, query: str, *, run_manager: Any | None = None) -> RetrievalResult:
         """从文档分块索引中检索用户上传的知识。"""
         vector_results = self.knowledge_service.search_document_chunks(query=query, top_k=self.default_top_k)
+        vector_results = filter_managed_document_results(vector_results, files_root=self.files_root)
+        vector_results = filter_low_relevance_document_results(vector_results)
         return build_retrieval_result(
             tool_name=self.name,
             namespace="documents",
@@ -185,9 +199,14 @@ class KnowledgeDocumentSemanticRetrievalTool(RetrievalTool):
 
 def build_knowledge_document_retrieval_tool(
     knowledge_service: KnowledgeService,
+    *,
+    files_root: str,
 ) -> KnowledgeDocumentSemanticRetrievalTool:
     """构建可挂载到 scene runtime 的文档检索 RetrievalTool。"""
-    return KnowledgeDocumentSemanticRetrievalTool(knowledge_service=knowledge_service)
+    return KnowledgeDocumentSemanticRetrievalTool(
+        knowledge_service=knowledge_service,
+        files_root=files_root,
+    )
 
 
 def build_semantic_retrieval_tool(
@@ -313,11 +332,13 @@ def build_agentic_retrieval_tools(
     *,
     knowledge_service: KnowledgeService | None = None,
     product_store: ProductCatalogStore | None = None,
+    files_root: str | None = None,
 ) -> tuple[RetrievalTool, ...]:
     """构建供 AgenticRetriever 使用的 RetrievalTool 集合。"""
     current_settings = app_settings or settings
     resolved_knowledge_service = knowledge_service or create_knowledge_service(current_settings)
     resolved_product_store = product_store or ProductCatalogStore(data_dir=current_settings.data_dir)
+    resolved_files_root = files_root or str(current_settings.data_dir / "files")
     if hasattr(resolved_knowledge_service, "store"):
         preload_knowledge_base(current_settings, store=resolved_knowledge_service.store)
     return (
@@ -340,7 +361,10 @@ def build_agentic_retrieval_tools(
             tool_name="order_semantic_search",
             description="Search order information semantically for order tracking or status inquiries.",
         ),
-        KnowledgeDocumentSemanticRetrievalTool(knowledge_service=resolved_knowledge_service),
+        KnowledgeDocumentSemanticRetrievalTool(
+            knowledge_service=resolved_knowledge_service,
+            files_root=resolved_files_root,
+        ),
         InventoryLookupRetrievalTool(product_store=resolved_product_store),
         ProductDetailLookupRetrievalTool(product_store=resolved_product_store),
     )
@@ -360,7 +384,11 @@ def build_retrieval_result(
             citation_id=record["citation_id"],
             namespace=namespace,
             snippet=record["snippet"],
-            metadata={"product_id": record.get("product_id"), "score": record.get("score")},
+            metadata={
+                **record.get("metadata", {}),
+                "product_id": record.get("product_id"),
+                "score": record.get("score"),
+            },
         )
         for record in records
     ]
@@ -370,7 +398,10 @@ def build_retrieval_result(
             namespace=namespace,
             citation_id=record["citation_id"],
             score=record.get("score"),
-            extra_metadata={"product_id": record.get("product_id")},
+            extra_metadata={
+                **record.get("metadata", {}),
+                "product_id": record.get("product_id"),
+            },
         )
         for record in records
     ]
@@ -460,11 +491,17 @@ def _build_inventory_lookup_tool(product_store: ProductCatalogStore) -> BaseTool
     )
 
 
-def _build_knowledge_document_tool(knowledge_service: KnowledgeService) -> BaseTool:
+def _build_knowledge_document_tool(
+    knowledge_service: KnowledgeService,
+    *,
+    files_root: str,
+) -> BaseTool:
     """构建上传文档检索 StructuredTool，供通用场景与兼容链路复用。"""
 
     def knowledge_document_search(query: str, top_k: int = 5) -> ToolResult:
         vector_results = knowledge_service.search_document_chunks(query=query, top_k=top_k)
+        vector_results = filter_managed_document_results(vector_results, files_root=files_root)
+        vector_results = filter_low_relevance_document_results(vector_results)
         retrieval_result = build_retrieval_result(
             tool_name="knowledge_document_search",
             namespace="documents",
@@ -526,7 +563,8 @@ def _build_semantic_record(namespace: str, result: VectorSearchResult) -> dict[s
     """将商品/评价/订单向量结果映射为统一 record。"""
     metadata = result.document.metadata
     citation_id = str(
-        metadata.get("review_id")
+        metadata.get("chunk_id")
+        or metadata.get("review_id")
         or metadata.get("product_id")
         or metadata.get("order_id")
         or metadata.get("document_id")
@@ -596,6 +634,24 @@ def _rank_product_results(query: str, vector_results: list[VectorSearchResult]) 
         exact_name_hit = 1 if name and name in normalized_query else 0
         score = float(result.score) if result.score is not None else -1.0
         return exact_name_hit, score
+
+    return sorted(vector_results, key=sort_key, reverse=True)
+
+
+def _rank_order_results(query: str, vector_results: list[VectorSearchResult]) -> list[VectorSearchResult]:
+    """对显式命中订单号、运单号、承运商的结果做轻量排序增益。"""
+    normalized_query = query.lower()
+
+    def sort_key(result: VectorSearchResult) -> tuple[int, int, int, float]:
+        metadata = result.document.metadata
+        order_id = str(metadata.get("order_id", "")).lower()
+        tracking_no = str(metadata.get("tracking_no", "")).lower()
+        carrier = str(metadata.get("carrier", "")).lower()
+        exact_order_hit = 1 if order_id and order_id in normalized_query else 0
+        exact_tracking_hit = 1 if tracking_no and tracking_no in normalized_query else 0
+        carrier_hit = 1 if carrier and carrier in normalized_query else 0
+        score = float(result.score) if result.score is not None else -1.0
+        return exact_order_hit, exact_tracking_hit, carrier_hit, score
 
     return sorted(vector_results, key=sort_key, reverse=True)
 

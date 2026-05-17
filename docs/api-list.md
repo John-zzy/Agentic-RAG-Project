@@ -21,11 +21,11 @@
 - 返回结构：
   - `session_id`: 会话 ID。
   - `request_id`: 本次请求 ID。
-  - `answer`: 模型回答。
+  - `answer`: 模型回答；有 citations 时应包含可见引用编号，若模型未生成编号，服务会在尾部补 `参考来源：[1][2]`。
   - `knowledge_used`: 是否使用了知识检索结果。
   - `scene`: 当前响应所属场景。
   - `agent`: 代理/角色标识，可为空。
-  - `citations`: 引用列表，每项包含 `citation_id`、`namespace`、`snippet`、`score`。
+  - `citations`: 统一引用列表，每项包含 `index`、`citation_id`、`namespace`、`source_kind`、`source_name`、`source_path`、`document_id`、`chunk_id`、`chunk_index`、`snippet`、`score`、`rank`。
 
 ### `GET /scenes`
 
@@ -40,9 +40,14 @@
 - 一句话说明：创建新会话，并将会话绑定到指定或默认场景。
 - 主要入参：
   - Body `scene`: 场景标识，可选；不传则使用默认场景。
+  - Body `mounted_knowledge_sources`: 会话允许使用的知识源列表，可选；当前支持 `documents`、`ecommerce`，默认 `["documents"]`。
 - 返回结构：
   - `session_id`: 新建会话 ID。
   - `scene`: 会话绑定场景。
+  - `mounted_knowledge_sources`: 规范化后的挂载知识源列表，去重并按稳定顺序返回。
+- 常见错误：
+  - `400 UNKNOWN_SCENE`: 请求的 `scene` 未注册。
+  - `400 INVALID_MOUNTED_KNOWLEDGE_SOURCES`: 传入了未知知识源值。
 
 ### `GET /sessions/{session_id}`
 
@@ -53,8 +58,10 @@
 - 返回结构：
   - `session_id`: 会话 ID。
   - `scene`: 会话所属场景。
+  - `mounted_knowledge_sources`: 会话挂载的知识源列表；历史会话缺失该字段时默认回填 `["documents"]`。
   - `total_turns`: 历史总轮数。
   - `turns`: 轮次列表，每项包含 `request_id`、`user_message`、`assistant_answer`、`retrieval_snippets`、`timestamp`。
+  - `retrieval_snippets`: 与当前 `citations` 契约兼容的历史引用列表；读取旧历史时会做字段补齐和结构兼容。
 
 ### `DELETE /sessions/{session_id}`
 

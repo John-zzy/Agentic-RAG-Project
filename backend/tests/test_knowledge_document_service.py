@@ -367,6 +367,7 @@ def test_build_document_chunks_adds_trace_metadata_and_stable_chunk_ids(tmp_path
         "document_id": document_id,
         "document_version": 1,
         "namespace": "faq",
+        "is_managed_document": True,
         "source_type": "json",
         "source_path": "faq.json",
         "source_record_id": records[0].source_record_id,
@@ -779,7 +780,7 @@ def test_reprocess_cleanup_failure_does_not_mask_original_publish_error(
     assert split_services.query.get_document(first.document_id).active_version == 1
 
 
-def test_default_service_reads_json_files_from_data_dir(document_app_settings: AppSettings) -> None:
+def test_default_service_rejects_builtin_data_dir_files(document_app_settings: AppSettings) -> None:
     (document_app_settings.data_dir / "orders.json").write_text(
         '[{"order_id":"O1","status":"paid","total_amount":100}]',
         encoding="utf-8",
@@ -790,10 +791,8 @@ def test_default_service_reads_json_files_from_data_dir(document_app_settings: A
         repository=store,
     )
 
-    result = application_service.register_document("faq", "orders.json", 12, 2, False)
-
-    assert result.source_path == "orders.json"
-    assert result.chunk_count > 0
+    with pytest.raises(FileNotFoundError, match="orders.json"):
+        application_service.register_document("faq", "orders.json", 12, 2, False)
 
 
 def test_repeated_register_reuses_document_id_and_overwrites_active_version_by_default(

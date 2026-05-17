@@ -178,22 +178,13 @@ class KnowledgeDocumentApplicationService:
         )
 
     def _resolve_source_location(self, source_path: str) -> tuple[str, Path]:
-        """按优先级解析源文件真实位置，并返回规范化相对路径。"""
-        candidate_roots = [self.files_root.resolve()]
-        fallback_root = self.app_settings.data_dir.resolve()
-        if fallback_root not in candidate_roots:
-            candidate_roots.append(fallback_root)
-
-        last_error: FileNotFoundError | None = None
-        for root in candidate_roots:
-            normalized_path = validate_source_path(source_path=source_path, data_root=root)
-            resolved_path = root / normalized_path
-            if resolved_path.exists():
-                return normalized_path, root
-            last_error = FileNotFoundError(f"source_path does not exist: {normalized_path}")
-        if last_error is not None:
-            raise last_error
-        raise FileNotFoundError(f"source_path does not exist: {source_path}")
+        """只允许解析上传目录中的文件，避免把内置业务数据注册成知识文档。"""
+        root = self.files_root.resolve()
+        normalized_path = validate_source_path(source_path=source_path, data_root=root)
+        resolved_path = root / normalized_path
+        if resolved_path.exists():
+            return normalized_path, root
+        raise FileNotFoundError(f"source_path does not exist: {normalized_path}")
 
     def _load_source_records(
         self,

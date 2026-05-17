@@ -185,3 +185,41 @@ def test_session_store_backfills_default_mounted_sources_for_legacy_sessions() -
 
     assert session is not None
     assert session.mounted_knowledge_sources == ("documents",)
+
+
+def test_session_store_normalizes_legacy_retrieval_snippets() -> None:
+    store = _build_store("session-store-legacy-retrieval-snippets")
+    store.append_turn(
+        session_id="session-legacy-snippet",
+        request_id="req-legacy",
+        user_message="旧问题",
+        assistant_answer="旧回答",
+        retrieval_snippets=[
+            {
+                "citation_id": "P001",
+                "namespace": "products",
+                "snippet": "旧商品片段",
+                "score": "0.95",
+            }
+        ],
+        timestamp="2026-04-23T00:00:00+00:00",
+    )
+
+    turns = store.get_recent_turns("session-legacy-snippet", limit=10)
+
+    assert turns[0].retrieval_snippets == [
+        {
+            "index": 1,
+            "citation_id": "P001",
+            "namespace": "products",
+            "source_kind": "products",
+            "source_name": "P001",
+            "source_path": None,
+            "document_id": None,
+            "chunk_id": "P001",
+            "chunk_index": None,
+            "snippet": "旧商品片段",
+            "score": 0.95,
+            "rank": 1,
+        }
+    ]

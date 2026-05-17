@@ -20,16 +20,18 @@
 核心能力包括：
 
 - 统一 `/chat` 入口，按会话绑定场景处理请求
-- 会话创建、查询、删除与场景选择
+- 会话创建、查询、删除与场景选择，并支持会话级 `mounted_knowledge_sources`
 - 本地知识文件上传、下载、删除、预处理预览与索引管理
 - 文档清洗、规则化处理、版本化切块与向量检索
+- Agentic RAG 的“文档优先 + 按需切电商”检索编排
+- 结构化 citations 与回答正文 `[1]` 编号引用
 - `Chroma` 与 `Elasticsearch` 两种向量存储实现
 - 基于 `SQLite` 的会话记忆
 
 当前内置场景：
 
-- `generic_assistant`：通用助手场景，依赖通用知识与会话记忆
-- `ecommerce`：电商演示场景，包含商品、评价、订单、库存等检索与工具能力
+- `generic_assistant`：通用助手场景，默认走文档知识与会话记忆
+- `ecommerce`：电商演示场景，包含商品、评价、订单、库存等检索与工具能力；是否可用仍受会话挂载知识源控制
 
 ## 按功能看当前状态
 
@@ -342,11 +344,12 @@ backend\.venv\Scripts\python.exe backend\run.py
 典型流程：
 
 1. 启动服务
-2. 通过 `POST /sessions` 创建会话并指定场景
-3. 通过 `POST /chat` 发起对话
+2. 通过 `POST /sessions` 创建会话并指定场景，可选传入 `mounted_knowledge_sources`
+3. 通过 `POST /chat` 发起对话；运行时会根据会话挂载源动态组装 candidate tools
 4. 如需知识增强，先通过 `POST /files/upload` 上传知识文件
 5. 通过 `POST /knowledge/documents/preprocess-preview` 预览清洗规则、样本和统计
 6. 通过 `POST /knowledge/documents` 确认入库；后续按需调用 `.../reprocess` 或 `.../rechunk`
+7. 查看 `/chat` 响应中的 `citations` 与回答正文里的 `[1]`、`[2]` 编号，完成来源追溯
 
 知识库管理页当前交互：
 

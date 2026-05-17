@@ -2,6 +2,8 @@
 
 ## Summary
 
+状态：已实现并与当前代码对齐。本文记录最终落地行为，不再只描述目标方案。
+
 本次方案的核心目标是：
 
 - 继续保留当前 Agentic RAG 能力，不退回固定单轮检索
@@ -91,7 +93,7 @@ flowchart TD
 
 当前 `AgenticRetriever` 已支持 `candidate_tools`，本次要正式使用，而不是让 scene 默认暴露全套工具。
 
-建议工具分组如下：
+最终工具分组如下：
 
 #### `documents` 组
 
@@ -110,10 +112,10 @@ flowchart TD
 
 - 仅 `documents`
   - `candidate_tools = ("knowledge_document_search",)`
-  - `default_tool = "knowledge_document_search"`
+  - 首轮默认工具仍是 `knowledge_document_search`
 - `documents + ecommerce`
   - `candidate_tools` 包含文档工具 + 电商工具
-  - `default_tool` 仍是 `"knowledge_document_search"`
+  - 首轮默认工具仍是 `knowledge_document_search`
 
 这样可以避免“只要挂了电商，默认首轮就先打商品检索”的错误行为。
 
@@ -200,14 +202,13 @@ flowchart TD
 
 无论最终命中的是文档还是电商知识，都统一返回 citations；但本次主验收重点仍是文档 provenance。
 
-建议 `Citation` 固定字段：
+当前 `Citation` 固定字段：
 
 - `index: int`
 - `citation_id: str`
 - `namespace: str`
 - `source_kind: str`
-  - 建议值：`documents` / `products` / `reviews` / `orders` / `ecommerce_documents`
-- `source_name: str | None`
+- `source_name: str`
 - `source_path: str | None`
 - `document_id: str | None`
 - `chunk_id: str | None`
@@ -215,6 +216,15 @@ flowchart TD
 - `snippet: str`
 - `score: float | None`
 - `rank: int`
+
+当前 `source_kind` 映射规则：
+
+- 文档 metadata 里存在 `chunk_id` 或 `document_id` 时，统一映射为 `document_chunk`
+- `products` 命名空间映射为 `product`
+- `reviews` 命名空间映射为 `review`
+- `orders` 命名空间映射为 `order`
+- `inventory` 命名空间映射为 `inventory`
+- `product_detail` 命名空间映射为 `product_detail`
 
 文档 citation 至少保证：
 
@@ -226,27 +236,20 @@ flowchart TD
 - `rank`
 - `index`
 
-回答正文要求：
+回答正文当前实现：
 
-- 有证据支撑的句子句末追加 `[1]`
-- 编号与 citations 顺序一致
-- 若模型未输出有效编号，则尾部自动补 `参考来源：[1][2]`
+- 模型提示词会拿到带 `[1]` 编号和来源头信息的上下文块
+- 若模型输出中已包含任意 `[\d+]` 编号，服务端直接保留
+- 若模型没有输出任何合法编号，服务端会在尾部补 `参考来源：[1][2]`
 
-### 8. 当前 ecommerce Agentic 实现需要重构的点
+### 8. 已落地的 ecommerce Agentic 调整
 
-这是本次最关键的实现修正。
-
-当前 `create_agentic_knowledge_retriever()` 中：
-
-- `default_tool = "product_semantic_search"`
-
-这与新策略冲突。需要调整为“文档优先”的编排方式，至少满足：
+当前实现已经完成以下修正：
 
 - 已挂载电商时也从 `knowledge_document_search` 起步
 - 只有 Judge 判定需要时才切电商工具
-- 未挂载电商时，电商工具不进入 `candidate_tools`
-
-如果不改这点，整套“按需加载电商知识”的目标无法成立。
+- 未挂载电商时，电商工具不会进入 `candidate_tools`
+- `ChatService` 还会按当前 scene 实际注册的工具集合再做一次过滤，避免未注册工具进入候选集
 
 ### 9. 前端交互调整
 
@@ -291,27 +294,26 @@ flowchart TD
 
 ### `ChatResponse`
 
-保留现有主字段，并扩展 citations 结构；可选附带：
-
-- `mounted_knowledge_sources: list[str]`
+当前响应只扩展 `citations` 结构，不返回 `mounted_knowledge_sources`。挂载源通过会话接口读取。
 
 ### 内部统一常量
 
-建议新增：
-
-- `KnowledgeSource = Literal["documents", "ecommerce"]`
-
-并提供统一工具：
+当前已提供统一工具：
 
 - 默认挂载源解析
 - 非法值校验
 - knowledge source -> candidate tools 映射
 
+实际常量为：
+
+- `SUPPORTED_MOUNTED_KNOWLEDGE_SOURCES = ("documents", "ecommerce")`
+- `DEFAULT_MOUNTED_KNOWLEDGE_SOURCES = ("documents",)`
+
 ## Test Plan
 
 ### 自动化测试
 
-需要新增或更新以下场景：
+已覆盖的自动化测试场景：
 
 - 会话默认挂载
   - 不传挂载源时为 `["documents"]`
@@ -324,10 +326,11 @@ flowchart TD
 - 当前 ecommerce 兼容
   - `scene = ecommerce` 但未挂载 `ecommerce` 时，不应默认打商品检索
 - citation
-  - 文档命中返回完整 provenance 字段
-  - `answer` 中包含 `[1]`
+  - 文档命中返回统一 citation 字段
+  - `answer` 中包含 `[1]` 或尾部补充 `参考来源`
 - session detail
   - 能正确返回挂载源
+  - 能兼容旧 `retrieval_snippets` 结构
 
 ### 本地验收
 

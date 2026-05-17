@@ -6,9 +6,10 @@ from langchain_core.runnables import RunnableLambda
 from backend.application.runtime.api.app import create_app
 from backend.application.runtime import SceneChatService, build_default_scene_registry
 from backend.platform.config.settings import AppSettings
-from backend.platform.knowledge.base.store import VectorSearchResult, VectorStoreDocument
+from backend.platform.knowledge.base.store import VectorSearchResult, VectorStoreDocument, VectorStoreFactory
 from backend.platform.memory.base.session_store import SQLiteSessionStore
 from backend.platform.memory.chat.prompt_context import PromptContextBuilder
+from backend.scenes.ecommerce.knowledge_service import create_knowledge_service
 from backend.tests.test_support import make_test_runtime_dir
 
 
@@ -73,8 +74,19 @@ def _build_chat_service(
     model: FakeModel,
 ) -> SceneChatService:
     runtime_dir = make_test_runtime_dir(test_name)
+    files_root = runtime_dir / "files"
+    files_root.mkdir(parents=True, exist_ok=True)
+    for result in knowledge_service._documents:
+        source_path = result.document.metadata.get("source_path")
+        if not isinstance(source_path, str) or not source_path.strip():
+            continue
+        file_path = files_root / source_path
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        if not file_path.exists():
+            file_path.write_text(result.document.content, encoding="utf-8")
     sqlite_path = runtime_dir / "chat-sessions.db"
     app_settings = AppSettings(
+        data_dir=runtime_dir,
         app={
             "active_scene": "generic_assistant",
         },
@@ -103,7 +115,14 @@ def test_chat_api_success_path() -> None:
                 doc_id="doc-1",
                 content="P001 手机，续航强，电池 5000mAh。",
                 score=0.92,
-                metadata={"document_id": "doc-1", "source_path": "doc.txt", "namespace": "documents"},
+                metadata={
+                    "document_id": "doc-1",
+                    "source_path": "doc.txt",
+                    "namespace": "documents",
+                    "is_managed_document": True,
+                    "chunk_id": "chunk-doc-1",
+                    "chunk_index": 0,
+                },
             )
         ]
     )
@@ -118,11 +137,25 @@ def test_chat_api_success_path() -> None:
     payload = response.json()
     assert payload["session_id"]
     assert payload["request_id"]
-    assert payload["answer"] == "推荐 P001，续航表现较好。"
+    assert payload["answer"] == "推荐 P001，续航表现较好。\n\n参考来源：[1]"
     assert payload["knowledge_used"] is True
     assert payload["scene"] == "generic_assistant"
     assert payload["agent"] is None
     assert len(payload["citations"]) == 1
+    assert payload["citations"][0] == {
+        "index": 1,
+        "citation_id": "chunk-doc-1",
+        "namespace": "documents",
+        "source_kind": "document_chunk",
+        "source_name": "doc.txt",
+        "source_path": "doc.txt",
+        "document_id": "doc-1",
+        "chunk_id": "chunk-doc-1",
+        "chunk_index": 0,
+        "snippet": "P001 手机，续航强，电池 5000mAh。",
+        "score": 0.92,
+        "rank": 1,
+    }
     saved_session = service.session_store.get_session(payload["session_id"])
     assert saved_session is not None
     assert saved_session.mounted_knowledge_sources == ("documents",)
@@ -297,6 +330,22 @@ def test_create_session_rejects_unknown_mounted_knowledge_source() -> None:
     assert payload["detail"]["code"] == "INVALID_MOUNTED_KNOWLEDGE_SOURCES"
 
 
+def test_session_detail_returns_explicit_mounted_knowledge_sources() -> None:
+    service = _build_chat_service("chat-api-session-detail-mounted-sources", FakeKnowledgeService(), FakeModel())
+    created = service.create_session(
+        scene="generic_assistant",
+        mounted_knowledge_sources=["documents", "ecommerce"],
+    )
+    app = create_app(chat_service=service)
+
+    with TestClient(app) as client:
+        response = client.get(f"/sessions/{created.session_id}")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["mounted_knowledge_sources"] == ["documents", "ecommerce"]
+
+
 def test_chat_routes_by_session_scene_instead_of_global_default() -> None:
     service = _build_chat_service("chat-api-session-scene-routing", FakeKnowledgeService(), FakeModel())
     app = create_app(chat_service=service)
@@ -332,7 +381,14 @@ def test_chat_only_uses_document_tools_when_session_mounts_documents_only() -> N
                 doc_id="doc-1",
                 content="售后 FAQ：库存问题以系统实时状态为准。",
                 score=0.91,
-                metadata={"document_id": "doc-1", "source_path": "faq.md", "namespace": "documents"},
+                metadata={
+                    "document_id": "doc-1",
+                    "source_path": "faq.md",
+                    "namespace": "documents",
+                    "is_managed_document": True,
+                    "chunk_id": "chunk-faq-1",
+                    "chunk_index": 0,
+                },
             )
         ],
     )
@@ -351,6 +407,8 @@ def test_chat_only_uses_document_tools_when_session_mounts_documents_only() -> N
     payload = response.json()
     assert payload["knowledge_used"] is True
     assert payload["citations"][0]["namespace"] == "documents"
+    assert payload["citations"][0]["source_kind"] == "document_chunk"
+    assert "[1]" in payload["answer"]
 
 
 def test_chat_can_route_to_ecommerce_tools_when_session_mounts_ecommerce() -> None:
@@ -385,3 +443,198 @@ def test_chat_can_route_to_ecommerce_tools_when_session_mounts_ecommerce() -> No
     namespaces = {citation["namespace"] for citation in payload["citations"]}
     assert "documents" not in namespaces
     assert "products" in namespaces or "inventory" in namespaces
+    assert "[1]" in payload["answer"]
+
+
+def test_session_detail_normalizes_legacy_retrieval_snippets() -> None:
+    service = _build_chat_service("chat-api-legacy-retrieval-snippets", FakeKnowledgeService(), FakeModel())
+    service.session_store.append_turn(
+        session_id="legacy-session",
+        request_id="req-legacy",
+        user_message="旧问题",
+        assistant_answer="旧回答",
+        retrieval_snippets=[
+            {
+                "citation_id": "legacy-doc",
+                "namespace": "documents",
+                "snippet": "历史文档片段",
+                "score": 0.7,
+            }
+        ],
+        timestamp="2026-04-23T00:00:00+00:00",
+    )
+    app = create_app(chat_service=service)
+
+    with TestClient(app) as client:
+        response = client.get("/sessions/legacy-session")
+
+    assert response.status_code == 200
+    turn = response.json()["turns"][0]
+    assert turn["retrieval_snippets"] == [
+        {
+            "index": 1,
+            "citation_id": "legacy-doc",
+            "namespace": "documents",
+            "source_kind": "documents",
+            "source_name": "legacy-doc",
+            "source_path": None,
+            "document_id": None,
+            "chunk_id": "legacy-doc",
+            "chunk_index": None,
+            "snippet": "历史文档片段",
+            "score": 0.7,
+            "rank": 1,
+        }
+    ]
+
+
+def test_chat_api_real_runtime_filters_low_relevance_document_hits_for_greeting() -> None:
+    runtime_dir = make_test_runtime_dir("chat-api-real-runtime-low-relevance")
+    sqlite_path = runtime_dir / "chat-sessions.db"
+    app_settings = AppSettings(
+        data_dir=runtime_dir,
+        app={
+            "active_scene": "generic_assistant",
+        },
+        session={
+            "sqlite_path": sqlite_path,
+            "window_size": 3,
+        },
+        vector_store={
+            "provider": "chroma",
+            "chroma": {"persist_directory": runtime_dir / ".chroma"},
+        },
+    )
+    store = VectorStoreFactory.create(app_settings)
+    store.ensure_document_indexes()
+    store.upsert_document_chunks(
+        [
+            VectorStoreDocument(
+                id="chunk-order-1",
+                content=(
+                    '{"carrier":"申通快递","status":"已签收","tracking_no":"ST0011223344CN",'
+                    '"shipping_address":"重庆市渝中区解放碑步行街9号"}'
+                ),
+                metadata={
+                    "document_id": "doc-order-1",
+                    "source_path": "orders.json",
+                    "namespace": "orders",
+                    "chunk_id": "chunk-order-1",
+                    "chunk_index": 0,
+                    "is_active": True,
+                },
+            )
+        ]
+    )
+    knowledge_service = create_knowledge_service(app_settings=app_settings, store=store)
+    model = FakeModel(answer="unused")
+    service = SceneChatService(
+        scene_registry=build_default_scene_registry(
+            app_settings=app_settings,
+            knowledge_service=knowledge_service,
+        ),
+        app_settings=app_settings,
+        knowledge_service=knowledge_service,
+        session_store=SQLiteSessionStore(sqlite_path=sqlite_path),
+        context_builder=PromptContextBuilder(window_size=3),
+        model=model,
+    )
+    app = create_app(chat_service=service)
+
+    with TestClient(app) as client:
+        create_response = client.post(
+            "/sessions",
+            json={
+                "scene": "generic_assistant",
+                "mounted_knowledge_sources": ["documents"],
+            },
+        )
+        assert create_response.status_code == 200
+        response = client.post(
+            "/chat",
+            json={
+                "message": "你好",
+                "session_id": create_response.json()["session_id"],
+            },
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["knowledge_used"] is False
+    assert payload["citations"] == []
+    assert "暂时没有检索到足够相关的文档知识" in payload["answer"]
+    assert model.chat_model_calls == []
+
+
+def test_chat_api_ignores_builtin_orders_json_in_documents_only_session() -> None:
+    runtime_dir = make_test_runtime_dir("chat-api-ignore-builtin-orders")
+    sqlite_path = runtime_dir / "chat-sessions.db"
+    (runtime_dir / "files").mkdir(parents=True, exist_ok=True)
+    app_settings = AppSettings(
+        data_dir=runtime_dir,
+        app={
+            "active_scene": "generic_assistant",
+        },
+        session={
+            "sqlite_path": sqlite_path,
+            "window_size": 3,
+        },
+        vector_store={
+            "provider": "chroma",
+            "chroma": {"persist_directory": runtime_dir / ".chroma"},
+        },
+    )
+    store = VectorStoreFactory.create(app_settings)
+    store.ensure_document_indexes()
+    store.upsert_document_chunks(
+        [
+            VectorStoreDocument(
+                id="chunk-order-1",
+                content='{"carrier":"EMS","status":"已签收","tracking_no":"EMS001"}',
+                metadata={
+                    "document_id": "doc-order-1",
+                    "source_path": "orders.json",
+                    "namespace": "orders",
+                    "chunk_id": "chunk-order-1",
+                    "chunk_index": 0,
+                    "is_active": True,
+                },
+            )
+        ]
+    )
+    knowledge_service = create_knowledge_service(app_settings=app_settings, store=store)
+    model = FakeModel(answer="unused")
+    service = SceneChatService(
+        scene_registry=build_default_scene_registry(
+            app_settings=app_settings,
+            knowledge_service=knowledge_service,
+        ),
+        app_settings=app_settings,
+        knowledge_service=knowledge_service,
+        session_store=SQLiteSessionStore(sqlite_path=sqlite_path),
+        context_builder=PromptContextBuilder(window_size=3),
+        model=model,
+    )
+    app = create_app(chat_service=service)
+
+    with TestClient(app) as client:
+        create_response = client.post(
+            "/sessions",
+            json={
+                "scene": "generic_assistant",
+                "mounted_knowledge_sources": ["documents"],
+            },
+        )
+        response = client.post(
+            "/chat",
+            json={
+                "message": "你好",
+                "session_id": create_response.json()["session_id"],
+            },
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["knowledge_used"] is False
+    assert payload["citations"] == []
+    assert model.chat_model_calls == []

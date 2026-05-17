@@ -110,7 +110,9 @@
 ### 会话与场景
 
 - 新会话默认场景由 `AI_RAG_APP__ACTIVE_SCENE` 控制。
+- 新会话默认挂载知识源是 `["documents"]`，可在 `POST /sessions` 里通过 `mounted_knowledge_sources` 显式扩展到 `["documents", "ecommerce"]`。
 - 日常切换场景优先走会话级 API 或前端选择，不要把改环境变量当主流程。
+- `scene` 负责 prompt 与运行时风格，知识源是否可用由会话挂载配置决定，不要再把二者视为同一个开关。
 
 ### 数据与存储
 

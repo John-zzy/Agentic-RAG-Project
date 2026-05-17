@@ -641,14 +641,47 @@ class SQLiteSessionStore:
         return connection
 
     def _parse_retrieval_snippets(self, payload: Any) -> list[dict[str, Any]]:
-        """将 JSON 字符串解析为检索片段列表。"""
+        """将 JSON 字符串解析为检索片段列表，并兼容旧版引用结构。"""
         if not isinstance(payload, str) or not payload:
             return []
         try:
             value = json.loads(payload)
         except json.JSONDecodeError:
             return []
-        return value if isinstance(value, list) else []
+        if not isinstance(value, list):
+            return []
+        return [self._normalize_retrieval_snippet(item, index) for index, item in enumerate(value, start=1)]
+
+    def _normalize_retrieval_snippet(self, item: Any, index: int) -> dict[str, Any]:
+        """把历史 retrieval_snippet 规范化为当前 citation 契约。"""
+        if not isinstance(item, dict):
+            return {}
+
+        namespace = self._coerce_str(item.get("namespace")) or "knowledge"
+        citation_id = self._coerce_str(item.get("citation_id")) or f"{namespace}:{index}"
+        snippet = self._coerce_str(item.get("snippet")) or ""
+        source_kind = self._coerce_str(item.get("source_kind")) or namespace
+        source_name = self._coerce_str(item.get("source_name")) or (
+            self._coerce_str(item.get("source_path"))
+            or self._coerce_str(item.get("document_id"))
+            or citation_id
+        )
+
+        normalized: dict[str, Any] = {
+            "index": self._coerce_int(item.get("index")) or index,
+            "citation_id": citation_id,
+            "namespace": namespace,
+            "source_kind": source_kind,
+            "source_name": source_name,
+            "source_path": self._coerce_str(item.get("source_path")),
+            "document_id": self._coerce_str(item.get("document_id")),
+            "chunk_id": self._coerce_str(item.get("chunk_id")) or citation_id,
+            "chunk_index": self._coerce_int(item.get("chunk_index")),
+            "snippet": snippet,
+            "score": self._coerce_float(item.get("score")),
+            "rank": self._coerce_int(item.get("rank")) or index,
+        }
+        return normalized
 
     def _parse_messages(self, rows: Sequence[sqlite3.Row]) -> list[BaseMessage]:
         """将消息表记录解析为 LangChain message 列表。"""
@@ -710,3 +743,41 @@ class SQLiteSessionStore:
             return value.astimezone(UTC) if value.tzinfo else value.replace(tzinfo=UTC)
         parsed = datetime.fromisoformat(value)
         return parsed.astimezone(UTC) if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+
+    def _coerce_str(self, value: Any) -> str | None:
+        """把常见标量安全转成字符串。"""
+        if value is None:
+            return None
+        if isinstance(value, str):
+            return value
+        if isinstance(value, int | float):
+            return str(value)
+        return None
+
+    def _coerce_int(self, value: Any) -> int | None:
+        """把整数样式的值安全转成 int。"""
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, int):
+            return value
+        if isinstance(value, float) and value.is_integer():
+            return int(value)
+        if isinstance(value, str):
+            try:
+                return int(value)
+            except ValueError:
+                return None
+        return None
+
+    def _coerce_float(self, value: Any) -> float | None:
+        """把分值安全转成 float。"""
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, int | float):
+            return float(value)
+        if isinstance(value, str):
+            try:
+                return float(value)
+            except ValueError:
+                return None
+        return None

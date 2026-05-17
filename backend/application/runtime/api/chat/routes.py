@@ -21,6 +21,15 @@ from backend.platform.knowledge.sources import MountedKnowledgeSourceValidationE
 router = APIRouter()
 
 
+def _build_error_detail(*, code: str, message: str, request_id: str = "N/A") -> dict[str, str]:
+    """统一构造 API 错误体，避免各路由返回结构不一致。"""
+    return {
+        "code": code,
+        "message": message,
+        "request_id": request_id,
+    }
+
+
 @router.get("/health")
 def healthcheck() -> dict[str, str]:
     """健康检查接口。"""
@@ -40,11 +49,11 @@ def chat(payload: ChatRequest, request: Request) -> ChatResponse:
             raise
         raise HTTPException(
             status_code=exc.status_code,
-            detail={
-                "code": exc.code,
-                "message": exc.message,
-                "request_id": exc.request_id,
-            },
+            detail=_build_error_detail(
+                code=exc.code,
+                message=exc.message,
+                request_id=exc.request_id,
+            ),
         ) from exc
 
 
@@ -82,22 +91,17 @@ def create_session(
     except ValueError as exc:
         raise HTTPException(
             status_code=400,
-            detail={
-                "code": "UNKNOWN_SCENE",
-                "message": str(exc),
-                "request_id": "N/A",
-            },
+            detail=_build_error_detail(code="UNKNOWN_SCENE", message=str(exc)),
         ) from exc
     try:
         mounted_knowledge_sources = service.validate_mounted_knowledge_sources(requested_sources)
     except MountedKnowledgeSourceValidationError as exc:
         raise HTTPException(
             status_code=400,
-            detail={
-                "code": "INVALID_MOUNTED_KNOWLEDGE_SOURCES",
-                "message": str(exc),
-                "request_id": "N/A",
-            },
+            detail=_build_error_detail(
+                code="INVALID_MOUNTED_KNOWLEDGE_SOURCES",
+                message=str(exc),
+            ),
         ) from exc
 
     created = service.create_session(
@@ -161,9 +165,8 @@ def _get_chat_service(request: Request) -> Any:
 
     raise HTTPException(
         status_code=500,
-        detail={
-            "code": "SERVICE_NOT_INITIALIZED",
-            "message": "Chat service is not initialized.",
-            "request_id": "N/A",
-        },
+        detail=_build_error_detail(
+            code="SERVICE_NOT_INITIALIZED",
+            message="Chat service is not initialized.",
+        ),
     )

@@ -1,3 +1,5 @@
+import json
+
 from backend.platform.config.settings import AppSettings
 from backend.scenes.ecommerce.definition import create_agentic_knowledge_retriever
 from backend.scenes.generic_assistant.definition import build_generic_assistant_scene_definition
@@ -8,8 +10,13 @@ from backend.tests.test_support import DATA_DIR, make_test_runtime_dir
 
 def _build_settings(test_name: str) -> AppSettings:
     runtime_dir = make_test_runtime_dir(test_name)
+    files_root = runtime_dir / "files"
+    (files_root / "manuals").mkdir(parents=True, exist_ok=True)
+    (files_root / "faq").mkdir(parents=True, exist_ok=True)
+    (files_root / "manuals" / "aerophone-x.md").write_text("AeroPhone X 产品手册", encoding="utf-8")
+    (files_root / "faq" / "after-sale.md").write_text("售后 FAQ", encoding="utf-8")
     return AppSettings(
-        data_dir=DATA_DIR,
+        data_dir=runtime_dir,
         vector_store={
             "provider": "chroma",
             "chroma": {"persist_directory": runtime_dir / ".chroma"},
@@ -60,6 +67,7 @@ class FakeKnowledgeService:
                         "document_id": document["document_id"],
                         "source_path": document.get("source_path", f'{document["document_id"]}.md'),
                         "namespace": "documents",
+                        "is_managed_document": True,
                     },
                 ),
                 score=float(document.get("score", 0.9)),
@@ -88,20 +96,23 @@ class FakeKnowledgeService:
 def _build_knowledge_service(test_name: str) -> tuple[AppSettings, FakeKnowledgeService]:
     app_settings = _build_settings(test_name)
     knowledge_service = FakeKnowledgeService()
-    knowledge_service.upsert_products(
-        [
-            {
-                "product_id": "P005",
-                "name": "AeroPhone X",
-                "category": "智能手机",
-                "description": "旗舰 5G 手机，主打影像和高刷屏，电池容量 5000mAh。",
-                "price": 4599,
-                "currency": "CNY",
-                "specs": {"battery": "5000mAh", "camera": "50MP", "display": "120Hz"},
-                "inventory": {"status": "in_stock", "quantity": 12, "warehouse": "SH-1"},
-            }
-        ]
+    products = [
+        {
+            "product_id": "P005",
+            "name": "AeroPhone X",
+            "category": "智能手机",
+            "description": "旗舰 5G 手机，主打影像和高刷屏，电池容量 5000mAh。",
+            "price": 4599,
+            "currency": "CNY",
+            "specs": {"battery": "5000mAh", "camera": "50MP", "display": "120Hz"},
+            "inventory": {"status": "in_stock", "quantity": 12, "warehouse": "SH-1"},
+        }
+    ]
+    (app_settings.data_dir / "products.json").write_text(
+        json.dumps(products, ensure_ascii=False),
+        encoding="utf-8",
     )
+    knowledge_service.upsert_products(products)
     knowledge_service.upsert_reviews(
         [
             {
@@ -228,3 +239,30 @@ def test_agentic_retriever_restricts_to_documents_only_candidate_tools() -> None
 
     assert outcome.documents
     assert [entry.tool_name for entry in outcome.decision_log] == ["knowledge_document_search"]
+
+
+def test_agentic_retriever_prioritizes_exact_order_match_for_tracking_query() -> None:
+    app_settings = _build_settings("agentic-order-priority")
+    definition = build_generic_assistant_scene_definition(app_settings=app_settings)
+    retriever = definition.build_retriever()
+
+    outcome = retriever.retrieve_with_trace(
+        "订单 O202604210010 的物流状态是什么？追踪号 ST0011223344CN",
+        candidate_tools=(
+            "knowledge_document_search",
+            "product_semantic_search",
+            "review_semantic_search",
+            "order_semantic_search",
+            "inventory_lookup",
+            "product_detail_lookup",
+        ),
+    )
+
+    assert outcome.documents
+    assert [entry.tool_name for entry in outcome.decision_log] == [
+        "knowledge_document_search",
+        "order_semantic_search",
+    ]
+    assert outcome.documents[0].metadata.get("namespace") == "orders"
+    assert outcome.documents[0].metadata.get("order_id") == "O202604210010"
+    assert outcome.documents[0].metadata.get("tracking_no") == "ST0011223344CN"
