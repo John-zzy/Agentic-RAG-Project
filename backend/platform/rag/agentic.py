@@ -72,13 +72,14 @@ class AgenticRetriever(BaseRetriever):
     ) -> AgenticRetrievalOutcome:
         """执行多轮检索并返回完整轨迹，供 Agent 或 LangGraph 复用。"""
         self._validate_tools()
-        initial_tool = selected_tool or self.default_tool or next(iter(self.tools))
+        resolved_candidate_tools = self._resolve_candidate_tools(candidate_tools)
+        initial_tool = self._resolve_initial_tool(selected_tool, resolved_candidate_tools)
         current_plan = RetrievalPlan(
             user_query=query,
             active_query=query,
             selected_tool=initial_tool,
             max_rounds=self.max_rounds,
-            candidate_tools=candidate_tools or tuple(self.tools.keys()),
+            candidate_tools=resolved_candidate_tools,
             filters=filters or {},
         )
         rounds: list[RetrievalRound] = []
@@ -261,18 +262,66 @@ class AgenticRetriever(BaseRetriever):
         )
 
     def _resolve_next_tool(self, plan: RetrievalPlan, decision: SufficiencyDecision) -> str:
-        """解析下一轮工具，优先使用 judge 建议，否则选择尚未尝试的候选工具。"""
-        if decision.suggested_tool:
+        """解析下一轮工具，始终限制在本轮候选工具集合内。"""
+        attempted = set(plan.attempted_tools) | {plan.selected_tool}
+
+        if (
+            decision.suggested_tool
+            and decision.suggested_tool in plan.candidate_tools
+            and decision.suggested_tool not in attempted
+        ):
             self._get_tool(decision.suggested_tool)
             return decision.suggested_tool
 
-        attempted = set(plan.attempted_tools) | {plan.selected_tool}
         for tool_name in plan.candidate_tools:
             if tool_name not in attempted:
                 self._get_tool(tool_name)
                 return tool_name
 
         raise ValueError("No alternative retrieval tool available for switch_tool decision.")
+
+    def _resolve_candidate_tools(
+        self,
+        candidate_tools: tuple[str, ...] | None,
+    ) -> tuple[str, ...]:
+        """规范化候选工具列表，确保只包含已注册工具。"""
+        if candidate_tools is None:
+            return tuple(self.tools.keys())
+
+        resolved: list[str] = []
+        seen: set[str] = set()
+        for tool_name in candidate_tools:
+            if tool_name in seen:
+                continue
+            self._get_tool(tool_name)
+            seen.add(tool_name)
+            resolved.append(tool_name)
+
+        if not resolved:
+            raise ValueError("At least one candidate retrieval tool must be provided.")
+        return tuple(resolved)
+
+    def _resolve_initial_tool(
+        self,
+        selected_tool: str | None,
+        candidate_tools: tuple[str, ...],
+    ) -> str:
+        """确定首轮工具，优先显式指定，其次默认工具，最后取第一个候选工具。"""
+        if selected_tool is not None:
+            if selected_tool not in candidate_tools:
+                raise ValueError(
+                    f"Selected retrieval tool '{selected_tool}' is not in candidate tools."
+                )
+            self._get_tool(selected_tool)
+            return selected_tool
+
+        if self.default_tool and self.default_tool in candidate_tools:
+            self._get_tool(self.default_tool)
+            return self.default_tool
+
+        first_tool = candidate_tools[0]
+        self._get_tool(first_tool)
+        return first_tool
 
     def _get_tool(self, tool_name: str) -> RetrievalTool:
         """按名称解析检索工具，不存在时抛出显式错误。"""

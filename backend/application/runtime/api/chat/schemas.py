@@ -56,12 +56,14 @@ class SessionCreateResponse(BaseModel):
 
     session_id: str
     scene: str
+    mounted_knowledge_sources: list[str] = Field(default_factory=list)
 
 
 class SessionCreateRequest(BaseModel):
     """会话创建请求体。"""
 
     scene: str | None = None
+    mounted_knowledge_sources: list[str] | None = None
 
 
 class SessionTurnResponse(BaseModel):
@@ -79,6 +81,7 @@ class SessionDetailResponse(BaseModel):
 
     session_id: str
     scene: str
+    mounted_knowledge_sources: list[str] = Field(default_factory=list)
     total_turns: int
     turns: list[SessionTurnResponse] = Field(default_factory=list)
 

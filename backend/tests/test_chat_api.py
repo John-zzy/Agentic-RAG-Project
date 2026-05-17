@@ -123,6 +123,9 @@ def test_chat_api_success_path() -> None:
     assert payload["scene"] == "generic_assistant"
     assert payload["agent"] is None
     assert len(payload["citations"]) == 1
+    saved_session = service.session_store.get_session(payload["session_id"])
+    assert saved_session is not None
+    assert saved_session.mounted_knowledge_sources == ("documents",)
     assert model.chat_model_calls
 
 
@@ -164,11 +167,13 @@ def test_session_management_endpoints() -> None:
         session_id = create_payload["session_id"]
         assert session_id
         assert create_payload["scene"] == "generic_assistant"
+        assert create_payload["mounted_knowledge_sources"] == ["documents"]
         assert service.session_store.get_session(session_id) is not None
 
         empty_session_response = client.get(f"/sessions/{session_id}")
         assert empty_session_response.status_code == 200
         assert empty_session_response.json()["scene"] == "generic_assistant"
+        assert empty_session_response.json()["mounted_knowledge_sources"] == ["documents"]
         assert empty_session_response.json()["total_turns"] == 0
         assert empty_session_response.json()["turns"] == []
 
@@ -179,6 +184,7 @@ def test_session_management_endpoints() -> None:
         assert populated_session_response.status_code == 200
         payload = populated_session_response.json()
         assert payload["session_id"] == session_id
+        assert payload["mounted_knowledge_sources"] == ["documents"]
         assert payload["total_turns"] == 1
         assert len(payload["turns"]) == 1
         assert payload["turns"][0]["user_message"] == "你好"
@@ -255,6 +261,42 @@ def test_create_session_rejects_unknown_scene() -> None:
     assert payload["detail"]["code"] == "UNKNOWN_SCENE"
 
 
+def test_create_session_accepts_explicit_mounted_knowledge_sources() -> None:
+    service = _build_chat_service("chat-api-mounted-sources", FakeKnowledgeService(), FakeModel())
+    app = create_app(chat_service=service)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/sessions",
+            json={
+                "scene": "generic_assistant",
+                "mounted_knowledge_sources": ["ecommerce", "documents", "documents"],
+            },
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["mounted_knowledge_sources"] == ["documents", "ecommerce"]
+    saved_session = service.session_store.get_session(payload["session_id"])
+    assert saved_session is not None
+    assert saved_session.mounted_knowledge_sources == ("documents", "ecommerce")
+
+
+def test_create_session_rejects_unknown_mounted_knowledge_source() -> None:
+    service = _build_chat_service("chat-api-invalid-mounted-source", FakeKnowledgeService(), FakeModel())
+    app = create_app(chat_service=service)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/sessions",
+            json={"mounted_knowledge_sources": ["documents", "unknown_source"]},
+        )
+
+    assert response.status_code == 400
+    payload = response.json()
+    assert payload["detail"]["code"] == "INVALID_MOUNTED_KNOWLEDGE_SOURCES"
+
+
 def test_chat_routes_by_session_scene_instead_of_global_default() -> None:
     service = _build_chat_service("chat-api-session-scene-routing", FakeKnowledgeService(), FakeModel())
     app = create_app(chat_service=service)
@@ -273,3 +315,73 @@ def test_chat_routes_by_session_scene_instead_of_global_default() -> None:
     payload = chat_response.json()
     assert payload["scene"] == "ecommerce"
     assert payload["agent"] == "shopping_agent"
+
+
+def test_chat_only_uses_document_tools_when_session_mounts_documents_only() -> None:
+    knowledge = FakeKnowledgeService(
+        products=[
+            _result(
+                doc_id="product-1",
+                content="AeroPhone X，库存充足。",
+                score=0.95,
+                metadata={"product_id": "P005"},
+            )
+        ],
+        documents=[
+            _result(
+                doc_id="doc-1",
+                content="售后 FAQ：库存问题以系统实时状态为准。",
+                score=0.91,
+                metadata={"document_id": "doc-1", "source_path": "faq.md", "namespace": "documents"},
+            )
+        ],
+    )
+    model = FakeModel(answer="请以文档说明为准。")
+    service = _build_chat_service("chat-api-documents-only-routing", knowledge, model)
+    created = service.create_session(scene="generic_assistant", mounted_knowledge_sources=["documents"])
+    app = create_app(chat_service=service)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/chat",
+            json={"message": "AeroPhone X 现在有货吗", "session_id": created.session_id},
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["knowledge_used"] is True
+    assert payload["citations"][0]["namespace"] == "documents"
+
+
+def test_chat_can_route_to_ecommerce_tools_when_session_mounts_ecommerce() -> None:
+    knowledge = FakeKnowledgeService(
+        products=[
+            _result(
+                doc_id="product-1",
+                content="AeroPhone X，库存充足。",
+                score=0.95,
+                metadata={"product_id": "P005"},
+            )
+        ],
+        documents=[],
+    )
+    model = FakeModel(answer="AeroPhone X 当前有货。")
+    service = _build_chat_service("chat-api-ecommerce-routing", knowledge, model)
+    created = service.create_session(
+        scene="generic_assistant",
+        mounted_knowledge_sources=["documents", "ecommerce"],
+    )
+    app = create_app(chat_service=service)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/chat",
+            json={"message": "AeroPhone X 现在有货吗", "session_id": created.session_id},
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["knowledge_used"] is True
+    namespaces = {citation["namespace"] for citation in payload["citations"]}
+    assert "documents" not in namespaces
+    assert "products" in namespaces or "inventory" in namespaces

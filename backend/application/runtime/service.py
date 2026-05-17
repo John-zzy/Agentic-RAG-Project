@@ -12,13 +12,22 @@ from langchain_core.retrievers import BaseRetriever
 from backend.application.runtime.api.chat.prompts import build_rag_answer_prompt_template
 from backend.application.runtime.api.chat.schemas import ChatRequest, ChatResponse, Citation
 from backend.platform.config.settings import AppSettings, settings
+from backend.platform.knowledge.sources import (
+    DEFAULT_MOUNTED_KNOWLEDGE_SOURCES,
+    normalize_mounted_knowledge_sources,
+)
+from backend.platform.rag.agentic import AgenticRetrievalOutcome
 from backend.scenes.base import SceneDefinition
 from backend.scenes.ecommerce.definition import build_ecommerce_scene_definition
 from backend.scenes.generic_assistant.definition import (
     build_generic_assistant_scene_definition,
 )
 from backend.platform.knowledge.base.text import truncate_snippet
-from backend.platform.memory.base.session_store import SQLiteSessionStore, SessionTurn
+from backend.platform.memory.base.session_store import (
+    SQLiteSessionStore,
+    SessionRecord,
+    SessionTurn,
+)
 from backend.platform.memory.chat.prompt_context import PromptContextBuilder
 from backend.platform.models.base.router import TaskComplexity
 from backend.platform.models.llm.client import ModelClient, model_client
@@ -109,6 +118,15 @@ class ChatService:
             system_prompt=scene_definition.system_prompt
         )
         self._retriever = scene_definition.build_retriever()
+        registered_retrieval_tools = getattr(self._retriever, "tools", None)
+        if isinstance(registered_retrieval_tools, dict):
+            self._retrieval_tool_names = set(registered_retrieval_tools.keys())
+        else:
+            self._retrieval_tool_names = {
+                tool.name
+                for tool in scene_definition.build_tools()
+                if hasattr(tool, "name")
+            }
 
     def chat(self, payload: ChatRequest) -> ChatResponse:
         """执行一次完整对话流程，并返回统一结构。"""
@@ -131,13 +149,22 @@ class ChatService:
             request_id=request_id,
             scene=resolved_scene,
         )
+        session = self.session_store.get_session(session_id)
+        mounted_knowledge_sources = (
+            session.mounted_knowledge_sources
+            if session is not None
+            else DEFAULT_MOUNTED_KNOWLEDGE_SOURCES
+        )
         history_turns = self.session_store.get_recent_turns(
             session_id=session_id,
             limit=self.settings.session.window_size,
         )
         history_text = self._format_history(history_turns)
 
-        documents = self._retrieve_documents(payload.message)
+        documents = self._retrieve_documents(
+            payload.message,
+            mounted_knowledge_sources=mounted_knowledge_sources,
+        )
         citations = self._citations_from_documents(documents)
         knowledge_used = len(citations) > 0
         scene_metadata = self._scene_metadata()
@@ -186,7 +213,12 @@ class ChatService:
         self.session_store.cleanup_expired_sessions(now=timestamp)
         session = self.session_store.get_session(session_id)
         if session is None:
-            self.session_store.create_session(session_id=session_id, scene=scene, now=timestamp)
+            self.session_store.create_session(
+                session_id=session_id,
+                scene=scene,
+                mounted_knowledge_sources=DEFAULT_MOUNTED_KNOWLEDGE_SOURCES,
+                now=timestamp,
+            )
             return
         if session.status == "expired":
             raise ChatServiceError(
@@ -204,16 +236,62 @@ class ChatService:
             )
         self.session_store.touch_session(session_id=session_id, now=timestamp)
 
-    def _retrieve_documents(self, message: str) -> list[Document]:
+    def _retrieve_documents(
+        self,
+        message: str,
+        *,
+        mounted_knowledge_sources: tuple[str, ...],
+    ) -> list[Document]:
         """兼容普通 retriever 与 agentic retriever 的检索输出。"""
+        candidate_tools = self._resolve_candidate_tools(mounted_knowledge_sources)
         if hasattr(self._retriever, "retrieve_with_trace"):
-            outcome = self._retriever.retrieve_with_trace(message)  # type: ignore[attr-defined]
+            outcome: AgenticRetrievalOutcome = self._retriever.retrieve_with_trace(  # type: ignore[attr-defined]
+                message,
+                candidate_tools=candidate_tools,
+            )
             return list(outcome.documents)
         if hasattr(self._retriever, "search"):
             return list(self._retriever.search(query=message))  # type: ignore[attr-defined]
         if isinstance(self._retriever, BaseRetriever):
             return list(self._retriever.invoke(message))
         raise TypeError("Retriever does not support document retrieval.")
+
+    def _resolve_candidate_tools(
+        self,
+        mounted_knowledge_sources: tuple[str, ...],
+    ) -> tuple[str, ...]:
+        """按会话挂载源组装当前可用的候选检索工具。"""
+        tool_names: list[str] = []
+        seen: set[str] = set()
+
+        if "documents" in mounted_knowledge_sources:
+            self._append_candidate_tool(tool_names, seen, "knowledge_document_search")
+
+        if "ecommerce" in mounted_knowledge_sources:
+            for tool_name in (
+                "product_semantic_search",
+                "review_semantic_search",
+                "order_semantic_search",
+                "inventory_lookup",
+                "product_detail_lookup",
+            ):
+                self._append_candidate_tool(tool_names, seen, tool_name)
+
+        if not tool_names:
+            raise ValueError("No retrieval tools available for mounted knowledge sources.")
+        return tuple(tool_names)
+
+    def _append_candidate_tool(
+        self,
+        tool_names: list[str],
+        seen: set[str],
+        tool_name: str,
+    ) -> None:
+        """只在当前场景已注册该工具时，才加入候选工具列表。"""
+        if tool_name in seen or tool_name not in self._retrieval_tool_names:
+            return
+        seen.add(tool_name)
+        tool_names.append(tool_name)
 
     def _scene_metadata(self) -> SceneMetadata:
         """从场景定义中提取响应元数据。"""
@@ -350,12 +428,31 @@ class ActiveSceneChatService:
             raise ValueError(f"Unknown scene '{scene}'. Expected one of: {supported}.")
         return scene
 
-    def create_session(self, scene: str | None = None) -> str:
-        """创建绑定场景的新会话。"""
+    def create_session(
+        self,
+        scene: str | None = None,
+        mounted_knowledge_sources: list[str] | tuple[str, ...] | None = None,
+    ) -> SessionRecord:
+        """创建绑定场景的新会话，并保存规范化后的挂载知识源。"""
         resolved_scene = self.validate_scene(scene or self.default_scene())
+        resolved_sources = self.validate_mounted_knowledge_sources(mounted_knowledge_sources)
         session_id = uuid4().hex
-        self.session_store.create_session(session_id=session_id, scene=resolved_scene)
-        return session_id
+        return self.session_store.create_session(
+            session_id=session_id,
+            scene=resolved_scene,
+            mounted_knowledge_sources=resolved_sources,
+        )
+
+    def validate_mounted_knowledge_sources(
+        self,
+        mounted_knowledge_sources: list[str] | tuple[str, ...] | None,
+    ) -> tuple[str, ...]:
+        """校验并规范化会话挂载知识源。"""
+        return normalize_mounted_knowledge_sources(mounted_knowledge_sources)
+
+    def default_mounted_knowledge_sources(self) -> tuple[str, ...]:
+        """返回系统默认挂载的知识源列表。"""
+        return DEFAULT_MOUNTED_KNOWLEDGE_SOURCES
 
     def resolve_session_scene(self, session_id: str | None) -> str:
         """解析会话绑定场景；无会话时返回默认场景。"""

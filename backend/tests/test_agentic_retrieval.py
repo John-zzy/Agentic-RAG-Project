@@ -50,6 +50,23 @@ class FakeKnowledgeService:
             for review in reviews
         ]
 
+    def upsert_documents(self, documents: list[dict[str, object]]) -> None:
+        self._documents = [
+            VectorSearchResult(
+                document=VectorStoreDocument(
+                    id=str(document["document_id"]),
+                    content=str(document["content"]),
+                    metadata={
+                        "document_id": document["document_id"],
+                        "source_path": document.get("source_path", f'{document["document_id"]}.md'),
+                        "namespace": "documents",
+                    },
+                ),
+                score=float(document.get("score", 0.9)),
+            )
+            for document in documents
+        ]
+
     def search_products(self, query: str, top_k: int | None = None):
         del top_k
         query_lower = query.lower()
@@ -98,6 +115,22 @@ def _build_knowledge_service(test_name: str) -> tuple[AppSettings, FakeKnowledge
             }
         ]
     )
+    knowledge_service.upsert_documents(
+        [
+            {
+                "document_id": "DOC-001",
+                "content": "AeroPhone X 产品手册：电池 5000mAh，屏幕 120Hz，价格 4599 元。",
+                "source_path": "manuals/aerophone-x.md",
+                "score": 0.93,
+            },
+            {
+                "document_id": "DOC-002",
+                "content": "售后 FAQ：订单查询需要提供订单号，库存问题以系统实时状态为准。",
+                "source_path": "faq/after-sale.md",
+                "score": 0.88,
+            },
+        ]
+    )
     return app_settings, knowledge_service
 
 
@@ -113,10 +146,11 @@ def test_agentic_retriever_switches_to_inventory_tool_for_stock_query() -> None:
     assert outcome.documents
     assert outcome.exit_reason == "sufficient"
     assert [entry.tool_name for entry in outcome.decision_log] == [
+        "knowledge_document_search",
         "product_semantic_search",
         "inventory_lookup",
     ]
-    assert outcome.decision_log[1].query == "P005"
+    assert outcome.decision_log[2].query == "P005"
 
 
 def test_agentic_retriever_returns_detail_lookup_for_spec_question() -> None:
@@ -131,6 +165,7 @@ def test_agentic_retriever_returns_detail_lookup_for_spec_question() -> None:
     assert outcome.documents
     assert any(doc.metadata.get("namespace") == "product_detail" for doc in outcome.documents)
     assert outcome.decision_log[-1].tool_name == "product_detail_lookup"
+    assert outcome.decision_log[0].tool_name == "knowledge_document_search"
 
 
 def test_ecommerce_scene_definition_builds_agentic_retriever_and_scene_metadata() -> None:
@@ -145,8 +180,9 @@ def test_ecommerce_scene_definition_builds_agentic_retriever_and_scene_metadata(
 
     assert definition.scene == "ecommerce"
     assert definition.metadata["supports_agentic_retrieval"] is True
-    assert outcome.decision_log[0].tool_name == "product_semantic_search"
-    assert outcome.decision_log[1].tool_name == "inventory_lookup"
+    assert outcome.decision_log[0].tool_name == "knowledge_document_search"
+    assert outcome.decision_log[1].tool_name == "product_semantic_search"
+    assert outcome.decision_log[2].tool_name == "inventory_lookup"
 
 
 def test_generic_scene_definition_only_uses_document_knowledge_and_generic_fallback() -> None:
@@ -159,3 +195,36 @@ def test_generic_scene_definition_only_uses_document_knowledge_and_generic_fallb
     assert "product_semantic_search" not in tool_names
     assert "inventory_lookup" not in tool_names
     assert "商品" not in definition.fallback_policy.no_hit_message
+
+
+def test_agentic_retriever_stays_on_documents_for_document_question() -> None:
+    app_settings, knowledge_service = _build_knowledge_service("agentic-documents-first")
+    retriever = create_agentic_knowledge_retriever(
+        app_settings,
+        knowledge_service=knowledge_service,
+    )
+
+    outcome = retriever.retrieve_with_trace("请根据产品手册说明 AeroPhone X 的价格和电池参数")
+
+    assert outcome.documents
+    assert [entry.tool_name for entry in outcome.decision_log] == ["knowledge_document_search"]
+    assert all(
+        str(document.metadata.get("namespace")) == "documents"
+        for document in outcome.documents
+    )
+
+
+def test_agentic_retriever_restricts_to_documents_only_candidate_tools() -> None:
+    app_settings, knowledge_service = _build_knowledge_service("agentic-documents-only")
+    retriever = create_agentic_knowledge_retriever(
+        app_settings,
+        knowledge_service=knowledge_service,
+    )
+
+    outcome = retriever.retrieve_with_trace(
+        "AeroPhone X 现在有货吗",
+        candidate_tools=("knowledge_document_search",),
+    )
+
+    assert outcome.documents
+    assert [entry.tool_name for entry in outcome.decision_log] == ["knowledge_document_search"]

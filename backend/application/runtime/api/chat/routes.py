@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from typing import Any
-from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException, Query, Request
 
@@ -16,6 +15,7 @@ from backend.application.runtime.api.chat.schemas import (
     SessionDetailResponse,
     SessionTurnResponse,
 )
+from backend.platform.knowledge.sources import MountedKnowledgeSourceValidationError
 
 
 router = APIRouter()
@@ -76,6 +76,7 @@ def create_session(
     """创建新会话并返回会话 ID。"""
     service = _get_chat_service(request)
     requested_scene = payload.scene if payload is not None else None
+    requested_sources = payload.mounted_knowledge_sources if payload is not None else None
     try:
         scene = service.validate_scene(requested_scene or service.default_scene())
     except ValueError as exc:
@@ -87,9 +88,27 @@ def create_session(
                 "request_id": "N/A",
             },
         ) from exc
-    session_id = uuid4().hex
-    service.session_store.create_session(session_id=session_id, scene=scene)
-    return SessionCreateResponse(session_id=session_id, scene=scene)
+    try:
+        mounted_knowledge_sources = service.validate_mounted_knowledge_sources(requested_sources)
+    except MountedKnowledgeSourceValidationError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "INVALID_MOUNTED_KNOWLEDGE_SOURCES",
+                "message": str(exc),
+                "request_id": "N/A",
+            },
+        ) from exc
+
+    created = service.create_session(
+        scene=scene,
+        mounted_knowledge_sources=mounted_knowledge_sources,
+    )
+    return SessionCreateResponse(
+        session_id=created.session_id,
+        scene=created.scene,
+        mounted_knowledge_sources=list(created.mounted_knowledge_sources),
+    )
 
 
 @router.get("/sessions/{session_id}", response_model=SessionDetailResponse)
@@ -102,10 +121,16 @@ def get_session(
     service = _get_chat_service(request)
     session = service.session_store.get_session(session_id)
     session_scene = session.scene if session is not None else service.default_scene()
+    mounted_knowledge_sources = (
+        list(session.mounted_knowledge_sources)
+        if session is not None
+        else list(service.default_mounted_knowledge_sources())
+    )
     turns, total_turns = service.session_store.get_session_detail(session_id=session_id, limit=limit)
     return SessionDetailResponse(
         session_id=session_id,
         scene=session_scene,
+        mounted_knowledge_sources=mounted_knowledge_sources,
         total_turns=total_turns,
         turns=[
             SessionTurnResponse(

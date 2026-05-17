@@ -15,8 +15,14 @@ from backend.scenes.base import (
 )
 from backend.platform.knowledge.base.store import VectorSearchResult
 from backend.platform.knowledge.base.text import truncate_snippet
+from backend.platform.rag.agentic import AgenticRetriever
 from backend.platform.rag.core import RetrievalCitation, RetrievalResult, RetrievalTool
 from backend.platform.tools import ToolResult, build_structured_tool
+from backend.scenes.ecommerce.definition import EcommerceQueryRewriter, EcommerceSufficiencyJudge
+from backend.scenes.ecommerce.retrieval_tools import (
+    ProductCatalogStore,
+    build_agentic_retrieval_tools,
+)
 from backend.scenes.ecommerce.knowledge_service import KnowledgeService, create_knowledge_service
 
 
@@ -122,15 +128,22 @@ def build_generic_assistant_scene_definition(
     app_settings: AppSettings | None = None,
     *,
     knowledge_service: object | None = None,
+    product_store: ProductCatalogStore | None = None,
+    max_rounds: int = 3,
 ) -> SceneDefinition:
     """构建通用知识助手场景定义。"""
     current_settings = app_settings or settings
     resolved_knowledge_service = _resolve_knowledge_service(current_settings, knowledge_service)
+    resolved_product_store = product_store or ProductCatalogStore(data_dir=current_settings.data_dir)
     return SceneDefinition(
         scene="generic_assistant",
         name="Generic Knowledge Assistant",
-        description="仅依赖上传文档知识库与会话记忆的通用 RAG 助手。",
-        build_retriever=lambda: GenericKnowledgeDocumentRetriever(knowledge_service=resolved_knowledge_service),
+        description="以用户上传文档为主，并可按会话挂载扩展到其他知识源的通用 RAG 助手。",
+        build_retriever=lambda: _build_generic_agentic_retriever(
+            knowledge_service=resolved_knowledge_service,
+            product_store=resolved_product_store,
+            max_rounds=max_rounds,
+        ),
         build_tools=lambda: (build_generic_knowledge_document_tool(resolved_knowledge_service),),
         system_prompt=GENERIC_ASSISTANT_SYSTEM_PROMPT,
         fallback_policy=SceneFallbackPolicy(
@@ -139,8 +152,8 @@ def build_generic_assistant_scene_definition(
         infer_complexity=infer_generic_assistant_complexity,
         bootstrap=lambda: SceneBootstrapResult(),
         metadata={
-            "supports_agentic_retrieval": False,
-            "knowledge_sources": ("documents",),
+            "supports_agentic_retrieval": True,
+            "knowledge_sources": ("documents", "ecommerce"),
             "default_agent": None,
             "prompt_style": "generic_knowledge_assistant",
         },
@@ -191,6 +204,26 @@ def infer_generic_assistant_complexity(message: str) -> str:
     if any(keyword in normalized for keyword in moderate_keywords) or len(normalized) > 40:
         return "moderate"
     return "simple"
+
+
+def _build_generic_agentic_retriever(
+    *,
+    knowledge_service: KnowledgeService,
+    product_store: ProductCatalogStore,
+    max_rounds: int,
+) -> AgenticRetriever:
+    """为通用场景构建文档优先的 AgenticRetriever。"""
+    tools = build_agentic_retrieval_tools(
+        knowledge_service=knowledge_service,
+        product_store=product_store,
+    )
+    return AgenticRetriever(
+        tools={tool.name: tool for tool in tools},
+        default_tool="knowledge_document_search",
+        sufficiency_judge=EcommerceSufficiencyJudge(),
+        query_rewriter=EcommerceQueryRewriter(),
+        max_rounds=max_rounds,
+    )
 
 
 def _resolve_knowledge_service(

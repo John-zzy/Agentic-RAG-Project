@@ -32,6 +32,7 @@ def test_session_store_creates_and_updates_session_metadata() -> None:
     created = store.create_session(
         session_id="session-meta",
         scene="ecommerce",
+        mounted_knowledge_sources=["ecommerce", "documents", "documents"],
         now="2026-04-23T00:00:00+00:00",
     )
     touched = store.touch_session(
@@ -41,9 +42,11 @@ def test_session_store_creates_and_updates_session_metadata() -> None:
 
     assert created.status == "active"
     assert created.scene == "ecommerce"
+    assert created.mounted_knowledge_sources == ("documents", "ecommerce")
     assert created.created_at == "2026-04-23T00:00:00+00:00"
     assert touched is not None
     assert touched.scene == "ecommerce"
+    assert touched.mounted_knowledge_sources == ("documents", "ecommerce")
     assert touched.last_active_at == "2026-04-23T00:05:00+00:00"
     assert touched.updated_at == "2026-04-23T00:05:00+00:00"
 
@@ -130,3 +133,55 @@ def test_session_store_migrates_legacy_database_to_data_dir(monkeypatch) -> None
     assert target_path.exists()
     assert not legacy_path.exists()
     assert store.count_turns("missing-session") == 0
+
+
+def test_session_store_backfills_default_mounted_sources_for_legacy_sessions() -> None:
+    runtime_dir = make_test_runtime_dir("session-store-legacy-mounted-sources")
+    sqlite_path = runtime_dir / "sessions.db"
+
+    conn = sqlite3.connect(str(sqlite_path))
+    try:
+        conn.execute(
+            """
+            CREATE TABLE sessions (
+                session_id TEXT PRIMARY KEY,
+                scene TEXT NOT NULL DEFAULT 'generic_assistant',
+                status TEXT NOT NULL DEFAULT 'active',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                last_active_at TEXT NOT NULL,
+                expired_at TEXT
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO sessions (
+                session_id,
+                scene,
+                status,
+                created_at,
+                updated_at,
+                last_active_at,
+                expired_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "legacy-session",
+                "generic_assistant",
+                "active",
+                "2026-04-23T00:00:00+00:00",
+                "2026-04-23T00:00:00+00:00",
+                "2026-04-23T00:00:00+00:00",
+                None,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    store = SQLiteSessionStore(sqlite_path=sqlite_path)
+    session = store.get_session("legacy-session")
+
+    assert session is not None
+    assert session.mounted_knowledge_sources == ("documents",)

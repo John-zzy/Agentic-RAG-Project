@@ -2,10 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from langchain_core.documents import Document
-from langchain_core.retrievers import BaseRetriever
 from langchain_core.runnables import RunnableConfig
-from pydantic import ConfigDict, Field
 
 from backend.platform.config.settings import AppSettings, settings
 from backend.scenes.base import (
@@ -13,8 +10,6 @@ from backend.scenes.base import (
     SceneDefinition,
     SceneFallbackPolicy,
 )
-from backend.platform.knowledge.base.store import VectorSearchResult
-from backend.platform.knowledge.base.text import truncate_snippet
 from backend.platform.rag.agentic import AgenticRetriever
 from backend.platform.rag.core import (
     QueryRewrite,
@@ -42,87 +37,8 @@ ECOMMERCE_SYSTEM_PROMPT = (
 )
 
 
-class EcommerceKnowledgeBaseRetriever(BaseRetriever):
-    """Aggregate ecommerce knowledge sources into a scene-level retriever."""
-
-    knowledge_service: Any = Field(exclude=True)
-    default_top_k: int = 5
-    minimum_relevance: float = 0.18
-
-    model_config = ConfigDict(arbitrary_types_allowed=True)
-
-    def _get_relevant_documents(self, query: str, *, run_manager: Any = None) -> list[Document]:
-        """Adapt to the LangChain retriever protocol."""
-        return self.search(query=query, top_k=self.default_top_k)
-
-    def search(self, query: str, top_k: int | None = None) -> list[Document]:
-        """Merge product, review, order, and document results with ranking and dedupe."""
-        requested_top_k = top_k or self.default_top_k
-        product_results = self.knowledge_service.search_products(query=query, top_k=requested_top_k)
-        review_results = self.knowledge_service.search_reviews(query=query, top_k=requested_top_k)
-        order_results = self.knowledge_service.search_orders(query=query, top_k=requested_top_k)
-        document_results = self.knowledge_service.search_document_chunks(query=query, top_k=requested_top_k)
-
-        combined = (
-            self._to_documents("products", product_results)
-            + self._to_documents("reviews", review_results)
-            + self._to_documents("orders", order_results)
-            + self._to_documents("documents", document_results)
-        )
-        combined.sort(key=self._doc_score, reverse=True)
-
-        deduped: list[Document] = []
-        seen: set[tuple[str, str]] = set()
-        for doc in combined:
-            namespace = str(doc.metadata.get("namespace", "knowledge"))
-            citation_id = str(doc.metadata.get("citation_id", "unknown"))
-            key = (namespace, citation_id)
-            if key in seen:
-                continue
-            seen.add(key)
-            deduped.append(doc)
-            if len(deduped) >= requested_top_k:
-                break
-        return deduped
-
-    def _to_documents(self, namespace: str, results: list[VectorSearchResult]) -> list[Document]:
-        """Map vector search results into LangChain documents."""
-        documents: list[Document] = []
-        for result in results:
-            score = float(result.score) if result.score is not None else None
-            if score is not None and score < self.minimum_relevance:
-                continue
-            metadata = result.document.metadata
-            citation_id = str(
-                metadata.get("review_id")
-                or metadata.get("product_id")
-                or metadata.get("order_id")
-                or metadata.get("document_id")
-                or metadata.get("source_path")
-                or metadata.get("id")
-                or result.document.id
-            )
-            snippet = truncate_snippet(result.document.content)
-            if not snippet:
-                continue
-            documents.append(
-                Document(
-                    page_content=snippet,
-                    metadata={"namespace": namespace, "citation_id": citation_id, "score": score},
-                )
-            )
-        return documents
-
-    def _doc_score(self, doc: Document) -> float:
-        """Extract score for ranking."""
-        score = doc.metadata.get("score")
-        if isinstance(score, int | float):
-            return float(score)
-        return -1.0
-
-
 class EcommerceSufficiencyJudge(SufficiencyJudge):
-    """Drive multi-round agentic retrieval decisions for ecommerce scene."""
+    """驱动电商 Agentic Retrieval 的“文档优先、按需切换”决策。"""
 
     inventory_keywords: tuple[str, ...] = (
         "inventory",
@@ -179,6 +95,18 @@ class EcommerceSufficiencyJudge(SufficiencyJudge):
         "配送",
         "包裹",
     )
+    document_keywords: tuple[str, ...] = (
+        "文档",
+        "说明",
+        "制度",
+        "规则",
+        "手册",
+        "流程",
+        "faq",
+        "知识库",
+        "文件",
+        "条款",
+    )
 
     def invoke(
         self,
@@ -186,7 +114,7 @@ class EcommerceSufficiencyJudge(SufficiencyJudge):
         config: RunnableConfig | None = None,
         **kwargs: Any,
     ) -> SufficiencyDecision:
-        """Choose finish, rewrite, switch_tool, or ask_user for the next round."""
+        """按当前证据判断是否结束、改写，或切换到电商工具。"""
         del config, kwargs
         plan = input.plan
         result = input.results[-1]
@@ -194,26 +122,53 @@ class EcommerceSufficiencyJudge(SufficiencyJudge):
         current_tool = plan.selected_tool
         result_count = len(result.records)
         top_product_id = self._resolve_top_product_id(result.records)
+        is_document_round = current_tool == "knowledge_document_search"
+        can_use_ecommerce = self._has_any_ecommerce_tool(plan.candidate_tools)
+        has_ecommerce_intent = self._is_ecommerce_intent(normalized_query)
+        is_document_question = self._contains_any(normalized_query, self.document_keywords)
+        has_document_evidence = self._has_document_evidence(input)
 
         if result_count == 0:
-            if current_tool != "knowledge_document_search" and "knowledge_document_search" not in plan.attempted_tools:
+            if is_document_round and can_use_ecommerce and has_ecommerce_intent:
                 return SufficiencyDecision(
                     is_sufficient=False,
                     next_action="switch_tool",
-                    reason="Built-in ecommerce knowledge returned no hits; try uploaded knowledge documents next.",
-                    suggested_tool="knowledge_document_search",
+                    reason="文档知识没有命中，且问题带有明显电商意图，继续尝试电商知识源。",
+                    suggested_tool="product_semantic_search",
                 )
             if plan.round_index >= plan.max_rounds:
                 return SufficiencyDecision(
                     is_sufficient=False,
                     next_action="ask_user",
-                    reason="No relevant evidence was found after the allowed retrieval attempts.",
-                    follow_up_question="Please provide a more specific product name, file keyword, or preferred knowledge source.",
+                    reason="在允许的检索轮次内没有找到足够相关的证据。",
+                    follow_up_question="请补充更具体的商品名、订单号、文档关键词，或说明你想查询的知识来源。",
                 )
             return SufficiencyDecision(
                 is_sufficient=False,
                 next_action="rewrite",
-                reason="The current retrieval result is empty and needs a clearer query.",
+                reason="当前检索结果为空，需要先把查询改写得更清楚。",
+            )
+
+        if is_document_round:
+            if is_document_question:
+                return SufficiencyDecision(
+                    is_sufficient=True,
+                    next_action="finish",
+                    reason="当前问题更偏文档问答，文档证据已足够支持回答。",
+                    confidence=result.confidence,
+                )
+            if can_use_ecommerce and has_ecommerce_intent:
+                return SufficiencyDecision(
+                    is_sufficient=False,
+                    next_action="switch_tool",
+                    reason="当前问题带有明显电商意图，继续补充电商知识以获得更直接的答案。",
+                    suggested_tool="product_semantic_search",
+                )
+            return SufficiencyDecision(
+                is_sufficient=True,
+                next_action="finish",
+                reason="文档证据已足够支持当前回答。",
+                confidence=result.confidence,
             )
 
         if current_tool == "product_semantic_search":
@@ -221,7 +176,7 @@ class EcommerceSufficiencyJudge(SufficiencyJudge):
                 return SufficiencyDecision(
                     is_sufficient=False,
                     next_action="switch_tool",
-                    reason="Product candidates are available; inventory status should be confirmed next.",
+                    reason="已定位到候选商品，下一步补查库存状态。",
                     suggested_tool="inventory_lookup",
                     metadata={"resolved_query": top_product_id},
                 )
@@ -229,41 +184,77 @@ class EcommerceSufficiencyJudge(SufficiencyJudge):
                 return SufficiencyDecision(
                     is_sufficient=False,
                     next_action="switch_tool",
-                    reason="Product candidates are available; exact details should be filled in next.",
+                    reason="已定位到候选商品，下一步补充精确参数与价格。",
                     suggested_tool="product_detail_lookup",
                     metadata={"resolved_query": top_product_id},
                 )
-            if self._contains_any(normalized_query, self.review_keywords) and "review_semantic_search" not in plan.attempted_tools:
+            if (
+                self._contains_any(normalized_query, self.review_keywords)
+                and "review_semantic_search" in plan.candidate_tools
+                and "review_semantic_search" not in plan.attempted_tools
+            ):
                 return SufficiencyDecision(
                     is_sufficient=False,
                     next_action="switch_tool",
-                    reason="Need review evidence to support recommendation quality or user sentiment.",
+                    reason="需要评价证据补充推荐理由或口碑信息。",
                     suggested_tool="review_semantic_search",
                 )
-            if self._contains_any(normalized_query, self.order_keywords) and "order_semantic_search" not in plan.attempted_tools:
+            if (
+                self._contains_any(normalized_query, self.order_keywords)
+                and "order_semantic_search" in plan.candidate_tools
+                and "order_semantic_search" not in plan.attempted_tools
+            ):
                 return SufficiencyDecision(
                     is_sufficient=False,
                     next_action="switch_tool",
-                    reason="Need order evidence to support order tracking or logistics inquiries.",
+                    reason="需要订单证据补充物流或订单状态信息。",
                     suggested_tool="order_semantic_search",
                 )
-            if "knowledge_document_search" not in plan.attempted_tools:
+            if has_document_evidence and not has_ecommerce_intent:
                 return SufficiencyDecision(
-                    is_sufficient=False,
-                    next_action="switch_tool",
-                    reason="Need to cross-check uploaded knowledge documents before finishing.",
-                    suggested_tool="knowledge_document_search",
+                    is_sufficient=True,
+                    next_action="finish",
+                    reason="已有文档证据兜底，当前无需继续扩展更多电商检索。",
+                    confidence=result.confidence,
                 )
 
         return SufficiencyDecision(
             is_sufficient=True,
             next_action="finish",
-            reason="Current evidence is sufficient to support a grounded answer.",
+            reason="当前证据已足够支持基于事实的回答。",
             confidence=result.confidence,
         )
 
     def _contains_any(self, query: str, keywords: tuple[str, ...]) -> bool:
         return any(keyword in query for keyword in keywords)
+
+    def _is_ecommerce_intent(self, query: str) -> bool:
+        """识别是否出现明显电商意图。"""
+        return self._contains_any(
+            query,
+            self.inventory_keywords
+            + self.detail_keywords
+            + self.review_keywords
+            + self.order_keywords,
+        )
+
+    def _has_any_ecommerce_tool(self, candidate_tools: tuple[str, ...]) -> bool:
+        """判断当前候选工具里是否允许使用电商知识。"""
+        ecommerce_tools = {
+            "product_semantic_search",
+            "review_semantic_search",
+            "order_semantic_search",
+            "inventory_lookup",
+            "product_detail_lookup",
+        }
+        return any(tool_name in ecommerce_tools for tool_name in candidate_tools)
+
+    def _has_document_evidence(self, context: RetrievalContext) -> bool:
+        """判断累计证据中是否已有文档来源。"""
+        return any(
+            str(document.metadata.get("namespace")) == "documents"
+            for document in context.documents
+        )
 
     def _resolve_top_product_id(self, records: list[dict[str, Any]]) -> str | None:
         for record in records:
@@ -308,7 +299,7 @@ def create_agentic_knowledge_retriever(
     product_store: ProductCatalogStore | None = None,
     max_rounds: int = 3,
 ) -> AgenticRetriever:
-    """Build the primary ecommerce AgenticRetriever implementation."""
+    """构建电商场景的 AgenticRetriever，默认先查文档。"""
     current_settings = app_settings or settings
     resolved_knowledge_service = knowledge_service or create_knowledge_service(current_settings)
     resolved_product_store = product_store or ProductCatalogStore(data_dir=current_settings.data_dir)
@@ -319,7 +310,7 @@ def create_agentic_knowledge_retriever(
     )
     return AgenticRetriever(
         tools={tool.name: tool for tool in tools},
-        default_tool="product_semantic_search",
+        default_tool="knowledge_document_search",
         sufficiency_judge=EcommerceSufficiencyJudge(),
         query_rewriter=EcommerceQueryRewriter(),
         max_rounds=max_rounds,
@@ -333,7 +324,7 @@ def build_ecommerce_scene_definition(
     product_store: ProductCatalogStore | None = None,
     max_rounds: int = 3,
 ) -> SceneDefinition:
-    """Build the ecommerce scene as the primary runtime implementation."""
+    """构建电商场景定义。"""
     current_settings = app_settings or settings
     resolved_knowledge_service = _resolve_knowledge_service(current_settings, knowledge_service)
     resolved_product_store = product_store or ProductCatalogStore(data_dir=current_settings.data_dir)
@@ -363,7 +354,7 @@ def build_ecommerce_scene_definition(
         bootstrap=lambda: _bootstrap_scene(current_settings, resolved_knowledge_service),
         metadata={
             "supports_agentic_retrieval": True,
-            "knowledge_sources": ("products", "reviews", "orders", "documents"),
+            "knowledge_sources": ("documents", "ecommerce"),
             "default_agent": "shopping_agent",
             "prompt_style": "ecommerce_customer_service",
         },

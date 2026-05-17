@@ -15,6 +15,10 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, messag
 from langchain_core.messages.base import message_to_dict
 
 from backend.platform.config.settings import AppSettings, LEGACY_SQLITE_PATH, SQLITE_PATH, settings
+from backend.platform.knowledge.sources import (
+    parse_mounted_knowledge_sources,
+    serialize_mounted_knowledge_sources,
+)
 
 
 SessionStatus = Literal["active", "expired"]
@@ -26,6 +30,7 @@ class SessionRecord:
 
     session_id: str
     scene: str
+    mounted_knowledge_sources: tuple[str, ...]
     status: SessionStatus
     created_at: str
     updated_at: str
@@ -73,6 +78,7 @@ class SQLiteSessionStore:
         self,
         session_id: str,
         scene: str = "generic_assistant",
+        mounted_knowledge_sources: Sequence[str] | None = None,
         now: datetime | str | None = None,
     ) -> SessionRecord:
         """创建会话主记录；若已存在则直接返回当前状态。"""
@@ -81,20 +87,22 @@ class SQLiteSessionStore:
             return existing
 
         timestamp = self._normalize_timestamp(now)
+        serialized_sources = serialize_mounted_knowledge_sources(mounted_knowledge_sources)
         with self._lock, self._connect() as conn:
             conn.execute(
                 """
                 INSERT INTO sessions (
                     session_id,
                     scene,
+                    mounted_knowledge_sources,
                     status,
                     created_at,
                     updated_at,
                     last_active_at,
                     expired_at
-                ) VALUES (?, ?, 'active', ?, ?, ?, NULL)
+                ) VALUES (?, ?, ?, 'active', ?, ?, ?, NULL)
                 """,
-                (session_id, scene, timestamp, timestamp, timestamp),
+                (session_id, scene, serialized_sources, timestamp, timestamp, timestamp),
             )
             conn.commit()
 
@@ -111,6 +119,7 @@ class SQLiteSessionStore:
                 SELECT
                     session_id,
                     scene,
+                    mounted_knowledge_sources,
                     status,
                     created_at,
                     updated_at,
@@ -428,6 +437,7 @@ class SQLiteSessionStore:
                 CREATE TABLE IF NOT EXISTS sessions (
                     session_id TEXT PRIMARY KEY,
                     scene TEXT NOT NULL DEFAULT 'generic_assistant',
+                    mounted_knowledge_sources TEXT NOT NULL DEFAULT '["documents"]',
                     status TEXT NOT NULL DEFAULT 'active',
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
@@ -447,6 +457,20 @@ class SQLiteSessionStore:
                     ADD COLUMN scene TEXT NOT NULL DEFAULT 'generic_assistant'
                     """
                 )
+            if "mounted_knowledge_sources" not in columns:
+                conn.execute(
+                    """
+                    ALTER TABLE sessions
+                    ADD COLUMN mounted_knowledge_sources TEXT NOT NULL DEFAULT '["documents"]'
+                    """
+                )
+            conn.execute(
+                """
+                UPDATE sessions
+                SET mounted_knowledge_sources = '["documents"]'
+                WHERE mounted_knowledge_sources IS NULL OR mounted_knowledge_sources = ''
+                """
+            )
             conn.execute(
                 """
                 CREATE INDEX IF NOT EXISTS idx_chat_turns_session_id_id
@@ -662,6 +686,11 @@ class SQLiteSessionStore:
         return SessionRecord(
             session_id=str(row["session_id"]),
             scene=str(row["scene"]),
+            mounted_knowledge_sources=parse_mounted_knowledge_sources(
+                row["mounted_knowledge_sources"]
+                if "mounted_knowledge_sources" in row.keys()
+                else None
+            ),
             status=str(row["status"]),
             created_at=str(row["created_at"]),
             updated_at=str(row["updated_at"]),
