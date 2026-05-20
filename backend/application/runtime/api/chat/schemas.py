@@ -44,6 +44,11 @@ class Citation(BaseModel):
     chunk_index: int | None = Field(default=None, description="文档分块序号。")
     snippet: str = Field(description="用于展示的命中文本片段。")
     score: float | None = Field(default=None, description="检索得分。")
+    vector_score: float | None = Field(default=None, description="语义召回分数。")
+    keyword_score: float | None = Field(default=None, description="关键词召回分数。")
+    vector_rank: int | None = Field(default=None, description="语义召回原始排序位置，从 1 开始。")
+    keyword_rank: int | None = Field(default=None, description="关键词召回原始排序位置，从 1 开始。")
+    matched_by: list[str] = Field(default_factory=list, description="命中来源，例如 vector、keyword。")
     rank: int = Field(ge=1, description="原始检索排序位置，从 1 开始。")
 
 

@@ -316,6 +316,11 @@
 | `chunk_index` | `int \| null` | 可空 | 文档分块序号。 |
 | `snippet` | `str` |  | 引用摘要文本。 |
 | `score` | `float \| null` | 可空 | 检索得分。 |
+| `vector_score` | `float \| null` | 可空 | 文档语义召回分数。 |
+| `keyword_score` | `float \| null` | 可空 | 文档关键词召回分数。 |
+| `vector_rank` | `int \| null` | 可空 | 语义召回原始排序位置，从 1 开始。 |
+| `keyword_rank` | `int \| null` | 可空 | 关键词召回原始排序位置，从 1 开始。 |
+| `matched_by` | `list[str]` |  | 命中来源，当前取值为 `vector`、`keyword` 或两者组合。 |
 | `rank` | `int` | `>= 1` | 原始检索排序位置，从 1 开始。 |
 
 ### 11. `ChatResponse`

@@ -679,6 +679,11 @@ class SQLiteSessionStore:
             "chunk_index": self._coerce_int(item.get("chunk_index")),
             "snippet": snippet,
             "score": self._coerce_float(item.get("score")),
+            "vector_score": self._coerce_float(item.get("vector_score")),
+            "keyword_score": self._coerce_float(item.get("keyword_score")),
+            "vector_rank": self._coerce_int(item.get("vector_rank")),
+            "keyword_rank": self._coerce_int(item.get("keyword_rank")),
+            "matched_by": self._coerce_str_list(item.get("matched_by")),
             "rank": self._coerce_int(item.get("rank")) or index,
         }
         return normalized
@@ -781,3 +786,9 @@ class SQLiteSessionStore:
             except ValueError:
                 return None
         return None
+
+    def _coerce_str_list(self, value: Any) -> list[str]:
+        """把任意列表安全转成字符串列表。"""
+        if not isinstance(value, list):
+            return []
+        return [str(item) for item in value if isinstance(item, str) and item]

@@ -1,6 +1,7 @@
 import json
 
 from backend.platform.config.settings import AppSettings
+from backend.platform.rag.document_retrieval import DocumentChunkRetrievalResult
 from backend.scenes.ecommerce.definition import create_agentic_knowledge_retriever
 from backend.scenes.generic_assistant.definition import build_generic_assistant_scene_definition
 from backend.scenes.ecommerce.definition import build_ecommerce_scene_definition
@@ -88,9 +89,29 @@ class FakeKnowledgeService:
         del query, top_k
         return list(self._orders)
 
-    def search_document_chunks(self, query: str, top_k: int | None = None, namespace: str | None = None):
-        del query, top_k, namespace
-        return list(self._documents)
+
+class FakeDocumentRetrievalService:
+    def __init__(self, knowledge_service: FakeKnowledgeService) -> None:
+        self._knowledge_service = knowledge_service
+
+    def retrieve(
+        self,
+        *,
+        query: str,
+        top_k: int = 5,
+        namespace: str | None = None,
+    ) -> list[DocumentChunkRetrievalResult]:
+        del query, namespace
+        return [
+            DocumentChunkRetrievalResult(
+                document=result.document,
+                score=result.score,
+                vector_score=result.score,
+                vector_rank=index,
+                matched_by=["vector"],
+            )
+            for index, result in enumerate(self._knowledge_service._documents[:top_k], start=1)
+        ]
 
 
 def _build_knowledge_service(test_name: str) -> tuple[AppSettings, FakeKnowledgeService]:
@@ -150,6 +171,7 @@ def test_agentic_retriever_switches_to_inventory_tool_for_stock_query() -> None:
     retriever = create_agentic_knowledge_retriever(
         app_settings,
         knowledge_service=knowledge_service,
+        document_retrieval_service=FakeDocumentRetrievalService(knowledge_service),
     )
 
     outcome = retriever.retrieve_with_trace("AeroPhone X 现在有货吗")
@@ -169,6 +191,7 @@ def test_agentic_retriever_returns_detail_lookup_for_spec_question() -> None:
     retriever = create_agentic_knowledge_retriever(
         app_settings,
         knowledge_service=knowledge_service,
+        document_retrieval_service=FakeDocumentRetrievalService(knowledge_service),
     )
 
     outcome = retriever.retrieve_with_trace("AeroPhone X 的参数和价格是什么")
@@ -184,6 +207,7 @@ def test_ecommerce_scene_definition_builds_agentic_retriever_and_scene_metadata(
     definition = build_ecommerce_scene_definition(
         app_settings=app_settings,
         knowledge_service=knowledge_service,
+        document_retrieval_service=FakeDocumentRetrievalService(knowledge_service),
     )
 
     retriever = definition.build_retriever()
@@ -213,6 +237,7 @@ def test_agentic_retriever_stays_on_documents_for_document_question() -> None:
     retriever = create_agentic_knowledge_retriever(
         app_settings,
         knowledge_service=knowledge_service,
+        document_retrieval_service=FakeDocumentRetrievalService(knowledge_service),
     )
 
     outcome = retriever.retrieve_with_trace("请根据产品手册说明 AeroPhone X 的价格和电池参数")
@@ -230,6 +255,7 @@ def test_agentic_retriever_restricts_to_documents_only_candidate_tools() -> None
     retriever = create_agentic_knowledge_retriever(
         app_settings,
         knowledge_service=knowledge_service,
+        document_retrieval_service=FakeDocumentRetrievalService(knowledge_service),
     )
 
     outcome = retriever.retrieve_with_trace(
@@ -243,7 +269,27 @@ def test_agentic_retriever_restricts_to_documents_only_candidate_tools() -> None
 
 def test_agentic_retriever_prioritizes_exact_order_match_for_tracking_query() -> None:
     app_settings = _build_settings("agentic-order-priority")
-    definition = build_generic_assistant_scene_definition(app_settings=app_settings)
+    knowledge_service = FakeKnowledgeService()
+    knowledge_service._orders = [
+        VectorSearchResult(
+            document=VectorStoreDocument(
+                id="O202604210010",
+                content="订单 O202604210010，承运商申通快递，运单 ST0011223344CN，状态已签收。",
+                metadata={
+                    "order_id": "O202604210010",
+                    "tracking_no": "ST0011223344CN",
+                    "carrier": "申通快递",
+                    "namespace": "orders",
+                },
+            ),
+            score=0.96,
+        )
+    ]
+    definition = build_generic_assistant_scene_definition(
+        app_settings=app_settings,
+        knowledge_service=knowledge_service,
+        document_retrieval_service=FakeDocumentRetrievalService(knowledge_service),
+    )
     retriever = definition.build_retriever()
 
     outcome = retriever.retrieve_with_trace(

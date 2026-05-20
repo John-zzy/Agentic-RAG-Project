@@ -73,17 +73,6 @@ class KnowledgeService:
         """在订单知识库中执行检索。"""
         return self.search(namespace="orders", query=query, top_k=top_k, filters=filters)
 
-    def search_document_chunks(
-        self,
-        query: str,
-        top_k: int | None = None,
-        namespace: str | None = None,
-    ) -> list[VectorSearchResult]:
-        """在用户上传知识文档的分块索引中执行检索。"""
-        if namespace is not None:
-            self._validate_document_namespace(namespace)
-        return self.store.search_document_chunks(query=query, top_k=top_k, namespace=namespace)
-
     def upsert_products(self, products: list[dict[str, Any]]) -> KnowledgeUpsertSummary:
         """批量写入或更新商品数据。"""
         documents = [build_product_document(product) for product in products]
@@ -122,12 +111,6 @@ class KnowledgeService:
                 f"Unsupported namespace '{namespace}'. "
                 f"Expected one of: {', '.join(supported_namespaces)}."
             )
-
-    def _validate_document_namespace(self, namespace: str) -> None:
-        """校验知识文档命名空间格式。"""
-        if not namespace or namespace.strip() != namespace:
-            raise ValueError("namespace must be a non-empty slug.")
-
 
 def create_knowledge_service(
     app_settings: AppSettings | None = None,

@@ -26,20 +26,6 @@ class KnowledgeDocumentRepositoryGateway:
     def list_document_records(self, namespace: str | None = None) -> list[dict[str, Any]]:
         return self._call("list document records", self.repository.list_document_records, namespace)
 
-    def search_document_chunks(
-        self,
-        query: str,
-        top_k: int | None = None,
-        namespace: str | None = None,
-    ) -> object:
-        return self._call(
-            "search document chunks",
-            self.repository.search_document_chunks,
-            query,
-            top_k,
-            namespace,
-        )
-
     def delete_document_record(self, document_id: str) -> None:
         self._call("delete document record", self.repository.delete_document_record, document_id)
 

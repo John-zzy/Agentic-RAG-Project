@@ -6,6 +6,7 @@ from typing import Any
 from langchain_core.runnables import RunnableConfig
 
 from backend.platform.config.settings import AppSettings, settings
+from backend.platform.rag.document_retrieval import DocumentRetrievalService
 from backend.scenes.base import (
     SceneBootstrapResult,
     SceneDefinition,
@@ -373,16 +374,21 @@ def create_agentic_knowledge_retriever(
     app_settings: AppSettings | None = None,
     *,
     knowledge_service: KnowledgeService | None = None,
+    document_retrieval_service: DocumentRetrievalService | None = None,
     product_store: ProductCatalogStore | None = None,
     max_rounds: int = 3,
 ) -> AgenticRetriever:
     """构建电商场景的 AgenticRetriever，默认先查文档。"""
     current_settings = app_settings or settings
     resolved_knowledge_service = knowledge_service or create_knowledge_service(current_settings)
+    resolved_document_retrieval_service = document_retrieval_service or DocumentRetrievalService(
+        app_settings=current_settings
+    )
     resolved_product_store = product_store or ProductCatalogStore(data_dir=current_settings.data_dir)
     tools = build_agentic_retrieval_tools(
         app_settings=current_settings,
         knowledge_service=resolved_knowledge_service,
+        document_retrieval_service=resolved_document_retrieval_service,
         product_store=resolved_product_store,
     )
     return AgenticRetriever(
@@ -398,12 +404,16 @@ def build_ecommerce_scene_definition(
     app_settings: AppSettings | None = None,
     *,
     knowledge_service: object | None = None,
+    document_retrieval_service: DocumentRetrievalService | None = None,
     product_store: ProductCatalogStore | None = None,
     max_rounds: int = 3,
 ) -> SceneDefinition:
     """构建电商场景定义。"""
     current_settings = app_settings or settings
     resolved_knowledge_service = _resolve_knowledge_service(current_settings, knowledge_service)
+    resolved_document_retrieval_service = document_retrieval_service or DocumentRetrievalService(
+        app_settings=current_settings
+    )
     resolved_product_store = product_store or ProductCatalogStore(data_dir=current_settings.data_dir)
     return SceneDefinition(
         scene="ecommerce",
@@ -412,6 +422,7 @@ def build_ecommerce_scene_definition(
         build_retriever=lambda: create_agentic_knowledge_retriever(
             current_settings,
             knowledge_service=resolved_knowledge_service,
+            document_retrieval_service=resolved_document_retrieval_service,
             product_store=resolved_product_store,
             max_rounds=max_rounds,
         ),

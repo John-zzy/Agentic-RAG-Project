@@ -3,6 +3,8 @@ import json
 from backend.platform.config.settings import AppSettings, VectorStoreConfig
 from backend.platform.knowledge.base.store import (
     ChromaVectorStore,
+    ActiveDocumentChunkSource,
+    DocumentChunkVectorRepository,
     KnowledgeDocumentRepository,
     KnowledgeRetriever,
     VectorStoreDocument,
@@ -65,11 +67,17 @@ def test_factory_can_expose_chroma_as_split_interfaces() -> None:
 
     retriever = VectorStoreFactory.create_retriever(app_settings)
     repository = VectorStoreFactory.create_document_repository(app_settings)
+    vector_repository = VectorStoreFactory.create_document_chunk_vector_repository(app_settings)
+    chunk_source = VectorStoreFactory.create_active_document_chunk_source(app_settings)
 
     assert isinstance(retriever, KnowledgeRetriever)
     assert isinstance(repository, KnowledgeDocumentRepository)
+    assert isinstance(vector_repository, DocumentChunkVectorRepository)
+    assert isinstance(chunk_source, ActiveDocumentChunkSource)
     assert isinstance(retriever, ChromaVectorStore)
     assert isinstance(repository, ChromaVectorStore)
+    assert isinstance(vector_repository, ChromaVectorStore)
+    assert isinstance(chunk_source, ChromaVectorStore)
 
 
 def test_chroma_store_supports_upsert_search_and_delete() -> None:
@@ -218,7 +226,7 @@ def test_chroma_store_supports_document_management_operations() -> None:
     assert store.list_document_records() == []
 
 
-def test_chroma_document_chunk_search_supports_hybrid_keyword_recall() -> None:
+def test_chroma_document_chunk_repositories_support_vector_query_and_active_chunk_listing() -> None:
     tmp_path = make_test_runtime_dir("knowledge-chroma-hybrid-document-search")
     app_settings = build_test_settings(tmp_path)
     store = ChromaVectorStore(app_settings)
@@ -243,10 +251,15 @@ def test_chroma_document_chunk_search_supports_hybrid_keyword_recall() -> None:
         ]
     )
 
-    results = store.search_document_chunks("你叫什么", top_k=3, namespace="faq")
+    embedding = store.build_embedding("你叫什么")
+    results = store.search_document_chunk_vectors(embedding, top_k=3, namespace="faq")
     assert results
     assert results[0].document.id == "chunk-doc-1"
     assert "zzy" in results[0].document.content
+
+    active_chunks = store.list_active_document_chunks(namespace="faq", limit=10)
+    assert [chunk.id for chunk in active_chunks] == ["chunk-doc-1"]
+    assert active_chunks[0].metadata["document_id"] == "doc-1"
 
 
 def test_preload_knowledge_base_uses_factory_and_loads_json_data() -> None:

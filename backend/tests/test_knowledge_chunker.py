@@ -66,6 +66,7 @@ def test_build_document_chunks_uses_processed_record_metadata() -> None:
         "processed_content_hash": "processed-hash",
         "updated_at": "2026-05-06T12:00:00Z",
         "is_active": True,
+        "is_managed_document": True,
     }
 
 

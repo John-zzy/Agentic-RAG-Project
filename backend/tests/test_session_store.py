@@ -220,6 +220,11 @@ def test_session_store_normalizes_legacy_retrieval_snippets() -> None:
             "chunk_index": None,
             "snippet": "旧商品片段",
             "score": 0.95,
+            "vector_score": None,
+            "keyword_score": None,
+            "vector_rank": None,
+            "keyword_rank": None,
+            "matched_by": [],
             "rank": 1,
         }
     ]

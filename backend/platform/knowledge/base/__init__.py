@@ -1,10 +1,10 @@
 from backend.platform.knowledge.base.store import (
+    ActiveDocumentChunkSource,
+    DocumentChunkVectorRepository,
     SUPPORTED_NAMESPACES,
     ChromaVectorStore,
     EmbeddingStrategy,
     ElasticsearchVectorStore,
-    HybridRerankStrategy,
-    HybridSearchRanker,
     KnowledgeDocumentRepository,
     KnowledgeRetriever,
     LocalHashingEmbedder,
@@ -17,12 +17,12 @@ from backend.platform.knowledge.base.store import (
 from backend.platform.knowledge.base.text import MAX_SNIPPET_LENGTH, truncate_snippet
 
 __all__ = [
+    "ActiveDocumentChunkSource",
+    "DocumentChunkVectorRepository",
     "SUPPORTED_NAMESPACES",
     "ChromaVectorStore",
     "EmbeddingStrategy",
     "ElasticsearchVectorStore",
-    "HybridRerankStrategy",
-    "HybridSearchRanker",
     "KnowledgeDocumentRepository",
     "KnowledgeRetriever",
     "LocalHashingEmbedder",

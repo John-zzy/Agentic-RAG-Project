@@ -25,7 +25,7 @@
   - `knowledge_used`: 是否使用了知识检索结果。
   - `scene`: 当前响应所属场景。
   - `agent`: 代理/角色标识，可为空。
-  - `citations`: 统一引用列表，每项包含 `index`、`citation_id`、`namespace`、`source_kind`、`source_name`、`source_path`、`document_id`、`chunk_id`、`chunk_index`、`snippet`、`score`、`rank`。
+  - `citations`: 统一引用列表，每项包含 `index`、`citation_id`、`namespace`、`source_kind`、`source_name`、`source_path`、`document_id`、`chunk_id`、`chunk_index`、`snippet`、`score`、`vector_score`、`keyword_score`、`vector_rank`、`keyword_rank`、`matched_by`、`rank`。
 
 ### `GET /scenes`
 
@@ -61,7 +61,13 @@
   - `mounted_knowledge_sources`: 会话挂载的知识源列表；历史会话缺失该字段时默认回填 `["documents"]`。
   - `total_turns`: 历史总轮数。
   - `turns`: 轮次列表，每项包含 `request_id`、`user_message`、`assistant_answer`、`retrieval_snippets`、`timestamp`。
-  - `retrieval_snippets`: 与当前 `citations` 契约兼容的历史引用列表；读取旧历史时会做字段补齐和结构兼容。
+  - `retrieval_snippets`: 与当前 `citations` 契约兼容的历史引用列表；当前会透传 `vector_score`、`keyword_score`、`vector_rank`、`keyword_rank`、`matched_by`，读取旧历史时会做字段补齐和结构兼容。
+
+补充说明：
+
+- 当前上传文档检索已经由 `platform.rag.DocumentRetrievalService` 统一承接。
+- `documents/chunks` 会执行 Hybrid Search：语义召回 + BM25 关键词召回 + 融合排序。
+- 新增调试字段主要用于后端引用透传、session history 持久化和排障，本期前端页面可不展示。
 
 ### `DELETE /sessions/{session_id}`
 

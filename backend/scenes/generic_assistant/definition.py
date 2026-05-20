@@ -8,27 +8,22 @@ from langchain_core.tools import BaseTool
 from pydantic import BaseModel, ConfigDict, Field
 
 from backend.platform.config.settings import AppSettings, settings
-from backend.platform.knowledge.base.relevance import (
-    DOCUMENT_MINIMUM_RELEVANCE,
-    filter_managed_document_results,
-    filter_low_relevance_document_results,
-)
 from backend.scenes.base import (
     SceneBootstrapResult,
     SceneDefinition,
     SceneFallbackPolicy,
 )
-from backend.platform.knowledge.base.store import VectorSearchResult
 from backend.platform.knowledge.base.text import truncate_snippet
 from backend.platform.rag.agentic import AgenticRetriever
 from backend.platform.rag.core import RetrievalCitation, RetrievalResult, RetrievalTool
+from backend.platform.rag.document_retrieval import DocumentRetrievalService
 from backend.platform.tools import ToolResult, build_structured_tool
 from backend.scenes.ecommerce.definition import EcommerceQueryRewriter, EcommerceSufficiencyJudge
 from backend.scenes.ecommerce.retrieval_tools import (
     ProductCatalogStore,
     build_agentic_retrieval_tools,
 )
-from backend.scenes.ecommerce.knowledge_service import KnowledgeService, create_knowledge_service
+from backend.scenes.ecommerce.knowledge_service import create_knowledge_service
 
 
 GENERIC_ASSISTANT_SYSTEM_PROMPT = (
@@ -48,10 +43,8 @@ class GenericKnowledgeDocumentSearchInput(BaseModel):
 class GenericKnowledgeDocumentRetriever(BaseRetriever):
     """通用助手默认 retriever，只依赖文档知识库。"""
 
-    knowledge_service: Any = Field(exclude=True)
-    files_root: str = Field(exclude=True)
+    document_retrieval_service: DocumentRetrievalService = Field(exclude=True)
     default_top_k: int = 5
-    minimum_relevance: float = DOCUMENT_MINIMUM_RELEVANCE
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
@@ -61,31 +54,10 @@ class GenericKnowledgeDocumentRetriever(BaseRetriever):
 
     def search(self, query: str, top_k: int | None = None) -> list[Document]:
         """仅在已上传文档知识中检索证据。"""
-        requested_top_k = top_k or self.default_top_k
-        results = self.knowledge_service.search_document_chunks(query=query, top_k=requested_top_k)
-        results = filter_managed_document_results(results, files_root=self.files_root)
-        results = filter_low_relevance_document_results(
-            results,
-            minimum_relevance=self.minimum_relevance,
+        return self.document_retrieval_service.search(
+            query=query,
+            top_k=top_k or self.default_top_k,
         )
-        documents: list[Document] = []
-        for result in results:
-            score = float(result.score) if result.score is not None else None
-            snippet = truncate_snippet(result.document.content)
-            if not snippet:
-                continue
-            documents.append(
-                Document(
-                    page_content=snippet,
-                    metadata={
-                        **result.document.metadata,
-                        "namespace": _resolve_document_namespace(result),
-                        "citation_id": _resolve_document_citation_id(result),
-                        "score": score,
-                    },
-                )
-            )
-        return documents
 
 
 class GenericKnowledgeDocumentSearchTool(RetrievalTool):
@@ -93,18 +65,16 @@ class GenericKnowledgeDocumentSearchTool(RetrievalTool):
 
     name: str = "knowledge_document_search"
     description: str = "Search semantically relevant uploaded knowledge documents."
-    knowledge_service: Any = Field(exclude=True)
-    files_root: str = Field(exclude=True)
+    document_retrieval_service: DocumentRetrievalService = Field(exclude=True)
     default_top_k: int = 5
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     def retrieve(self, query: str, *, run_manager: Any | None = None) -> RetrievalResult:
         """在上传文档分块中检索并返回标准化结果。"""
-        vector_results = self.knowledge_service.search_document_chunks(query=query, top_k=self.default_top_k)
-        vector_results = filter_managed_document_results(vector_results, files_root=self.files_root)
-        vector_results = filter_low_relevance_document_results(vector_results)
-        records = [_build_document_record(result) for result in vector_results]
+        del run_manager
+        retrieval_results = self.document_retrieval_service.retrieve(query=query, top_k=self.default_top_k)
+        records = [_build_document_record(result) for result in retrieval_results]
         citations = [
             RetrievalCitation(
                 citation_id=record["citation_id"],
@@ -113,6 +83,11 @@ class GenericKnowledgeDocumentSearchTool(RetrievalTool):
                 metadata={
                     **record.get("metadata", {}),
                     "score": record.get("score"),
+                    "vector_score": record.get("vector_score"),
+                    "keyword_score": record.get("keyword_score"),
+                    "vector_rank": record.get("vector_rank"),
+                    "keyword_rank": record.get("keyword_rank"),
+                    "matched_by": record.get("matched_by", []),
                 },
             )
             for record in records
@@ -125,6 +100,11 @@ class GenericKnowledgeDocumentSearchTool(RetrievalTool):
                     "namespace": record["namespace"],
                     "citation_id": record["citation_id"],
                     "score": record.get("score"),
+                    "vector_score": record.get("vector_score"),
+                    "keyword_score": record.get("keyword_score"),
+                    "vector_rank": record.get("vector_rank"),
+                    "keyword_rank": record.get("keyword_rank"),
+                    "matched_by": record.get("matched_by", []),
                 },
             )
             for record in records
@@ -145,27 +125,29 @@ def build_generic_assistant_scene_definition(
     app_settings: AppSettings | None = None,
     *,
     knowledge_service: object | None = None,
+    document_retrieval_service: DocumentRetrievalService | None = None,
     product_store: ProductCatalogStore | None = None,
     max_rounds: int = 3,
 ) -> SceneDefinition:
     """构建通用知识助手场景定义。"""
     current_settings = app_settings or settings
-    resolved_knowledge_service = _resolve_knowledge_service(current_settings, knowledge_service)
+    resolved_document_retrieval_service = document_retrieval_service or DocumentRetrievalService(
+        app_settings=current_settings
+    )
     resolved_product_store = product_store or ProductCatalogStore(data_dir=current_settings.data_dir)
     return SceneDefinition(
         scene="generic_assistant",
         name="Generic Knowledge Assistant",
         description="以用户上传文档为主，并可按会话挂载扩展到其他知识源的通用 RAG 助手。",
         build_retriever=lambda: _build_generic_agentic_retriever(
-            knowledge_service=resolved_knowledge_service,
+            document_retrieval_service=resolved_document_retrieval_service,
+            knowledge_service=_resolve_knowledge_service(current_settings, knowledge_service),
             product_store=resolved_product_store,
-            files_root=str(current_settings.data_dir / "files"),
             max_rounds=max_rounds,
         ),
         build_tools=lambda: (
             build_generic_knowledge_document_tool(
-                resolved_knowledge_service,
-                files_root=str(current_settings.data_dir / "files"),
+                resolved_document_retrieval_service,
             ),
         ),
         system_prompt=GENERIC_ASSISTANT_SYSTEM_PROMPT,
@@ -184,17 +166,13 @@ def build_generic_assistant_scene_definition(
 
 
 def build_generic_knowledge_document_tool(
-    knowledge_service: KnowledgeService,
-    *,
-    files_root: str,
+    document_retrieval_service: DocumentRetrievalService,
 ) -> BaseTool:
     """构建面向通用知识助手的文档检索工具。"""
 
     def knowledge_document_search(query: str, top_k: int = 5) -> ToolResult:
-        vector_results = knowledge_service.search_document_chunks(query=query, top_k=top_k)
-        vector_results = filter_managed_document_results(vector_results, files_root=files_root)
-        vector_results = filter_low_relevance_document_results(vector_results)
-        records = [_build_document_record(result) for result in vector_results]
+        retrieval_results = document_retrieval_service.retrieve(query=query, top_k=top_k)
+        records = [_build_document_record(result) for result in retrieval_results]
         return ToolResult.ok(
             tool_name="knowledge_document_search",
             records=records,
@@ -203,7 +181,14 @@ def build_generic_knowledge_document_tool(
                     "citation_id": record["citation_id"],
                     "namespace": record["namespace"],
                     "snippet": record["snippet"],
-                    "metadata": {"score": record.get("score")},
+                    "metadata": {
+                        "score": record.get("score"),
+                        "vector_score": record.get("vector_score"),
+                        "keyword_score": record.get("keyword_score"),
+                        "vector_rank": record.get("vector_rank"),
+                        "keyword_rank": record.get("keyword_rank"),
+                        "matched_by": record.get("matched_by", []),
+                    },
                 }
                 for record in records
             ],
@@ -235,16 +220,16 @@ def infer_generic_assistant_complexity(message: str) -> str:
 
 def _build_generic_agentic_retriever(
     *,
-    knowledge_service: KnowledgeService,
+    document_retrieval_service: DocumentRetrievalService,
+    knowledge_service: Any,
     product_store: ProductCatalogStore,
-    files_root: str,
     max_rounds: int,
 ) -> AgenticRetriever:
     """为通用场景构建文档优先的 AgenticRetriever。"""
     tools = build_agentic_retrieval_tools(
+        document_retrieval_service=document_retrieval_service,
         knowledge_service=knowledge_service,
         product_store=product_store,
-        files_root=files_root,
     )
     return AgenticRetriever(
         tools={tool.name: tool for tool in tools},
@@ -258,19 +243,19 @@ def _build_generic_agentic_retriever(
 def _resolve_knowledge_service(
     current_settings: AppSettings,
     knowledge_service: object | None,
-) -> KnowledgeService:
+) -> Any:
     if knowledge_service is not None:
-        return knowledge_service  # type: ignore[return-value]
+        return knowledge_service
     return create_knowledge_service(current_settings)
 
 
-def _build_document_record(result: VectorSearchResult) -> dict[str, Any]:
+def _build_document_record(result: DocumentChunkRetrievalResult) -> dict[str, Any]:
     """将文档知识检索结果映射为统一 record。"""
     snippet = truncate_snippet(result.document.content)
     return {
         "record_type": "document_chunk",
-        "namespace": _resolve_document_namespace(result),
-        "citation_id": _resolve_document_citation_id(result),
+        "namespace": _resolve_document_namespace(result.document),
+        "citation_id": _resolve_document_citation_id(result.document),
         "title": str(
             result.document.metadata.get("title")
             or result.document.metadata.get("source_path")
@@ -279,27 +264,32 @@ def _build_document_record(result: VectorSearchResult) -> dict[str, Any]:
         ),
         "snippet": snippet,
         "score": float(result.score) if result.score is not None else None,
+        "vector_score": float(result.vector_score) if result.vector_score is not None else None,
+        "keyword_score": float(result.keyword_score) if result.keyword_score is not None else None,
+        "vector_rank": result.vector_rank,
+        "keyword_rank": result.keyword_rank,
+        "matched_by": list(result.matched_by),
         "metadata": result.document.metadata,
     }
 
 
-def _resolve_document_namespace(result: VectorSearchResult) -> str:
+def _resolve_document_namespace(document: Any) -> str:
     """优先保留文档知识源自己的 namespace。"""
-    namespace = result.document.metadata.get("namespace")
+    namespace = document.metadata.get("namespace")
     if isinstance(namespace, str) and namespace:
         return namespace
     return "documents"
 
 
-def _resolve_document_citation_id(result: VectorSearchResult) -> str:
+def _resolve_document_citation_id(document: Any) -> str:
     """推导文档知识引用 ID。"""
-    metadata = result.document.metadata
+    metadata = document.metadata
     return str(
         metadata.get("chunk_id")
         or metadata.get("document_id")
         or metadata.get("source_path")
         or metadata.get("id")
-        or result.document.id
+        or document.id
     )
 
 

@@ -10,6 +10,8 @@ import pytest
 
 from backend.platform.config.settings import AppSettings, VectorStoreConfig
 from backend.platform.knowledge.base.store import (
+    ActiveDocumentChunkSource,
+    DocumentChunkVectorRepository,
     ElasticsearchVectorStore,
     KnowledgeDocumentRepository,
     KnowledgeRetriever,
@@ -288,11 +290,17 @@ def test_factory_can_expose_elasticsearch_as_split_interfaces(monkeypatch: pytes
 
     retriever = VectorStoreFactory.create_retriever(app_settings)
     repository = VectorStoreFactory.create_document_repository(app_settings)
+    vector_repository = VectorStoreFactory.create_document_chunk_vector_repository(app_settings)
+    chunk_source = VectorStoreFactory.create_active_document_chunk_source(app_settings)
 
     assert isinstance(retriever, KnowledgeRetriever)
     assert isinstance(repository, KnowledgeDocumentRepository)
+    assert isinstance(vector_repository, DocumentChunkVectorRepository)
+    assert isinstance(chunk_source, ActiveDocumentChunkSource)
     assert isinstance(retriever, ElasticsearchVectorStore)
     assert isinstance(repository, ElasticsearchVectorStore)
+    assert isinstance(vector_repository, ElasticsearchVectorStore)
+    assert isinstance(chunk_source, ElasticsearchVectorStore)
 
 
 def test_elasticsearch_store_supports_dynamic_knowledge_source_namespaces() -> None:
@@ -413,7 +421,7 @@ def test_elasticsearch_store_supports_document_management_operations() -> None:
     assert store.list_document_records() == []
 
 
-def test_elasticsearch_document_chunk_search_supports_hybrid_keyword_recall() -> None:
+def test_elasticsearch_document_chunk_repositories_support_vector_query_and_active_chunk_listing() -> None:
     app_settings = build_elasticsearch_settings()
     fake_client = FakeElasticsearchClient()
     store = ElasticsearchVectorStore(app_settings, client=fake_client)
@@ -437,10 +445,15 @@ def test_elasticsearch_document_chunk_search_supports_hybrid_keyword_recall() ->
         ]
     )
 
-    results = store.search_document_chunks("你叫什么", top_k=3, namespace="faq")
+    embedding = store.build_embedding("你叫什么")
+    results = store.search_document_chunk_vectors(embedding, top_k=3, namespace="faq")
     assert results
     assert results[0].document.id == "chunk-doc-1"
     assert "zzy" in results[0].document.content
+
+    active_chunks = store.list_active_document_chunks(namespace="faq", limit=10)
+    assert [chunk.id for chunk in active_chunks] == ["chunk-doc-1"]
+    assert active_chunks[0].metadata["document_id"] == "doc-1"
 
 
 def test_elasticsearch_store_supports_upsert_search_filter_and_delete(

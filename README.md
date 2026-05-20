@@ -23,8 +23,10 @@
 - 会话创建、查询、删除与场景选择，并支持会话级 `mounted_knowledge_sources`
 - 本地知识文件上传、下载、删除、预处理预览与索引管理
 - 文档清洗、规则化处理、版本化切块与向量检索
+- 文档知识 `Hybrid Search`，组合语义召回、BM25 关键词召回与融合排序
 - Agentic RAG 的“文档优先 + 按需切电商”检索编排
 - 结构化 citations 与回答正文 `[1]` 编号引用
+- `citations` 与 session `retrieval_snippets` 透传 `vector_score`、`keyword_score`、`vector_rank`、`keyword_rank`、`matched_by`
 - `Chroma` 与 `Elasticsearch` 两种向量存储实现
 - 基于 `SQLite` 的会话记忆
 
@@ -80,12 +82,15 @@
 - 支持本地知识文件上传、下载、删除与索引管理。
 - 支持上传后预处理预览、规则选择、正式入库、重处理和重切块。
 - 支持文档切块、索引重建、向量检索和版本切换，RAG 主链路已经跑通。
+- `documents/chunks` 已落地 `Hybrid Search`，由 `platform.rag` 统一承接文档语义召回、BM25 关键词召回与融合排序。
 - 向量存储已支持 `Chroma` 和 `Elasticsearch` 两种实现。
 - 已补充 `agentic_rag.md`，说明多轮召回、工具切换、Query Rewrite 和证据聚合思路。
 
 当前缺口：
 
-- 还缺少 `Hybrid Search`、`ReRank`、缓存、增量更新等工程化 RAG 优化能力。
+- 文档 `Hybrid Search` 已完成，但 `products/reviews/orders` 仍未接入关键词召回与 Hybrid Search。
+- `knowledge` 与 `rag` 的业务入口已拆开，但底层 provider 仍以复合 `VectorStore` 多接口方式复用，尚未达到完全物理解耦。
+- 还缺少 `ReRank`、缓存、增量更新等进一步的工程化 RAG 优化能力。
 - 还缺少评测集、效果指标和可重复执行的 Evaluation Harness。
 - 还缺少错误样本沉淀、版本对比和数据回放形成的数据闭环。
 
@@ -157,7 +162,7 @@
 - [ ] 在对话层补充 Planning、多步执行和更完整的 Memory 体系。
 - [ ] 在工具层补充统一 Tool Registry、函数调用协议和工具路由。
 - [ ] 在运行时补充状态机、中间态管理、超时控制、失败恢复和断点续跑。
-- [ ] 在 RAG 层补充 Query Rewrite、Hybrid Search、ReRank、引用溯源和效果评测。
+- [ ] 在 RAG 层继续补强 Query Rewrite、ReRank、引用溯源和效果评测，并把 `products/reviews/orders` 的 Hybrid Search 也统一收口到 `platform.rag`。
 - [ ] 在决策层补充 Reflection、错误归因和自我修正链路。
 
 ### P1：补强工程化与可上线能力
@@ -224,6 +229,10 @@
   - 负责新版本发布、旧版本失活、失败恢复和清理新分块
 - `documents/mappers.py`
   - 负责把仓储记录转换成摘要、详情和操作结果
+- `backend/platform/rag` 现在已经承接文档检索统一入口：
+  - `DocumentRetrievalService` 组合 `DocumentSemanticRetriever`、`DocumentKeywordRetriever`、`HybridFusionRanker`
+  - scene/tool 侧文档检索统一通过这里进入，不再直接调用 `knowledge` 的文档召回业务 API
+  - 一期 Hybrid Search 目前只覆盖 `documents/chunks`，`products/reviews/orders` 后续扩展也必须继续放在 `platform.rag`
 
 `backend/application/runtime/api/knowledge/routes.py` 也已经直接依赖拆分后的 `application service` 和 `query service`，不再通过旧的聚合服务中转。
 

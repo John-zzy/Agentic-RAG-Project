@@ -13,10 +13,28 @@ from backend.platform.rag.core import (
     SufficiencyDecision,
     SufficiencyJudge,
 )
+from backend.platform.rag.document_retrieval import (
+    DocumentChunkRetrievalResult,
+    DocumentEmbeddingStrategy,
+    DocumentHybridRetriever,
+    DocumentKeywordRetriever,
+    DocumentKeywordScoreCalculator,
+    DocumentRetrievalService,
+    DocumentSemanticRetriever,
+    HybridFusionRanker,
+)
 
 __all__ = [
     "AgenticRetrievalOutcome",
     "AgenticRetriever",
+    "DocumentChunkRetrievalResult",
+    "DocumentEmbeddingStrategy",
+    "DocumentHybridRetriever",
+    "DocumentKeywordRetriever",
+    "DocumentKeywordScoreCalculator",
+    "DocumentRetrievalService",
+    "DocumentSemanticRetriever",
+    "HybridFusionRanker",
     "QueryRewrite",
     "QueryRewriter",
     "RetrievalContext",

@@ -9,6 +9,8 @@ from backend.platform.config.settings import AppSettings
 from backend.platform.knowledge.base.store import VectorSearchResult, VectorStoreDocument, VectorStoreFactory
 from backend.platform.memory.base.session_store import SQLiteSessionStore
 from backend.platform.memory.chat.prompt_context import PromptContextBuilder
+from backend.platform.rag.document_retrieval import DocumentChunkRetrievalResult
+from backend.platform.rag.document_retrieval_service import DocumentRetrievalService
 from backend.scenes.ecommerce.knowledge_service import create_knowledge_service
 from backend.tests.test_support import make_test_runtime_dir
 
@@ -38,7 +40,7 @@ class FakeKnowledgeService:
     ) -> None:
         self._products = products or []
         self._reviews = reviews or []
-        self._documents = documents or []
+        del documents
 
     def search_products(self, query: str, top_k: int | None = None) -> list[VectorSearchResult]:
         return self._products
@@ -49,13 +51,28 @@ class FakeKnowledgeService:
     def search_orders(self, query: str, top_k: int | None = None) -> list[VectorSearchResult]:
         return []
 
-    def search_document_chunks(
+class FakeDocumentRetrievalService:
+    def __init__(self, documents: list[VectorSearchResult] | None = None) -> None:
+        self._documents = documents or []
+
+    def retrieve(
         self,
+        *,
         query: str,
-        top_k: int | None = None,
+        top_k: int = 5,
         namespace: str | None = None,
-    ) -> list[VectorSearchResult]:
-        return self._documents
+    ) -> list[DocumentChunkRetrievalResult]:
+        del query, namespace
+        return [
+            DocumentChunkRetrievalResult(
+                document=result.document,
+                score=result.score,
+                vector_score=result.score,
+                vector_rank=index,
+                matched_by=["vector"],
+            )
+            for index, result in enumerate(self._documents[:top_k], start=1)
+        ]
 
 
 class FakeModel:
@@ -71,12 +88,13 @@ class FakeModel:
 def _build_chat_service(
     test_name: str,
     knowledge_service: FakeKnowledgeService,
+    document_retrieval_service: FakeDocumentRetrievalService,
     model: FakeModel,
 ) -> SceneChatService:
     runtime_dir = make_test_runtime_dir(test_name)
     files_root = runtime_dir / "files"
     files_root.mkdir(parents=True, exist_ok=True)
-    for result in knowledge_service._documents:
+    for result in document_retrieval_service._documents:
         source_path = result.document.metadata.get("source_path")
         if not isinstance(source_path, str) or not source_path.strip():
             continue
@@ -99,6 +117,7 @@ def _build_chat_service(
         scene_registry=build_default_scene_registry(
             app_settings=app_settings,
             knowledge_service=knowledge_service,  # type: ignore[arg-type]
+            document_retrieval_service=document_retrieval_service,  # type: ignore[arg-type]
         ),
         app_settings=app_settings,
         knowledge_service=knowledge_service,  # type: ignore[arg-type]
@@ -109,7 +128,8 @@ def _build_chat_service(
 
 
 def test_chat_api_success_path() -> None:
-    knowledge = FakeKnowledgeService(
+    knowledge = FakeKnowledgeService()
+    document_retrieval_service = FakeDocumentRetrievalService(
         documents=[
             _result(
                 doc_id="doc-1",
@@ -127,7 +147,7 @@ def test_chat_api_success_path() -> None:
         ]
     )
     model = FakeModel(answer="推荐 P001，续航表现较好。")
-    service = _build_chat_service("chat-api-success", knowledge, model)
+    service = _build_chat_service("chat-api-success", knowledge, document_retrieval_service, model)
     app = create_app(chat_service=service)
 
     with TestClient(app) as client:
@@ -154,6 +174,11 @@ def test_chat_api_success_path() -> None:
         "chunk_index": 0,
         "snippet": "P001 手机，续航强，电池 5000mAh。",
         "score": 0.92,
+        "vector_score": 0.92,
+        "keyword_score": None,
+        "vector_rank": 1,
+        "keyword_rank": None,
+        "matched_by": ["vector"],
         "rank": 1,
     }
     saved_session = service.session_store.get_session(payload["session_id"])
@@ -163,7 +188,12 @@ def test_chat_api_success_path() -> None:
 
 
 def test_chat_api_validation_error_when_message_missing() -> None:
-    service = _build_chat_service("chat-api-validation-error", FakeKnowledgeService(), FakeModel())
+    service = _build_chat_service(
+        "chat-api-validation-error",
+        FakeKnowledgeService(),
+        FakeDocumentRetrievalService(),
+        FakeModel(),
+    )
     app = create_app(chat_service=service)
 
     with TestClient(app) as client:
@@ -173,7 +203,7 @@ def test_chat_api_validation_error_when_message_missing() -> None:
 
 def test_chat_api_no_hit_fallback_sets_knowledge_used_false() -> None:
     model = FakeModel(answer="unused")
-    service = _build_chat_service("chat-api-no-hit", FakeKnowledgeService(), model)
+    service = _build_chat_service("chat-api-no-hit", FakeKnowledgeService(), FakeDocumentRetrievalService(), model)
     app = create_app(chat_service=service)
 
     with TestClient(app) as client:
@@ -190,7 +220,12 @@ def test_chat_api_no_hit_fallback_sets_knowledge_used_false() -> None:
 
 
 def test_session_management_endpoints() -> None:
-    service = _build_chat_service("chat-api-session-endpoints", FakeKnowledgeService(), FakeModel())
+    service = _build_chat_service(
+        "chat-api-session-endpoints",
+        FakeKnowledgeService(),
+        FakeDocumentRetrievalService(),
+        FakeModel(),
+    )
     app = create_app(chat_service=service)
 
     with TestClient(app) as client:
@@ -232,7 +267,12 @@ def test_session_management_endpoints() -> None:
 
 
 def test_chat_api_rejects_expired_session() -> None:
-    service = _build_chat_service("chat-api-expired-session", FakeKnowledgeService(), FakeModel())
+    service = _build_chat_service(
+        "chat-api-expired-session",
+        FakeKnowledgeService(),
+        FakeDocumentRetrievalService(),
+        FakeModel(),
+    )
     service.session_store.create_session(
         session_id="expired-session",
         now="2026-04-23T00:00:00+00:00",
@@ -253,7 +293,12 @@ def test_chat_api_rejects_expired_session() -> None:
 
 
 def test_chat_api_rejects_unknown_session_id() -> None:
-    service = _build_chat_service("chat-api-missing-session", FakeKnowledgeService(), FakeModel())
+    service = _build_chat_service(
+        "chat-api-missing-session",
+        FakeKnowledgeService(),
+        FakeDocumentRetrievalService(),
+        FakeModel(),
+    )
     app = create_app(chat_service=service)
 
     with TestClient(app) as client:
@@ -265,7 +310,12 @@ def test_chat_api_rejects_unknown_session_id() -> None:
 
 
 def test_list_scenes_endpoint_returns_available_scene_metadata() -> None:
-    service = _build_chat_service("chat-api-list-scenes", FakeKnowledgeService(), FakeModel())
+    service = _build_chat_service(
+        "chat-api-list-scenes",
+        FakeKnowledgeService(),
+        FakeDocumentRetrievalService(),
+        FakeModel(),
+    )
     app = create_app(chat_service=service)
 
     with TestClient(app) as client:
@@ -283,7 +333,12 @@ def test_list_scenes_endpoint_returns_available_scene_metadata() -> None:
 
 
 def test_create_session_rejects_unknown_scene() -> None:
-    service = _build_chat_service("chat-api-unknown-scene", FakeKnowledgeService(), FakeModel())
+    service = _build_chat_service(
+        "chat-api-unknown-scene",
+        FakeKnowledgeService(),
+        FakeDocumentRetrievalService(),
+        FakeModel(),
+    )
     app = create_app(chat_service=service)
 
     with TestClient(app) as client:
@@ -295,7 +350,12 @@ def test_create_session_rejects_unknown_scene() -> None:
 
 
 def test_create_session_accepts_explicit_mounted_knowledge_sources() -> None:
-    service = _build_chat_service("chat-api-mounted-sources", FakeKnowledgeService(), FakeModel())
+    service = _build_chat_service(
+        "chat-api-mounted-sources",
+        FakeKnowledgeService(),
+        FakeDocumentRetrievalService(),
+        FakeModel(),
+    )
     app = create_app(chat_service=service)
 
     with TestClient(app) as client:
@@ -316,7 +376,12 @@ def test_create_session_accepts_explicit_mounted_knowledge_sources() -> None:
 
 
 def test_create_session_rejects_unknown_mounted_knowledge_source() -> None:
-    service = _build_chat_service("chat-api-invalid-mounted-source", FakeKnowledgeService(), FakeModel())
+    service = _build_chat_service(
+        "chat-api-invalid-mounted-source",
+        FakeKnowledgeService(),
+        FakeDocumentRetrievalService(),
+        FakeModel(),
+    )
     app = create_app(chat_service=service)
 
     with TestClient(app) as client:
@@ -331,7 +396,12 @@ def test_create_session_rejects_unknown_mounted_knowledge_source() -> None:
 
 
 def test_session_detail_returns_explicit_mounted_knowledge_sources() -> None:
-    service = _build_chat_service("chat-api-session-detail-mounted-sources", FakeKnowledgeService(), FakeModel())
+    service = _build_chat_service(
+        "chat-api-session-detail-mounted-sources",
+        FakeKnowledgeService(),
+        FakeDocumentRetrievalService(),
+        FakeModel(),
+    )
     created = service.create_session(
         scene="generic_assistant",
         mounted_knowledge_sources=["documents", "ecommerce"],
@@ -347,7 +417,12 @@ def test_session_detail_returns_explicit_mounted_knowledge_sources() -> None:
 
 
 def test_chat_routes_by_session_scene_instead_of_global_default() -> None:
-    service = _build_chat_service("chat-api-session-scene-routing", FakeKnowledgeService(), FakeModel())
+    service = _build_chat_service(
+        "chat-api-session-scene-routing",
+        FakeKnowledgeService(),
+        FakeDocumentRetrievalService(),
+        FakeModel(),
+    )
     app = create_app(chat_service=service)
 
     with TestClient(app) as client:
@@ -375,7 +450,9 @@ def test_chat_only_uses_document_tools_when_session_mounts_documents_only() -> N
                 score=0.95,
                 metadata={"product_id": "P005"},
             )
-        ],
+        ]
+    )
+    document_retrieval_service = FakeDocumentRetrievalService(
         documents=[
             _result(
                 doc_id="doc-1",
@@ -390,10 +467,15 @@ def test_chat_only_uses_document_tools_when_session_mounts_documents_only() -> N
                     "chunk_index": 0,
                 },
             )
-        ],
+        ]
     )
     model = FakeModel(answer="请以文档说明为准。")
-    service = _build_chat_service("chat-api-documents-only-routing", knowledge, model)
+    service = _build_chat_service(
+        "chat-api-documents-only-routing",
+        knowledge,
+        document_retrieval_service,
+        model,
+    )
     created = service.create_session(scene="generic_assistant", mounted_knowledge_sources=["documents"])
     app = create_app(chat_service=service)
 
@@ -420,11 +502,15 @@ def test_chat_can_route_to_ecommerce_tools_when_session_mounts_ecommerce() -> No
                 score=0.95,
                 metadata={"product_id": "P005"},
             )
-        ],
-        documents=[],
+        ]
     )
     model = FakeModel(answer="AeroPhone X 当前有货。")
-    service = _build_chat_service("chat-api-ecommerce-routing", knowledge, model)
+    service = _build_chat_service(
+        "chat-api-ecommerce-routing",
+        knowledge,
+        FakeDocumentRetrievalService(),
+        model,
+    )
     created = service.create_session(
         scene="generic_assistant",
         mounted_knowledge_sources=["documents", "ecommerce"],
@@ -447,7 +533,12 @@ def test_chat_can_route_to_ecommerce_tools_when_session_mounts_ecommerce() -> No
 
 
 def test_session_detail_normalizes_legacy_retrieval_snippets() -> None:
-    service = _build_chat_service("chat-api-legacy-retrieval-snippets", FakeKnowledgeService(), FakeModel())
+    service = _build_chat_service(
+        "chat-api-legacy-retrieval-snippets",
+        FakeKnowledgeService(),
+        FakeDocumentRetrievalService(),
+        FakeModel(),
+    )
     service.session_store.append_turn(
         session_id="legacy-session",
         request_id="req-legacy",
@@ -483,6 +574,11 @@ def test_session_detail_normalizes_legacy_retrieval_snippets() -> None:
             "chunk_index": None,
             "snippet": "历史文档片段",
             "score": 0.7,
+            "vector_score": None,
+            "keyword_score": None,
+            "vector_rank": None,
+            "keyword_rank": None,
+            "matched_by": [],
             "rank": 1,
         }
     ]
@@ -532,6 +628,7 @@ def test_chat_api_real_runtime_filters_low_relevance_document_hits_for_greeting(
         scene_registry=build_default_scene_registry(
             app_settings=app_settings,
             knowledge_service=knowledge_service,
+            document_retrieval_service=DocumentRetrievalService(app_settings=app_settings),
         ),
         app_settings=app_settings,
         knowledge_service=knowledge_service,
@@ -608,6 +705,7 @@ def test_chat_api_ignores_builtin_orders_json_in_documents_only_session() -> Non
         scene_registry=build_default_scene_registry(
             app_settings=app_settings,
             knowledge_service=knowledge_service,
+            document_retrieval_service=DocumentRetrievalService(app_settings=app_settings),
         ),
         app_settings=app_settings,
         knowledge_service=knowledge_service,

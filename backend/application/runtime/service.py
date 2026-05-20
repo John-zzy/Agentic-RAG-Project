@@ -8,7 +8,7 @@ import re
 from typing import Any, Protocol
 from uuid import uuid4
 
-from langchain.chains.combine_documents import create_stuff_documents_chain
+from langchain_classic.chains.combine_documents import create_stuff_documents_chain
 from langchain_core.documents import Document
 from langchain_core.retrievers import BaseRetriever
 
@@ -20,6 +20,7 @@ from backend.platform.knowledge.sources import (
     normalize_mounted_knowledge_sources,
 )
 from backend.platform.rag.agentic import AgenticRetrievalOutcome
+from backend.platform.rag.document_retrieval import DocumentRetrievalService
 from backend.scenes.base import SceneDefinition
 from backend.scenes.ecommerce.definition import build_ecommerce_scene_definition
 from backend.scenes.generic_assistant.definition import (
@@ -505,6 +506,11 @@ class ChatService:
             chunk_index=chunk_index,
             snippet=snippet,
             score=score,
+            vector_score=self._resolve_float(metadata.get("vector_score")),
+            keyword_score=self._resolve_float(metadata.get("keyword_score")),
+            vector_rank=self._resolve_int(metadata.get("vector_rank")),
+            keyword_rank=self._resolve_int(metadata.get("keyword_rank")),
+            matched_by=self._resolve_matched_by(metadata.get("matched_by")),
             rank=rank,
         )
 
@@ -599,6 +605,25 @@ class ChatService:
             except ValueError:
                 return None
         return None
+
+    def _resolve_float(self, value: Any) -> float | None:
+        """把数字安全转成 float。"""
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, int | float):
+            return float(value)
+        if isinstance(value, str):
+            try:
+                return float(value)
+            except ValueError:
+                return None
+        return None
+
+    def _resolve_matched_by(self, value: Any) -> list[str]:
+        """把 matched_by 归一化为字符串列表。"""
+        if not isinstance(value, list):
+            return []
+        return [str(item) for item in value if isinstance(item, str) and item]
 
 
 
@@ -712,6 +737,7 @@ def build_default_scene_registry(
     *,
     app_settings: AppSettings | None = None,
     knowledge_service: object | None = None,
+    document_retrieval_service: DocumentRetrievalService | None = None,
 ) -> SceneRegistry:
     """构建默认场景注册表。"""
     resolved_settings = app_settings or settings
@@ -719,10 +745,12 @@ def build_default_scene_registry(
         build_generic_assistant_scene_definition(
             app_settings=resolved_settings,
             knowledge_service=knowledge_service,
+            document_retrieval_service=document_retrieval_service,
         ),
         build_ecommerce_scene_definition(
             app_settings=resolved_settings,
             knowledge_service=knowledge_service,
+            document_retrieval_service=document_retrieval_service,
         ),
     ]
     return SceneRegistry(definitions=definitions, default_scene=resolved_settings.app.active_scene)
@@ -731,6 +759,7 @@ def build_default_scene_registry(
 def create_chat_service(
     app_settings: AppSettings | None = None,
     knowledge_service: object | None = None,
+    document_retrieval_service: DocumentRetrievalService | None = None,
     session_store: SQLiteSessionStore | None = None,
     context_builder: PromptContextBuilder | None = None,
     model: ModelClient | None = None,
@@ -740,6 +769,7 @@ def create_chat_service(
     scene_registry = build_default_scene_registry(
         app_settings=resolved_settings,
         knowledge_service=knowledge_service,
+        document_retrieval_service=document_retrieval_service,
     )
     return ActiveSceneChatService(
         scene_registry=scene_registry,

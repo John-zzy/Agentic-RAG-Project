@@ -63,15 +63,6 @@ class InMemoryDocumentStore(VectorStore):
     def delete_documents(self, namespace: str, ids: list[str]) -> None:
         return None
 
-    def search_document_chunks(
-        self,
-        query: str,
-        top_k: int | None = None,
-        namespace: str | None = None,
-    ) -> list[Any]:
-        del query, top_k, namespace
-        return []
-
     def healthcheck(self) -> VectorStoreHealth:
         return VectorStoreHealth(provider="memory", available=True)
 
@@ -128,6 +119,23 @@ class InMemoryDocumentStore(VectorStore):
     def delete_document_chunks(self, chunk_ids: list[str]) -> None:
         for chunk_id in chunk_ids:
             self.chunks.pop(chunk_id, None)
+
+    def search_document_chunk_vectors(
+        self,
+        query_embedding: list[float],
+        top_k: int | None = None,
+        namespace: str | None = None,
+    ) -> list[Any]:
+        del query_embedding, top_k, namespace
+        return []
+
+    def list_active_document_chunks(
+        self,
+        namespace: str | None = None,
+        limit: int | None = None,
+    ) -> list[VectorStoreDocument]:
+        del namespace, limit
+        return []
 
     def count_chunks(
         self,
