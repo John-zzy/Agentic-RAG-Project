@@ -5,12 +5,11 @@ from typing import Any
 from pydantic import BaseModel
 
 from backend.platform.config.settings import AppSettings, settings
-from backend.platform.knowledge.base.store import (
-    KnowledgeRetriever,
+from backend.platform.knowledge.repositories import VectorStoreFactory
+from backend.platform.retrieval import (
+    SemanticDocumentStoreRepository,
     VectorSearchResult,
-    VectorStore,
     VectorStoreDocument,
-    VectorStoreFactory,
 )
 from backend.scenes.ecommerce.extractor import build_order_document, build_product_document, build_review_document
 
@@ -28,11 +27,11 @@ class KnowledgeService:
     def __init__(
         self,
         app_settings: AppSettings | None = None,
-        store: VectorStore | KnowledgeRetriever | None = None,
+        store: SemanticDocumentStoreRepository | None = None,
     ) -> None:
         """初始化知识服务并确保向量库命名空间可用。"""
         self.settings = app_settings or settings
-        self.store = store or VectorStoreFactory.create_retriever(self.settings)
+        self.store = store or VectorStoreFactory.create_semantic_document_store_repository(self.settings)
         self.store.ensure_collections()
 
     def search(
@@ -114,7 +113,7 @@ class KnowledgeService:
 
 def create_knowledge_service(
     app_settings: AppSettings | None = None,
-    store: VectorStore | None = None,
+    store: SemanticDocumentStoreRepository | None = None,
 ) -> KnowledgeService:
     """知识服务工厂函数。"""
     return KnowledgeService(app_settings=app_settings, store=store)

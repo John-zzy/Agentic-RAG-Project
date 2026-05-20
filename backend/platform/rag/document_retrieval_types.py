@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
-from backend.platform.knowledge.base.store import VectorStoreDocument
+from backend.platform.retrieval import VectorStoreDocument
 
 
 MATCHED_BY_ORDER = ("vector", "keyword")

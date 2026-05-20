@@ -7,7 +7,8 @@ from typing import Any
 from pydantic import BaseModel
 
 from backend.platform.config.settings import AppSettings, settings
-from backend.platform.knowledge.base.store import VectorStore, VectorStoreFactory
+from backend.platform.knowledge.repositories import VectorStoreFactory
+from backend.platform.retrieval import SemanticDocumentStoreRepository
 from backend.scenes.ecommerce.extractor import build_order_document, build_product_document, build_review_document
 
 
@@ -27,11 +28,11 @@ def load_json_records(path: Path) -> list[dict[str, Any]]:
 
 def preload_knowledge_base(
     app_settings: AppSettings | None = None,
-    store: VectorStore | None = None,
+    store: SemanticDocumentStoreRepository | None = None,
 ) -> KnowledgeLoadSummary:
     """将商品与评论数据预加载到向量库。"""
     resolved_settings = app_settings or settings
-    resolved_store = store or VectorStoreFactory.create(resolved_settings)
+    resolved_store = store or VectorStoreFactory.create_semantic_document_store_repository(resolved_settings)
 
     products = load_json_records(resolved_settings.data_dir / "products.json")
     reviews = load_json_records(resolved_settings.data_dir / "reviews.json")

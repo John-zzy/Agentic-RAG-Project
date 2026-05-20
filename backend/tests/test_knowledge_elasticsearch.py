@@ -15,8 +15,12 @@ from backend.platform.knowledge.base.store import (
     ElasticsearchVectorStore,
     KnowledgeDocumentRepository,
     KnowledgeRetriever,
-    VectorStoreDocument,
     VectorStoreFactory,
+)
+from backend.platform.retrieval import (
+    SemanticDocumentStoreRepository,
+    SemanticVectorQueryRepository,
+    VectorStoreDocument,
 )
 from backend.tests.test_support import DATA_DIR
 import backend.platform.knowledge.base.store as store_module
@@ -289,15 +293,21 @@ def test_factory_can_expose_elasticsearch_as_split_interfaces(monkeypatch: pytes
     app_settings = build_elasticsearch_settings()
 
     retriever = VectorStoreFactory.create_retriever(app_settings)
+    semantic_query_repository = VectorStoreFactory.create_semantic_vector_query_repository(app_settings)
+    semantic_store_repository = VectorStoreFactory.create_semantic_document_store_repository(app_settings)
     repository = VectorStoreFactory.create_document_repository(app_settings)
     vector_repository = VectorStoreFactory.create_document_chunk_vector_repository(app_settings)
     chunk_source = VectorStoreFactory.create_active_document_chunk_source(app_settings)
 
     assert isinstance(retriever, KnowledgeRetriever)
+    assert isinstance(semantic_query_repository, SemanticVectorQueryRepository)
+    assert isinstance(semantic_store_repository, SemanticDocumentStoreRepository)
     assert isinstance(repository, KnowledgeDocumentRepository)
     assert isinstance(vector_repository, DocumentChunkVectorRepository)
     assert isinstance(chunk_source, ActiveDocumentChunkSource)
     assert isinstance(retriever, ElasticsearchVectorStore)
+    assert isinstance(semantic_query_repository, ElasticsearchVectorStore)
+    assert isinstance(semantic_store_repository, ElasticsearchVectorStore)
     assert isinstance(repository, ElasticsearchVectorStore)
     assert isinstance(vector_repository, ElasticsearchVectorStore)
     assert isinstance(chunk_source, ElasticsearchVectorStore)

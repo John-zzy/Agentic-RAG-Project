@@ -24,6 +24,7 @@
 - 本地知识文件上传、下载、删除、预处理预览与索引管理
 - 文档清洗、规则化处理、版本化切块与向量检索
 - 文档知识 `Hybrid Search`，组合语义召回、BM25 关键词召回与融合排序
+- `platform.retrieval` 作为 `knowledge` 与 `rag` 共享的中立检索底座，承接共享向量文档模型、默认 hashing embedding / tokenizer 与读侧 repository 契约
 - Agentic RAG 的“文档优先 + 按需切电商”检索编排
 - 结构化 citations 与回答正文 `[1]` 编号引用
 - `citations` 与 session `retrieval_snippets` 透传 `vector_score`、`keyword_score`、`vector_rank`、`keyword_rank`、`matched_by`
@@ -83,6 +84,7 @@
 - 支持上传后预处理预览、规则选择、正式入库、重处理和重切块。
 - 支持文档切块、索引重建、向量检索和版本切换，RAG 主链路已经跑通。
 - `documents/chunks` 已落地 `Hybrid Search`，由 `platform.rag` 统一承接文档语义召回、BM25 关键词召回与融合排序。
+- `platform.knowledge` 现在只负责知识资产管理、provider 实现和 repository 工厂输出，`platform.rag` 不再直接依赖 `platform.knowledge.base.*`。
 - 向量存储已支持 `Chroma` 和 `Elasticsearch` 两种实现。
 - 已补充 `agentic_rag.md`，说明多轮召回、工具切换、Query Rewrite 和证据聚合思路。
 
@@ -214,6 +216,12 @@
 - 通用知识文档处理
 - RAG 检索核心协议与实现
 
+其中 `backend/platform/retrieval` 作为 `knowledge` 与 `rag` 共享的中立检索底座，承接：
+
+- 共享 `VectorStoreDocument`、`VectorSearchResult`、`VectorStoreHealth`
+- 默认 hashing embedder / tokenizer
+- 文档分块向量查询、活跃 chunk 文本源、命名空间级语义检索等读侧 repository 契约
+
 其中 `backend/platform/knowledge` 现在已经把原来的聚合式文档服务拆成更小的职责单元：
 
 - `base/store.py`
@@ -233,6 +241,7 @@
   - `DocumentRetrievalService` 组合 `DocumentSemanticRetriever`、`DocumentKeywordRetriever`、`HybridFusionRanker`
   - scene/tool 侧文档检索统一通过这里进入，不再直接调用 `knowledge` 的文档召回业务 API
   - 一期 Hybrid Search 目前只覆盖 `documents/chunks`，`products/reviews/orders` 后续扩展也必须继续放在 `platform.rag`
+  - 后续如果 `products/reviews/orders` 增加关键词召回、Hybrid Search 或 rerank，必须复用 `platform.retrieval + platform.rag` 的统一模式，不能回写到 `platform.knowledge` 或 `scenes/ecommerce/*`
 
 `backend/application/runtime/api/knowledge/routes.py` 也已经直接依赖拆分后的 `application service` 和 `query service`，不再通过旧的聚合服务中转。
 
@@ -267,6 +276,7 @@
 │  │  ├─ memory/                  # 会话存储与聊天上下文
 │  │  ├─ models/                  # 模型抽象与 LLM 客户端
 │  │  ├─ rag/                     # RAG 核心协议与检索实现
+│  │  ├─ retrieval/               # knowledge / rag 共享的中立检索底座
 │  │  └─ tools/                   # 通用工具协议
 │  ├─ scenes/
 │  │  ├─ generic_assistant/       # 通用助手场景

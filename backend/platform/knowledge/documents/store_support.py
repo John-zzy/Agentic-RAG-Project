@@ -3,8 +3,9 @@ from __future__ import annotations
 from typing import Any
 
 from backend.platform.config.settings import AppSettings
-from backend.platform.knowledge.base.store import KnowledgeDocumentRepository, VectorStoreDocument
 from backend.platform.knowledge.documents.models import KnowledgeDocumentStoreError
+from backend.platform.knowledge.repositories import KnowledgeDocumentRepository
+from backend.platform.retrieval import VectorStoreDocument
 
 
 class KnowledgeDocumentRepositoryGateway:

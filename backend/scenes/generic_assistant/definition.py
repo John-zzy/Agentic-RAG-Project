@@ -14,6 +14,7 @@ from backend.scenes.base import (
     SceneFallbackPolicy,
 )
 from backend.platform.knowledge.base.text import truncate_snippet
+from backend.platform.knowledge.repositories import VectorStoreFactory
 from backend.platform.rag.agentic import AgenticRetriever
 from backend.platform.rag.core import RetrievalCitation, RetrievalResult, RetrievalTool
 from backend.platform.rag.document_retrieval import DocumentRetrievalService
@@ -132,7 +133,9 @@ def build_generic_assistant_scene_definition(
     """构建通用知识助手场景定义。"""
     current_settings = app_settings or settings
     resolved_document_retrieval_service = document_retrieval_service or DocumentRetrievalService(
-        app_settings=current_settings
+        app_settings=current_settings,
+        vector_repository=VectorStoreFactory.create_document_chunk_vector_repository(current_settings),
+        chunk_source=VectorStoreFactory.create_active_document_chunk_source(current_settings),
     )
     resolved_product_store = product_store or ProductCatalogStore(data_dir=current_settings.data_dir)
     return SceneDefinition(

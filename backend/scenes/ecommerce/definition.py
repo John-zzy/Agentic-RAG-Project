@@ -6,6 +6,7 @@ from typing import Any
 from langchain_core.runnables import RunnableConfig
 
 from backend.platform.config.settings import AppSettings, settings
+from backend.platform.knowledge.repositories import VectorStoreFactory
 from backend.platform.rag.document_retrieval import DocumentRetrievalService
 from backend.scenes.base import (
     SceneBootstrapResult,
@@ -382,7 +383,9 @@ def create_agentic_knowledge_retriever(
     current_settings = app_settings or settings
     resolved_knowledge_service = knowledge_service or create_knowledge_service(current_settings)
     resolved_document_retrieval_service = document_retrieval_service or DocumentRetrievalService(
-        app_settings=current_settings
+        app_settings=current_settings,
+        vector_repository=VectorStoreFactory.create_document_chunk_vector_repository(current_settings),
+        chunk_source=VectorStoreFactory.create_active_document_chunk_source(current_settings),
     )
     resolved_product_store = product_store or ProductCatalogStore(data_dir=current_settings.data_dir)
     tools = build_agentic_retrieval_tools(
@@ -412,7 +415,9 @@ def build_ecommerce_scene_definition(
     current_settings = app_settings or settings
     resolved_knowledge_service = _resolve_knowledge_service(current_settings, knowledge_service)
     resolved_document_retrieval_service = document_retrieval_service or DocumentRetrievalService(
-        app_settings=current_settings
+        app_settings=current_settings,
+        vector_repository=VectorStoreFactory.create_document_chunk_vector_repository(current_settings),
+        chunk_source=VectorStoreFactory.create_active_document_chunk_source(current_settings),
     )
     resolved_product_store = product_store or ProductCatalogStore(data_dir=current_settings.data_dir)
     return SceneDefinition(

@@ -30,6 +30,9 @@
 - `platform`
   - 放通用底层能力，不感知具体业务场景。
   - 包括配置、模型路由、会话记忆、知识处理、RAG 核心、工具协议。
+- `retrieval`
+  - 放 `knowledge` 与 `rag` 共享的中立检索底座。
+  - 包括共享向量文档模型、检索结果模型、默认 hashing embedder/tokenizer 与读侧 repository 契约。
 - `application`
   - 放运行时装配与 API 暴露。
   - 包括启动、依赖注入、Chat service 组装、FastAPI 路由注册。
@@ -78,6 +81,7 @@
 - `knowledge/`
   - 通用知识文件读取、预处理、切块、索引管理、向量存储抽象。
   - `base/store.py` 里已经拆出 `KnowledgeRetriever`、`KnowledgeDocumentRepository`、`DocumentChunkVectorRepository`、`ActiveDocumentChunkSource` 等分职责接口。
+  - 当前 `knowledge` 只负责知识管理、底层 provider 实现和 repository 工厂输出，共享检索基础设施不要再放回这里。
   - `processing/` 负责标准化、规则清洗、预览、统计和 provenance 元数据生成。
   - `documents/application_service.py` 负责预处理预览、注册、删除、重处理、重切块这类写流程。
   - `documents/query_service.py` 负责文档列表、详情和文件索引状态聚合查询。
@@ -86,6 +90,7 @@
 - `rag/`
   - 检索编排、Sufficiency 判断、Query Rewrite 等 Agentic RAG 核心协议。
   - 文档知识检索统一入口也在这里，当前由 `DocumentRetrievalService` 组合语义召回、BM25 关键词召回和 `HybridFusionRanker`。
+  - 文档低相关过滤、受管文档过滤与后续多知识源 Hybrid Search 规则也应继续收口在这里。
 - `tools/`
   - 通用工具协议与结构化工具封装。
 
@@ -109,6 +114,7 @@
 - `__init__.py` 保持轻量，避免引入循环依赖。
 - 文档召回、关键词召回、Hybrid Search、rerank 这类读侧检索算法统一进 `platform.rag`，不要再把它们放回 `platform.knowledge`。
 - `platform.knowledge` 只承接知识管理、底层存储和仓储访问，不要新增面向 scene/chat 的文档召回业务 API。
+- `platform.retrieval` 只放共享类型、默认算法和基础读侧契约，不要引入 `platform.knowledge` 或 `platform.rag` 依赖。
 
 ### 会话与场景
 

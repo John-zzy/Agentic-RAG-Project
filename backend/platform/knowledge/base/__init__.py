@@ -1,20 +1,22 @@
 from backend.platform.knowledge.base.store import (
-    ActiveDocumentChunkSource,
-    DocumentChunkVectorRepository,
     SUPPORTED_NAMESPACES,
     ChromaVectorStore,
-    EmbeddingStrategy,
     ElasticsearchVectorStore,
     KnowledgeDocumentRepository,
     KnowledgeRetriever,
-    LocalHashingEmbedder,
-    VectorSearchResult,
     VectorStore,
-    VectorStoreDocument,
     VectorStoreFactory,
-    VectorStoreHealth,
 )
 from backend.platform.knowledge.base.text import MAX_SNIPPET_LENGTH, truncate_snippet
+from backend.platform.retrieval import (
+    ActiveDocumentChunkSource,
+    DocumentChunkVectorRepository,
+    EmbeddingStrategy,
+    LocalHashingEmbedder,
+    VectorSearchResult,
+    VectorStoreDocument,
+    VectorStoreHealth,
+)
 
 __all__ = [
     "ActiveDocumentChunkSource",

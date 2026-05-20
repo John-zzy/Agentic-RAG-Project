@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from backend.platform.knowledge.base.store import LocalHashingEmbedder
+from backend.platform.retrieval import LocalHashingEmbedder
 
 
 class DocumentEmbeddingStrategy:

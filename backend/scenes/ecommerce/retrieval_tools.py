@@ -10,14 +10,15 @@ from langchain_core.tools import BaseTool
 from pydantic import BaseModel, ConfigDict, Field
 
 from backend.platform.config.settings import AppSettings, settings
-from backend.platform.knowledge.base.store import VectorSearchResult, VectorStoreDocument
 from backend.platform.knowledge.base.text import truncate_snippet
+from backend.platform.knowledge.repositories import VectorStoreFactory
 from backend.platform.rag.core import RetrievalCitation, RetrievalResult, RetrievalTool
 from backend.platform.rag.document_retrieval import (
     DocumentChunkRetrievalResult,
     DocumentRetrievalService,
 )
 from backend.platform.tools import BaseJsonStore, ToolResult, build_structured_tool
+from backend.platform.retrieval import VectorSearchResult, VectorStoreDocument
 from backend.scenes.ecommerce.knowledge_service import KnowledgeService, create_knowledge_service
 from backend.scenes.ecommerce.loader import preload_knowledge_base
 
@@ -137,7 +138,9 @@ def build_generic_document_retrieval_tools(
     """构建通用知识助手场景默认使用的最小文档检索工具集。"""
     current_settings = app_settings or settings
     resolved_document_retrieval_service = document_retrieval_service or DocumentRetrievalService(
-        app_settings=current_settings
+        app_settings=current_settings,
+        vector_repository=VectorStoreFactory.create_document_chunk_vector_repository(current_settings),
+        chunk_source=VectorStoreFactory.create_active_document_chunk_source(current_settings),
     )
     return (
         _build_knowledge_document_tool(

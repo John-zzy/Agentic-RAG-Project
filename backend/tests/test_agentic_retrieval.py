@@ -1,11 +1,11 @@
 import json
 
 from backend.platform.config.settings import AppSettings
+from backend.platform.retrieval import VectorSearchResult, VectorStoreDocument
 from backend.platform.rag.document_retrieval import DocumentChunkRetrievalResult
 from backend.scenes.ecommerce.definition import create_agentic_knowledge_retriever
 from backend.scenes.generic_assistant.definition import build_generic_assistant_scene_definition
 from backend.scenes.ecommerce.definition import build_ecommerce_scene_definition
-from backend.platform.knowledge.base.store import VectorSearchResult, VectorStoreDocument
 from backend.tests.test_support import DATA_DIR, make_test_runtime_dir
 
 

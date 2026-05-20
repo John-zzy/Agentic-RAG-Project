@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-from backend.platform.knowledge.base.store import DocumentChunkVectorRepository
-
 from backend.platform.rag.document_retrieval_embedding import DocumentEmbeddingStrategy
 from backend.platform.rag.document_retrieval_types import DocumentChunkRetrievalResult
+from backend.platform.retrieval import DocumentChunkVectorRepository
 
 
 class DocumentSemanticRetriever:

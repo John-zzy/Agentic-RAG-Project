@@ -3,9 +3,9 @@ from __future__ import annotations
 from langchain_community.retrievers import BM25Retriever
 from langchain_core.documents import Document
 
-from backend.platform.knowledge.base.store import ActiveDocumentChunkSource, LocalHashingEmbedder, VectorStoreDocument
 from backend.platform.rag.document_retrieval_keyword_scoring import DocumentKeywordScoreCalculator
 from backend.platform.rag.document_retrieval_types import DocumentChunkRetrievalResult
+from backend.platform.retrieval import ActiveDocumentChunkSource, LocalHashingEmbedder, VectorStoreDocument
 
 
 class DocumentKeywordRetriever:

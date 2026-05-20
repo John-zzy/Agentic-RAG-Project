@@ -7,22 +7,21 @@ from langchain_core.retrievers import BaseRetriever
 from pydantic import ConfigDict, Field
 
 from backend.platform.config.settings import AppSettings, settings
-from backend.platform.knowledge.base.relevance import (
+from backend.platform.rag.document_retrieval_rules import (
     DOCUMENT_MINIMUM_RELEVANCE,
     filter_low_relevance_document_results,
     filter_managed_document_results,
-)
-from backend.platform.knowledge.base.store import (
-    ActiveDocumentChunkSource,
-    DocumentChunkVectorRepository,
-    VectorSearchResult,
-    VectorStoreDocument,
-    VectorStoreFactory,
 )
 from backend.platform.rag.document_retrieval_fusion import HybridFusionRanker
 from backend.platform.rag.document_retrieval_keyword import DocumentKeywordRetriever
 from backend.platform.rag.document_retrieval_semantic import DocumentSemanticRetriever
 from backend.platform.rag.document_retrieval_types import DocumentChunkRetrievalResult
+from backend.platform.retrieval import (
+    ActiveDocumentChunkSource,
+    DocumentChunkVectorRepository,
+    VectorSearchResult,
+    VectorStoreDocument,
+)
 
 
 class DocumentHybridRetriever(BaseRetriever):
@@ -63,8 +62,8 @@ class DocumentRetrievalService:
         self,
         *,
         app_settings: AppSettings | None = None,
-        vector_repository: DocumentChunkVectorRepository | None = None,
-        chunk_source: ActiveDocumentChunkSource | None = None,
+        vector_repository: DocumentChunkVectorRepository,
+        chunk_source: ActiveDocumentChunkSource,
         semantic_retriever: DocumentSemanticRetriever | None = None,
         keyword_retriever: DocumentKeywordRetriever | None = None,
         fusion_ranker: HybridFusionRanker | None = None,
@@ -74,14 +73,8 @@ class DocumentRetrievalService:
         self.app_settings = app_settings or settings
         self.files_root = files_root or str(self.app_settings.data_dir / "files")
         self.minimum_relevance = minimum_relevance
-        self.vector_repository = (
-            vector_repository
-            or VectorStoreFactory.create_document_chunk_vector_repository(self.app_settings)
-        )
-        self.chunk_source = (
-            chunk_source
-            or VectorStoreFactory.create_active_document_chunk_source(self.app_settings)
-        )
+        self.vector_repository = vector_repository
+        self.chunk_source = chunk_source
         self.semantic_retriever = semantic_retriever or DocumentSemanticRetriever(
             vector_repository=self.vector_repository
         )

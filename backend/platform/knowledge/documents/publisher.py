@@ -2,13 +2,13 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from backend.platform.knowledge.base.store import VectorStoreDocument
 from backend.platform.knowledge.documents.chunker import build_document_chunks
 from backend.platform.knowledge.documents.loader import build_document_id
 from backend.platform.knowledge.documents.models import DocumentStatus, KnowledgeDocumentStoreError
 from backend.platform.knowledge.documents.schemas import DocumentRecord
 from backend.platform.knowledge.documents.store_support import KnowledgeDocumentRepositoryGateway
 from backend.platform.knowledge.processing import process_document_records
+from backend.platform.retrieval import VectorStoreDocument
 
 
 class KnowledgeDocumentPublisher:

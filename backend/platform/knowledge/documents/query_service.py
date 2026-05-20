@@ -3,7 +3,6 @@ from __future__ import annotations
 from pathlib import Path
 
 from backend.platform.config.settings import AppSettings, FILES_DIR, settings
-from backend.platform.knowledge.base.store import KnowledgeDocumentRepository, VectorStoreFactory
 from backend.platform.knowledge.documents.mappers import KnowledgeDocumentMapper
 from backend.platform.knowledge.documents.models import (
     KnowledgeDocumentDetail,
@@ -11,6 +10,7 @@ from backend.platform.knowledge.documents.models import (
     KnowledgeDocumentSummary,
     KnowledgeFileIndexSummary,
 )
+from backend.platform.knowledge.repositories import KnowledgeDocumentRepository, VectorStoreFactory
 from backend.platform.knowledge.documents.store_support import KnowledgeDocumentRepositoryGateway
 from backend.platform.knowledge.documents.validators import validate_namespace
 from backend.platform.knowledge.processing.provenance import normalize_source_type

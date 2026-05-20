@@ -249,21 +249,16 @@ provider 层要求：
 - `backend/tests/test_session_store.py`
 - `backend/tests/test_agentic_retrieval.py`
 
-## Implementation Deviations
+## Retrieval Foundation Update
 
-本次实现已经完成“一期文档 Hybrid Search 可用”和“scene/tool 不再直接依赖文档召回业务 API”这两个主要目标，但 `knowledge` 与 `rag` 的边界还没有达到设计文档最理想的“彻底解耦”状态，当前仍有以下偏差：
+截至 2026-05-20，仓库已继续完成“中立检索底座解耦”：
 
-- `DocumentEmbeddingStrategy` 仍复用 `backend/platform/knowledge/base/store.py` 中的 `LocalHashingEmbedder`，embedding 具体实现尚未完全移出 `knowledge.base`。
-- `DocumentKeywordScoreCalculator` 仍复用 `LocalHashingEmbedder._tokenize()` 作为 fallback overlap scoring 的分词来源。
-- `DocumentRetrievalService` 仍依赖 `backend/platform/knowledge/base/relevance.py` 中的低相关过滤与受管文档过滤辅助函数。
-- `VectorStoreFactory` 虽然已经提供 `create_document_repository()`、`create_document_chunk_vector_repository()`、`create_active_document_chunk_source()` 等分职责工厂方法，但当前 provider 仍返回同一个复合 `VectorStore` 实例，而不是物理分离的独立仓储实现。
-- `backend/platform/knowledge/base/store.py` 仍保留 `KnowledgeRetriever` 抽象与 `VectorStore(KnowledgeRetriever, KnowledgeDocumentRepository, DocumentChunkVectorRepository, ActiveDocumentChunkSource)` 这一复合类型，因此底层代码层面的聚合抽象尚未完全拆除。
-
-这意味着当前状态更准确的表述是：
-
-- 文档召回入口、Hybrid Search 算法与对外检索契约已经迁入 `platform.rag`
-- `knowledge` 不再作为 scene/chat 的文档召回入口
-- 但 `rag` 仍复用少量 `knowledge.base` 的基础实现与 helper，底层 provider 也仍以单对象多接口方式承载多个职责
+- 新增 `backend/platform/retrieval/` 作为 `knowledge` 与 `rag` 共享的唯一中立底座。
+- 共享 `VectorStoreDocument`、`VectorSearchResult`、`VectorStoreHealth`、默认 hashing embedder / tokenizer 与读侧 repository 契约已迁入该模块。
+- `platform.rag` 不再直接 import `platform.knowledge.base.*`。
+- `platform.knowledge` 现在只负责知识管理、provider 实现和 repository 工厂输出。
+- `VectorStoreFactory` 已按职责输出语义检索 repository、文档管理 repository、文档分块向量查询 repository 和活跃 chunk 文本源 repository。
+- `generic_assistant`、`ecommerce`、`/chat`、`citations` 与 `retrieval_snippets` 对外契约保持兼容。
 
 ## Phase 2 Constraint
 

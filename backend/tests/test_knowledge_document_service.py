@@ -8,7 +8,7 @@ from typing import Any
 import pytest
 
 from backend.platform.config.settings import AppSettings, VectorStoreConfig
-from backend.platform.knowledge.base.store import VectorStore, VectorStoreDocument, VectorStoreHealth
+from backend.platform.knowledge.base.store import VectorStore
 from backend.platform.knowledge.documents import (
     KnowledgeDocumentApplicationService,
     KnowledgeDocumentProcessor,
@@ -28,6 +28,7 @@ from backend.platform.knowledge.documents import (
     validate_namespace,
     validate_source_path,
 )
+from backend.platform.retrieval import VectorStoreDocument, VectorStoreHealth
 
 
 @dataclass(frozen=True)

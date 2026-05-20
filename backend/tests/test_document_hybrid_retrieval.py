@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from backend.platform.config.settings import AppSettings, VectorStoreConfig
-from backend.platform.knowledge.base.store import VectorStoreDocument
+from backend.platform.retrieval import VectorSearchResult, VectorStoreDocument
 from backend.platform.rag.document_retrieval import (
     DocumentChunkRetrievalResult,
     DocumentEmbeddingStrategy,
@@ -25,8 +25,6 @@ class FakeDocumentChunkVectorRepository:
         namespace: str | None = None,
     ) -> list[object]:
         del query_embedding, namespace
-        from backend.platform.knowledge.base.store import VectorSearchResult
-
         return [
             VectorSearchResult(document=document, score=score)
             for document, score in [

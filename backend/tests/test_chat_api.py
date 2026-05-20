@@ -6,11 +6,12 @@ from langchain_core.runnables import RunnableLambda
 from backend.application.runtime.api.app import create_app
 from backend.application.runtime import SceneChatService, build_default_scene_registry
 from backend.platform.config.settings import AppSettings
-from backend.platform.knowledge.base.store import VectorSearchResult, VectorStoreDocument, VectorStoreFactory
+from backend.platform.knowledge.repositories import VectorStoreFactory
 from backend.platform.memory.base.session_store import SQLiteSessionStore
 from backend.platform.memory.chat.prompt_context import PromptContextBuilder
 from backend.platform.rag.document_retrieval import DocumentChunkRetrievalResult
 from backend.platform.rag.document_retrieval_service import DocumentRetrievalService
+from backend.platform.retrieval import VectorSearchResult, VectorStoreDocument
 from backend.scenes.ecommerce.knowledge_service import create_knowledge_service
 from backend.tests.test_support import make_test_runtime_dir
 
@@ -28,6 +29,14 @@ def _result(
             metadata=metadata,
         ),
         score=score,
+    )
+
+
+def _build_document_retrieval_service(app_settings: AppSettings) -> DocumentRetrievalService:
+    return DocumentRetrievalService(
+        app_settings=app_settings,
+        vector_repository=VectorStoreFactory.create_document_chunk_vector_repository(app_settings),
+        chunk_source=VectorStoreFactory.create_active_document_chunk_source(app_settings),
     )
 
 
@@ -628,7 +637,7 @@ def test_chat_api_real_runtime_filters_low_relevance_document_hits_for_greeting(
         scene_registry=build_default_scene_registry(
             app_settings=app_settings,
             knowledge_service=knowledge_service,
-            document_retrieval_service=DocumentRetrievalService(app_settings=app_settings),
+            document_retrieval_service=_build_document_retrieval_service(app_settings),
         ),
         app_settings=app_settings,
         knowledge_service=knowledge_service,
@@ -705,7 +714,7 @@ def test_chat_api_ignores_builtin_orders_json_in_documents_only_session() -> Non
         scene_registry=build_default_scene_registry(
             app_settings=app_settings,
             knowledge_service=knowledge_service,
-            document_retrieval_service=DocumentRetrievalService(app_settings=app_settings),
+            document_retrieval_service=_build_document_retrieval_service(app_settings),
         ),
         app_settings=app_settings,
         knowledge_service=knowledge_service,
