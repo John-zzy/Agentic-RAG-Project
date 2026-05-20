@@ -1,0 +1,28 @@
+flowchart TB
+    A[DocumentRetrievalService retrieve 接收 query top_k namespace] --> B[DocumentSemanticRetriever retrieve]
+    A --> C[DocumentKeywordRetriever retrieve]
+
+    B --> D[语义召回结果：DocumentChunkRetrievalResult]
+    C --> E[关键词召回结果：DocumentChunkRetrievalResult]
+
+    D --> F[HybridFusionRanker rank]
+    E --> F
+
+    F --> G[融合后的排序结果]
+    G --> H[映射成 VectorSearchResult 视图]
+    H --> I[filter_low_relevance_document_results]
+    I --> J[收集允许保留的 document id]
+    J --> K[仅保留通过低相关过滤的融合结果]
+    K --> L[_filter_managed_documents]
+    L --> M[按 files_root 执行 filter_managed_document_results]
+    M --> N[最终 DocumentChunkRetrievalResult 列表]
+
+    N --> O[search 对每条结果调用 _to_document]
+    O --> P[产出 LangChain Document 列表，含 citation_id namespace score matched_by]
+
+    subgraph Inputs[检索输入与依赖]
+        Q[vector_repository] --> B
+        R[chunk_source] --> C
+        S[minimum_relevance] --> I
+        T[files_root] --> M
+    end

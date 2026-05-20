@@ -1,0 +1,44 @@
+flowchart TB
+    A[用户问题进入 chat] --> B[ChatService chat]
+    B --> C[解析 mounted knowledge sources]
+    C --> D[组装候选 retrieval tools]
+    D --> E[AgenticRetriever retrieve_with_trace]
+
+    subgraph RAG1[Agentic Retrieval 阶段：收集证据并做决策]
+        E --> F[第 N 轮选择当前 RetrievalTool]
+        F --> G{当前 tool}
+        G -->|knowledge_document_search| H[DocumentRetrievalService retrieve]
+        H --> H1[语义召回]
+        H --> H2[关键词召回]
+        H1 --> H3[HybridFusionRanker]
+        H2 --> H3
+        H3 --> H4[相关度过滤与受管文档过滤]
+        H4 --> I[生成 RetrievalResult 含 documents 与 citations]
+
+        G -->|product review order semantic search| J[KnowledgeService vector search]
+        J --> I
+
+        G -->|inventory lookup or product detail lookup| K[结构化精确查询]
+        K --> I
+
+        I --> L[SufficiencyJudge]
+        L --> M{决策}
+        M -->|finish| N[聚合证据完成]
+        M -->|switch_tool| F
+        M -->|rewrite| O[QueryRewriter]
+        O --> F
+        M -->|ask_user| P[停止检索并追问用户]
+    end
+
+    N --> Q[ChatService invoke chain with docs]
+    P --> Q2[返回兜底或追问式回答]
+
+    subgraph RAG2[Answer Generation 阶段：基于证据生成回答]
+        Q --> R[将 documents 组织成带编号上下文]
+        R --> S[LLM answer chain]
+        S --> T[输出带引用标记的回答]
+    end
+
+    T --> U[落库存储 answer 与 retrieval snippets]
+    Q2 --> U
+    U --> V[返回 answer 与 citations]
