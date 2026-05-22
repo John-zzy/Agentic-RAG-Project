@@ -179,6 +179,8 @@ def _build_scene_tool_registry(app_settings: AppSettings) -> _SceneToolRegistry:
     )
     registrations: list[_Registration] = []
     for definition in definitions:
+        if definition.bootstrap is not None:
+            definition.bootstrap()
         for tool in definition.build_tools():
             registrations.append(
                 _Registration(

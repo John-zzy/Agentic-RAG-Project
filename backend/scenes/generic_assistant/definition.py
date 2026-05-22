@@ -1,30 +1,42 @@
 from __future__ import annotations
 
+from abc import ABC, abstractmethod
 from typing import Any
 
 from langchain_core.documents import Document
 from langchain_core.retrievers import BaseRetriever
+from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, ConfigDict, Field
 
 from backend.platform.config.settings import AppSettings, settings
+from backend.platform.knowledge.base.text import truncate_snippet
+from backend.platform.knowledge.repositories import VectorStoreFactory
+from backend.platform.rag.agentic import AgenticRetriever
+from backend.platform.rag.core import (
+    QueryRewrite,
+    QueryRewriter,
+    RetrievalCitation,
+    RetrievalContext,
+    RetrievalResult,
+    RetrievalTool,
+    SufficiencyDecision,
+    SufficiencyJudge,
+)
+from backend.platform.rag.document_retrieval import (
+    DocumentChunkRetrievalResult,
+    DocumentRetrievalService,
+)
+from backend.platform.tools import ToolResult, build_structured_tool
 from backend.scenes.base import (
     SceneBootstrapResult,
     SceneDefinition,
     SceneFallbackPolicy,
 )
-from backend.platform.knowledge.base.text import truncate_snippet
-from backend.platform.knowledge.repositories import VectorStoreFactory
-from backend.platform.rag.agentic import AgenticRetriever
-from backend.platform.rag.core import RetrievalCitation, RetrievalResult, RetrievalTool
-from backend.platform.rag.document_retrieval import DocumentRetrievalService
-from backend.platform.tools import ToolResult, build_structured_tool
-from backend.scenes.ecommerce.definition import EcommerceQueryRewriter, EcommerceSufficiencyJudge
-from backend.scenes.ecommerce.retrieval_tools import (
-    ProductCatalogStore,
-    build_agentic_retrieval_tools,
-)
-from backend.scenes.ecommerce.knowledge_service import create_knowledge_service
+
+
+GENERIC_DOCUMENT_TOOL_NAME = "knowledge_document_search"
+GENERIC_DOCUMENT_KNOWLEDGE_SOURCE = "documents"
 
 
 GENERIC_ASSISTANT_SYSTEM_PROMPT = (
@@ -44,7 +56,7 @@ class GenericKnowledgeDocumentSearchInput(BaseModel):
 class GenericKnowledgeDocumentRetriever(BaseRetriever):
     """通用助手默认 retriever，只依赖文档知识库。"""
 
-    document_retrieval_service: DocumentRetrievalService = Field(exclude=True)
+    document_retrieval_service: Any = Field(exclude=True)
     default_top_k: int = 5
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -64,9 +76,9 @@ class GenericKnowledgeDocumentRetriever(BaseRetriever):
 class GenericKnowledgeDocumentSearchTool(RetrievalTool):
     """通用知识文档检索工具，供 scene runtime 直接挂载。"""
 
-    name: str = "knowledge_document_search"
+    name: str = GENERIC_DOCUMENT_TOOL_NAME
     description: str = "Search semantically relevant uploaded knowledge documents."
-    document_retrieval_service: DocumentRetrievalService = Field(exclude=True)
+    document_retrieval_service: Any = Field(exclude=True)
     default_top_k: int = 5
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -122,30 +134,197 @@ class GenericKnowledgeDocumentSearchTool(RetrievalTool):
         )
 
 
+class GenericAssistantBusinessExtension(ABC):
+    """generic scene 的业务扩展契约。"""
+
+    knowledge_source: str
+
+    def bootstrap(self) -> SceneBootstrapResult:
+        """为扩展提供可选的预热入口，默认不执行任何初始化。"""
+        return SceneBootstrapResult()
+
+    @property
+    @abstractmethod
+    def retrieval_tool_names(self) -> tuple[str, ...]:
+        """声明该扩展可暴露给 AgenticRetriever 的检索工具名。"""
+        raise NotImplementedError
+
+    @abstractmethod
+    def build_retrieval_tools(self) -> tuple[RetrievalTool, ...]:
+        """构建该扩展提供的 RetrievalTool 集合。"""
+        raise NotImplementedError
+
+    @abstractmethod
+    def should_handoff(self, context: RetrievalContext) -> SufficiencyDecision | None:
+        """决定 docs-first 主链是否应切换到该扩展。"""
+        raise NotImplementedError
+
+    @abstractmethod
+    def resolve_followup(self, context: RetrievalContext) -> SufficiencyDecision | None:
+        """在扩展接管后决定是否继续切换、改写或结束。"""
+        raise NotImplementedError
+
+
+class GenericAssistantSufficiencyJudge(SufficiencyJudge):
+    """通用 docs-first 检索判断器。"""
+
+    business_extensions: tuple[GenericAssistantBusinessExtension, ...] = Field(
+        default_factory=tuple,
+        exclude=True,
+    )
+    document_intent_keywords: tuple[str, ...] = (
+        "文档",
+        "说明",
+        "手册",
+        "指南",
+        "faq",
+        "知识库",
+        "流程",
+        "制度",
+        "规则",
+        "条款",
+        "manual",
+        "document",
+        "docs",
+        "guide",
+        "policy",
+    )
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    def invoke(
+        self,
+        input: RetrievalContext,
+        config: RunnableConfig | None = None,
+        **kwargs: Any,
+    ) -> SufficiencyDecision:
+        """优先评估文档证据，再按扩展顺序决定是否接管。"""
+        del config, kwargs
+        plan = input.plan
+        result = input.results[-1]
+
+        if plan.selected_tool == GENERIC_DOCUMENT_TOOL_NAME:
+            handoff_decision = self._resolve_handoff(input)
+            if handoff_decision is not None:
+                return handoff_decision
+            if result.records:
+                return SufficiencyDecision(
+                    is_sufficient=True,
+                    next_action="finish",
+                    reason="文档证据已足够支持当前回答。",
+                    confidence=result.confidence,
+                )
+            return self._build_no_hit_decision(plan.round_index, plan.max_rounds)
+
+        followup_decision = self._resolve_extension_followup(input)
+        if followup_decision is not None:
+            return followup_decision
+        if result.records:
+            return SufficiencyDecision(
+                is_sufficient=True,
+                next_action="finish",
+                reason="当前证据已足够支持回答。",
+                confidence=result.confidence,
+            )
+        return self._build_no_hit_decision(plan.round_index, plan.max_rounds)
+
+    def _resolve_handoff(self, context: RetrievalContext) -> SufficiencyDecision | None:
+        for extension in self.business_extensions:
+            decision = extension.should_handoff(context)
+            if decision is not None:
+                return decision
+        return None
+
+    def _resolve_extension_followup(self, context: RetrievalContext) -> SufficiencyDecision | None:
+        current_tool = context.plan.selected_tool
+        for extension in self.business_extensions:
+            if current_tool not in extension.retrieval_tool_names:
+                continue
+            decision = extension.resolve_followup(context)
+            if decision is not None:
+                return decision
+        return None
+
+    def _build_no_hit_decision(
+        self,
+        round_index: int,
+        max_rounds: int,
+    ) -> SufficiencyDecision:
+        if round_index >= max_rounds:
+            return SufficiencyDecision(
+                is_sufficient=False,
+                next_action="ask_user",
+                reason="在允许的检索轮次内没有找到足够相关的证据。",
+                follow_up_question="请补充更具体的文档主题、术语，或说明你希望查询的业务知识范围。",
+            )
+        return SufficiencyDecision(
+            is_sufficient=False,
+            next_action="rewrite",
+            reason="当前证据不足，先改写查询继续检索。",
+        )
+
+
+class GenericAssistantQueryRewriter(QueryRewriter):
+    """通用 docs-first 查询改写器。"""
+
+    document_hint_keywords: tuple[str, ...] = (
+        "文档",
+        "说明",
+        "手册",
+        "指南",
+        "faq",
+        "知识库",
+        "manual",
+        "document",
+        "docs",
+        "guide",
+    )
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    def invoke(
+        self,
+        input: RetrievalContext,
+        config: RunnableConfig | None = None,
+        **kwargs: Any,
+    ) -> QueryRewrite:
+        """把弱查询改写成更适合文档检索的中立表述。"""
+        del config, kwargs
+        query = input.plan.active_query.strip()
+        lowered = query.lower()
+        if any(keyword in lowered for keyword in self.document_hint_keywords):
+            rewritten = f"{query} 相关内容"
+        else:
+            rewritten = f"{query} 相关文档 说明 手册 FAQ"
+        return QueryRewrite(
+            query=rewritten.strip(),
+            reason="Broadened the query with generic document-oriented terms for the next retrieval round.",
+            metadata={"original_query": query},
+        )
+
+
 def build_generic_assistant_scene_definition(
     app_settings: AppSettings | None = None,
     *,
-    knowledge_service: object | None = None,
+    business_extensions: tuple[GenericAssistantBusinessExtension, ...] = (),
     document_retrieval_service: DocumentRetrievalService | None = None,
-    product_store: ProductCatalogStore | None = None,
     max_rounds: int = 3,
 ) -> SceneDefinition:
     """构建通用知识助手场景定义。"""
     current_settings = app_settings or settings
+    resolved_business_extensions = tuple(business_extensions)
     resolved_document_retrieval_service = document_retrieval_service or DocumentRetrievalService(
         app_settings=current_settings,
         vector_repository=VectorStoreFactory.create_document_chunk_vector_repository(current_settings),
         chunk_source=VectorStoreFactory.create_active_document_chunk_source(current_settings),
     )
-    resolved_product_store = product_store or ProductCatalogStore(data_dir=current_settings.data_dir)
     return SceneDefinition(
         scene="generic_assistant",
         name="Generic Knowledge Assistant",
         description="以用户上传文档为主，并可按会话挂载扩展到其他知识源的通用 RAG 助手。",
         build_retriever=lambda: _build_generic_agentic_retriever(
             document_retrieval_service=resolved_document_retrieval_service,
-            knowledge_service=_resolve_knowledge_service(current_settings, knowledge_service),
-            product_store=resolved_product_store,
+            business_extensions=resolved_business_extensions,
             max_rounds=max_rounds,
         ),
         build_tools=lambda: (
@@ -153,15 +332,24 @@ def build_generic_assistant_scene_definition(
                 resolved_document_retrieval_service,
             ),
         ),
+        candidate_retrieval_tools_resolver=lambda mounted_knowledge_sources: (
+            _resolve_candidate_retrieval_tools(
+                mounted_knowledge_sources,
+                business_extensions=resolved_business_extensions,
+            )
+        ),
         system_prompt=GENERIC_ASSISTANT_SYSTEM_PROMPT,
         fallback_policy=SceneFallbackPolicy(
             no_hit_message="暂时没有检索到足够相关的文档知识。请补充更具体的主题、术语或文档范围，我再继续帮你查。"
         ),
         infer_complexity=infer_generic_assistant_complexity,
-        bootstrap=lambda: SceneBootstrapResult(),
+        bootstrap=lambda: _bootstrap_generic_scene(resolved_business_extensions),
         metadata={
             "supports_agentic_retrieval": True,
-            "knowledge_sources": ("documents", "ecommerce"),
+            "knowledge_sources": _resolve_supported_knowledge_sources(resolved_business_extensions),
+            "business_extension_order": tuple(
+                extension.knowledge_source for extension in resolved_business_extensions
+            ),
             "default_agent": None,
             "prompt_style": "generic_knowledge_assistant",
         },
@@ -177,7 +365,7 @@ def build_generic_knowledge_document_tool(
         retrieval_results = document_retrieval_service.retrieve(query=query, top_k=top_k)
         records = [_build_document_record(result) for result in retrieval_results]
         return ToolResult.ok(
-            tool_name="knowledge_document_search",
+            tool_name=GENERIC_DOCUMENT_TOOL_NAME,
             records=records,
             citations=[
                 {
@@ -200,7 +388,7 @@ def build_generic_knowledge_document_tool(
         )
 
     return build_structured_tool(
-        name="knowledge_document_search",
+        name=GENERIC_DOCUMENT_TOOL_NAME,
         description="Search semantically relevant uploaded knowledge documents.",
         capability_type="retrieval",
         args_schema=GenericKnowledgeDocumentSearchInput,
@@ -224,32 +412,97 @@ def infer_generic_assistant_complexity(message: str) -> str:
 def _build_generic_agentic_retriever(
     *,
     document_retrieval_service: DocumentRetrievalService,
-    knowledge_service: Any,
-    product_store: ProductCatalogStore,
+    business_extensions: tuple[GenericAssistantBusinessExtension, ...],
     max_rounds: int,
 ) -> AgenticRetriever:
     """为通用场景构建文档优先的 AgenticRetriever。"""
-    tools = build_agentic_retrieval_tools(
+    tools = _build_docs_first_retrieval_tools(
         document_retrieval_service=document_retrieval_service,
-        knowledge_service=knowledge_service,
-        product_store=product_store,
+        business_extensions=business_extensions,
     )
     return AgenticRetriever(
         tools={tool.name: tool for tool in tools},
-        default_tool="knowledge_document_search",
-        sufficiency_judge=EcommerceSufficiencyJudge(),
-        query_rewriter=EcommerceQueryRewriter(),
+        default_tool=GENERIC_DOCUMENT_TOOL_NAME,
+        sufficiency_judge=GenericAssistantSufficiencyJudge(
+            business_extensions=business_extensions,
+        ),
+        query_rewriter=GenericAssistantQueryRewriter(),
         max_rounds=max_rounds,
     )
 
 
-def _resolve_knowledge_service(
-    current_settings: AppSettings,
-    knowledge_service: object | None,
-) -> Any:
-    if knowledge_service is not None:
-        return knowledge_service
-    return create_knowledge_service(current_settings)
+def _build_docs_first_retrieval_tools(
+    *,
+    document_retrieval_service: DocumentRetrievalService,
+    business_extensions: tuple[GenericAssistantBusinessExtension, ...],
+) -> tuple[RetrievalTool, ...]:
+    """按 docs-only 默认边界组装主链工具，再按扩展顺序附加业务工具。"""
+    tools: list[RetrievalTool] = [
+        GenericKnowledgeDocumentSearchTool(
+            document_retrieval_service=document_retrieval_service,
+        )
+    ]
+    seen = {GENERIC_DOCUMENT_TOOL_NAME}
+    for extension in business_extensions:
+        for tool in extension.build_retrieval_tools():
+            if tool.name in seen:
+                continue
+            tools.append(tool)
+            seen.add(tool.name)
+    return tuple(tools)
+
+
+def _resolve_candidate_retrieval_tools(
+    mounted_knowledge_sources: tuple[str, ...],
+    *,
+    business_extensions: tuple[GenericAssistantBusinessExtension, ...],
+) -> tuple[str, ...]:
+    """根据挂载知识源解析 generic scene 当前可用的候选检索工具。"""
+    tool_names: list[str] = []
+    seen: set[str] = set()
+
+    if GENERIC_DOCUMENT_KNOWLEDGE_SOURCE in mounted_knowledge_sources:
+        tool_names.append(GENERIC_DOCUMENT_TOOL_NAME)
+        seen.add(GENERIC_DOCUMENT_TOOL_NAME)
+
+    for extension in business_extensions:
+        if extension.knowledge_source not in mounted_knowledge_sources:
+            continue
+        for tool_name in extension.retrieval_tool_names:
+            if tool_name in seen:
+                continue
+            tool_names.append(tool_name)
+            seen.add(tool_name)
+
+    if not tool_names:
+        raise ValueError("No retrieval tools available for mounted knowledge sources.")
+    return tuple(tool_names)
+
+
+def _resolve_supported_knowledge_sources(
+    business_extensions: tuple[GenericAssistantBusinessExtension, ...],
+) -> tuple[str, ...]:
+    """汇总 generic scene 自身与已注册扩展支持的知识源。"""
+    resolved = [GENERIC_DOCUMENT_KNOWLEDGE_SOURCE]
+    seen = {GENERIC_DOCUMENT_KNOWLEDGE_SOURCE}
+    for extension in business_extensions:
+        if extension.knowledge_source in seen:
+            continue
+        resolved.append(extension.knowledge_source)
+        seen.add(extension.knowledge_source)
+    return tuple(resolved)
+
+
+def _bootstrap_generic_scene(
+    business_extensions: tuple[GenericAssistantBusinessExtension, ...],
+) -> SceneBootstrapResult:
+    """聚合已注册扩展的预热结果，避免 tool builder 承担 bootstrap 语义。"""
+    metrics: dict[str, int] = {}
+    for extension in business_extensions:
+        result = extension.bootstrap()
+        for metric_name, value in result.metrics.items():
+            metrics[metric_name] = metrics.get(metric_name, 0) + value
+    return SceneBootstrapResult(metrics=metrics)
 
 
 def _build_document_record(result: DocumentChunkRetrievalResult) -> dict[str, Any]:

@@ -1,10 +1,11 @@
 from typing import Any
 
 from fastapi.testclient import TestClient
+from langchain_core.documents import Document
 from langchain_core.runnables import RunnableLambda
 
 from backend.application.runtime.api.app import create_app
-from backend.application.runtime import SceneChatService, build_default_scene_registry
+from backend.application.runtime import ChatService, SceneChatService, build_default_scene_registry
 from backend.platform.config.settings import AppSettings
 from backend.platform.knowledge.repositories import VectorStoreFactory
 from backend.platform.memory.base.session_store import SQLiteSessionStore
@@ -12,6 +13,7 @@ from backend.platform.memory.chat.prompt_context import PromptContextBuilder
 from backend.platform.rag.document_retrieval import DocumentChunkRetrievalResult
 from backend.platform.rag.document_retrieval_service import DocumentRetrievalService
 from backend.platform.retrieval import VectorSearchResult, VectorStoreDocument
+from backend.scenes.base import SceneDefinition, SceneFallbackPolicy
 from backend.scenes.ecommerce.knowledge_service import create_knowledge_service
 from backend.tests.test_support import make_test_runtime_dir
 
@@ -539,6 +541,178 @@ def test_chat_can_route_to_ecommerce_tools_when_session_mounts_ecommerce() -> No
     assert "documents" not in namespaces
     assert "products" in namespaces or "inventory" in namespaces
     assert "[1]" in payload["answer"]
+
+
+def test_chat_service_resolves_candidate_tools_from_scene_definition() -> None:
+    observed_candidate_tools: list[tuple[str, ...]] = []
+
+    class _TrackingRetriever:
+        def retrieve_with_trace(self, query: str, *, candidate_tools: tuple[str, ...], **kwargs: Any):
+            del query, kwargs
+            observed_candidate_tools.append(candidate_tools)
+
+            class _Outcome:
+                documents: list[Document] = []
+                exit_reason = "sufficient"
+                rounds: list[object] = []
+
+            return _Outcome()
+
+    scene_definition = SceneDefinition(
+        scene="generic_assistant",
+        name="Tracking Scene",
+        description="Track candidate tool resolution source.",
+        build_retriever=lambda: _TrackingRetriever(),  # type: ignore[return-value]
+        build_tools=lambda: (),
+        candidate_retrieval_tools_resolver=lambda mounted_knowledge_sources: (
+            "scene_documents_only",
+            *(("scene_ecommerce_tool",) if "ecommerce" in mounted_knowledge_sources else ()),
+        ),
+        system_prompt="test",
+        fallback_policy=SceneFallbackPolicy(no_hit_message="no hit"),
+        infer_complexity=lambda _: "simple",
+    )
+    runtime_dir = make_test_runtime_dir("chat-service-scene-candidate-tools")
+    sqlite_path = runtime_dir / "chat-sessions.db"
+    app_settings = AppSettings(
+        data_dir=runtime_dir,
+        session={"sqlite_path": sqlite_path, "window_size": 3},
+    )
+    service = ChatService(
+        scene_definition=scene_definition,
+        app_settings=app_settings,
+        session_store=SQLiteSessionStore(sqlite_path=sqlite_path),
+        context_builder=PromptContextBuilder(window_size=3),
+        model=FakeModel(answer="unused"),
+    )
+    created = service.session_store.create_session(
+        session_id="scene-definition-candidate-tools",
+        scene="generic_assistant",
+        mounted_knowledge_sources=("documents", "ecommerce"),
+    )
+
+    response = service.chat(type("Payload", (), {
+        "message": "hello",
+        "session_id": created.session_id,
+        "stream": False,
+    })())
+
+    assert response.knowledge_used is False
+    assert observed_candidate_tools == [("scene_documents_only", "scene_ecommerce_tool")]
+
+
+def test_chat_service_passes_through_scene_defined_custom_candidate_tools() -> None:
+    observed_candidate_tools: list[tuple[str, ...]] = []
+
+    class _TrackingRetriever:
+        def retrieve_with_trace(self, query: str, *, candidate_tools: tuple[str, ...], **kwargs: Any):
+            del query, kwargs
+            observed_candidate_tools.append(candidate_tools)
+
+            class _Outcome:
+                documents: list[Document] = []
+                exit_reason = "sufficient"
+                rounds: list[object] = []
+
+            return _Outcome()
+
+    scene_definition = SceneDefinition(
+        scene="generic_assistant",
+        name="Custom Candidate Scene",
+        description="Pass through arbitrary candidate tools.",
+        build_retriever=lambda: _TrackingRetriever(),  # type: ignore[return-value]
+        build_tools=lambda: (),
+        candidate_retrieval_tools_resolver=lambda mounted_knowledge_sources: (
+            "alpha_tool",
+            *(("beta_extension_tool",) if "ecommerce" in mounted_knowledge_sources else ()),
+        ),
+        system_prompt="test",
+        fallback_policy=SceneFallbackPolicy(no_hit_message="no hit"),
+        infer_complexity=lambda _: "simple",
+    )
+    runtime_dir = make_test_runtime_dir("chat-service-custom-candidate-tools")
+    sqlite_path = runtime_dir / "chat-sessions.db"
+    app_settings = AppSettings(
+        data_dir=runtime_dir,
+        session={"sqlite_path": sqlite_path, "window_size": 3},
+    )
+    service = ChatService(
+        scene_definition=scene_definition,
+        app_settings=app_settings,
+        session_store=SQLiteSessionStore(sqlite_path=sqlite_path),
+        context_builder=PromptContextBuilder(window_size=3),
+        model=FakeModel(answer="unused"),
+    )
+    created = service.session_store.create_session(
+        session_id="custom-candidate-tools",
+        scene="generic_assistant",
+        mounted_knowledge_sources=("documents", "ecommerce"),
+    )
+
+    response = service.chat(type("Payload", (), {
+        "message": "hello",
+        "session_id": created.session_id,
+        "stream": False,
+    })())
+
+    assert response.knowledge_used is False
+    assert observed_candidate_tools == [("alpha_tool", "beta_extension_tool")]
+
+
+def test_chat_documents_and_ecommerce_mounts_do_not_force_extension_when_docs_are_sufficient() -> None:
+    knowledge = FakeKnowledgeService(
+        products=[
+            _result(
+                doc_id="product-1",
+                content="AeroPhone X，库存充足。",
+                score=0.95,
+                metadata={"product_id": "P005"},
+            )
+        ]
+    )
+    document_retrieval_service = FakeDocumentRetrievalService(
+        documents=[
+            _result(
+                doc_id="doc-1",
+                content="产品手册：AeroPhone X 价格 4599 元，电池 5000mAh。",
+                score=0.97,
+                metadata={
+                    "document_id": "doc-1",
+                    "source_path": "manual.md",
+                    "namespace": "documents",
+                    "is_managed_document": True,
+                    "chunk_id": "chunk-manual-1",
+                    "chunk_index": 0,
+                },
+            )
+        ]
+    )
+    model = FakeModel(answer="根据产品手册，AeroPhone X 售价 4599 元，电池 5000mAh。")
+    service = _build_chat_service(
+        "chat-api-docs-sufficient-with-ecommerce-mounted",
+        knowledge,
+        document_retrieval_service,
+        model,
+    )
+    created = service.create_session(
+        scene="generic_assistant",
+        mounted_knowledge_sources=["documents", "ecommerce"],
+    )
+    app = create_app(chat_service=service)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/chat",
+            json={
+                "message": "请根据产品手册说明 AeroPhone X 的价格和电池参数",
+                "session_id": created.session_id,
+            },
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["knowledge_used"] is True
+    assert {citation["namespace"] for citation in payload["citations"]} == {"documents"}
 
 
 def test_session_detail_normalizes_legacy_retrieval_snippets() -> None:

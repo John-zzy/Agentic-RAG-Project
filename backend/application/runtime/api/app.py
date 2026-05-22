@@ -10,7 +10,8 @@ from fastapi.staticfiles import StaticFiles
 from backend.application.runtime.api.chat.routes import router as api_router
 from backend.application.runtime.api.file.routes import router as file_router
 from backend.application.runtime.api.knowledge.routes import router as knowledge_document_router
-from backend.application.runtime.service import SceneChatService, create_chat_service
+from backend.application.runtime.bootstrap import bootstrap_runtime
+from backend.application.runtime.service import SceneChatService
 from backend.platform.config.settings import settings
 from backend.platform.knowledge.documents import (
     KnowledgeDocumentApplicationService,
@@ -29,7 +30,11 @@ def create_app(
     async def lifespan(app: FastAPI):
         """应用生命周期：注入配置与运行时服务。"""
         app.state.settings = settings
-        app.state.chat_service = chat_service or create_chat_service()
+        if chat_service is not None:
+            app.state.chat_service = chat_service
+        else:
+            runtime_chat_service, _ = bootstrap_runtime(settings)
+            app.state.chat_service = runtime_chat_service
         # 知识文档路由只认拆分后的读写服务，这里不再回退到旧 facade。
         if knowledge_document_application_service is not None:
             app.state.knowledge_document_application_service = knowledge_document_application_service

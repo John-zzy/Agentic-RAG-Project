@@ -20,7 +20,6 @@ from backend.platform.rag.document_retrieval import (
 from backend.platform.tools import BaseJsonStore, ToolResult, build_structured_tool
 from backend.platform.retrieval import VectorSearchResult, VectorStoreDocument
 from backend.scenes.ecommerce.knowledge_service import KnowledgeService, create_knowledge_service
-from backend.scenes.ecommerce.loader import preload_knowledge_base
 
 logger = logging.getLogger(__name__)
 
@@ -101,8 +100,6 @@ def build_retrieval_tools(
     current_settings = app_settings or settings
     resolved_knowledge_service = knowledge_service or create_knowledge_service(current_settings)
     resolved_product_store = product_store or ProductCatalogStore(data_dir=current_settings.data_dir)
-    if hasattr(resolved_knowledge_service, "store"):
-        preload_knowledge_base(current_settings, store=resolved_knowledge_service.store)
     return (
         _build_semantic_search_tool(
             resolved_knowledge_service,
@@ -373,11 +370,28 @@ def build_agentic_retrieval_tools(
     product_store: ProductCatalogStore | None = None,
 ) -> tuple[RetrievalTool, ...]:
     """构建供 AgenticRetriever 使用的 RetrievalTool 集合。"""
+    return (
+        *build_ecommerce_agentic_retrieval_tools(
+            app_settings=app_settings,
+            knowledge_service=knowledge_service,
+            product_store=product_store,
+        ),
+        KnowledgeDocumentSemanticRetrievalTool(
+            document_retrieval_service=document_retrieval_service,
+        ),
+    )
+
+
+def build_ecommerce_agentic_retrieval_tools(
+    app_settings: AppSettings | None = None,
+    *,
+    knowledge_service: KnowledgeService | None = None,
+    product_store: ProductCatalogStore | None = None,
+) -> tuple[RetrievalTool, ...]:
+    """构建仅包含电商知识源的 RetrievalTool 集合。"""
     current_settings = app_settings or settings
     resolved_knowledge_service = knowledge_service or create_knowledge_service(current_settings)
     resolved_product_store = product_store or ProductCatalogStore(data_dir=current_settings.data_dir)
-    if hasattr(resolved_knowledge_service, "store"):
-        preload_knowledge_base(current_settings, store=resolved_knowledge_service.store)
     return (
         build_semantic_retrieval_tool(
             resolved_knowledge_service,
@@ -397,9 +411,6 @@ def build_agentic_retrieval_tools(
             namespace="orders",
             tool_name="order_semantic_search",
             description="Search order information semantically for order tracking or status inquiries.",
-        ),
-        KnowledgeDocumentSemanticRetrievalTool(
-            document_retrieval_service=document_retrieval_service,
         ),
         InventoryLookupRetrievalTool(product_store=resolved_product_store),
         ProductDetailLookupRetrievalTool(product_store=resolved_product_store),

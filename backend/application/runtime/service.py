@@ -22,10 +22,6 @@ from backend.platform.knowledge.sources import (
 from backend.platform.rag.agentic import AgenticRetrievalOutcome
 from backend.platform.rag.document_retrieval import DocumentRetrievalService
 from backend.scenes.base import SceneDefinition
-from backend.scenes.ecommerce.definition import build_ecommerce_scene_definition
-from backend.scenes.generic_assistant.definition import (
-    build_generic_assistant_scene_definition,
-)
 from backend.platform.knowledge.base.text import truncate_snippet
 from backend.platform.memory.base.session_store import (
     SQLiteSessionStore,
@@ -35,6 +31,8 @@ from backend.platform.memory.base.session_store import (
 from backend.platform.memory.chat.prompt_context import PromptContextBuilder
 from backend.platform.models.base.router import TaskComplexity
 from backend.platform.models.llm.client import ModelClient, model_client
+from backend.scenes.generic_assistant.definition import GenericAssistantBusinessExtension
+from backend.scenes.registry import build_default_scene_definitions
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +62,291 @@ class SceneMetadata:
 
     scene: str
     agent: str | None = None
+
+
+@dataclass(frozen=True)
+class RetrievalExecutionResult:
+    """封装一次检索执行后的文档与来源工具信息。"""
+
+    documents: list[Document]
+
+
+class RetrievalExecutor:
+    """负责执行 retriever 并返回统一的文档结果。"""
+
+    def __init__(self, *, scene_definition: SceneDefinition, retriever: Any) -> None:
+        self._scene_definition = scene_definition
+        self._retriever = retriever
+
+    def retrieve(
+        self,
+        message: str,
+        *,
+        mounted_knowledge_sources: tuple[str, ...],
+    ) -> RetrievalExecutionResult:
+        candidate_tools = self._scene_definition.resolve_candidate_retrieval_tools(
+            mounted_knowledge_sources
+        )
+        logger.info(
+            "Starting retrieval for scene=%s: message=%r, mounted_knowledge_sources=%s, candidate_tools=%s",
+            self._scene_definition.scene,
+            message,
+            mounted_knowledge_sources,
+            candidate_tools,
+        )
+        if hasattr(self._retriever, "retrieve_with_trace"):
+            outcome: AgenticRetrievalOutcome = self._retriever.retrieve_with_trace(  # type: ignore[attr-defined]
+                message,
+                candidate_tools=candidate_tools,
+            )
+            logger.info(
+                "Agentic retrieval completed for scene=%s: exit_reason=%s, rounds=%s, documents=%s",
+                self._scene_definition.scene,
+                outcome.exit_reason,
+                len(outcome.rounds),
+                len(outcome.documents),
+            )
+            return RetrievalExecutionResult(documents=list(outcome.documents))
+        if hasattr(self._retriever, "search"):
+            documents = list(self._retriever.search(query=message))  # type: ignore[attr-defined]
+            logger.info(
+                "Retriever search completed for scene=%s: documents=%s",
+                self._scene_definition.scene,
+                len(documents),
+            )
+            return RetrievalExecutionResult(documents=documents)
+        if isinstance(self._retriever, BaseRetriever):
+            documents = list(self._retriever.invoke(message))
+            logger.info(
+                "BaseRetriever invoke completed for scene=%s: documents=%s",
+                self._scene_definition.scene,
+                len(documents),
+            )
+            return RetrievalExecutionResult(documents=documents)
+        raise TypeError("Retriever does not support document retrieval.")
+
+
+class CitationMapper:
+    """负责将检索文档映射为 API citations 与回答上下文。"""
+
+    def citations_from_documents(self, documents: list[Document]) -> list[Citation]:
+        citations: list[Citation] = []
+        seen: set[tuple[str, str]] = set()
+
+        for rank, doc in enumerate(documents, start=1):
+            metadata = doc.metadata
+            namespace = str(metadata.get("namespace", "knowledge"))
+            citation_id = str(metadata.get("citation_id") or metadata.get("chunk_id") or "unknown")
+            key = self._build_citation_key(namespace=namespace, metadata=metadata, citation_id=citation_id)
+            if key in seen:
+                continue
+            seen.add(key)
+
+            score = metadata.get("score")
+            normalized_score = float(score) if isinstance(score, int | float) else None
+            snippet = truncate_snippet(doc.page_content)
+            if snippet:
+                citations.append(
+                    self._build_citation(
+                        index=len(citations) + 1,
+                        rank=rank,
+                        namespace=namespace,
+                        citation_id=citation_id,
+                        snippet=snippet,
+                        score=normalized_score,
+                        metadata=metadata,
+                    )
+                )
+
+        return citations
+
+    def build_answer_documents(self, documents: list[Document]) -> list[Document]:
+        citations = self.citations_from_documents(documents)
+        citation_map = {
+            self._build_citation_key(
+                namespace=str(document.metadata.get("namespace", "knowledge")),
+                metadata=document.metadata,
+                citation_id=str(
+                    document.metadata.get("citation_id") or document.metadata.get("chunk_id") or "unknown"
+                ),
+            ): citation
+            for document, citation in zip(documents, citations, strict=False)
+        }
+
+        formatted_documents: list[Document] = []
+        for document in documents:
+            namespace = str(document.metadata.get("namespace", "knowledge"))
+            citation_id = str(document.metadata.get("citation_id") or document.metadata.get("chunk_id") or "unknown")
+            key = self._build_citation_key(
+                namespace=namespace,
+                metadata=document.metadata,
+                citation_id=citation_id,
+            )
+            citation = citation_map.get(key)
+            if citation is None:
+                continue
+            header = (
+                f"[{citation.index}] "
+                f"来源类型：{citation.source_kind}；"
+                f"来源名称：{citation.source_name}；"
+                f"来源路径：{citation.source_path or 'N/A'}；"
+                f"分块：{citation.chunk_id or 'N/A'}"
+            )
+            formatted_documents.append(
+                document.model_copy(
+                    update={
+                        "page_content": f"{header}\n{document.page_content}",
+                    }
+                )
+            )
+        return formatted_documents or documents
+
+    def ensure_answer_citation_markers(self, answer: str, citations: list[Citation]) -> str:
+        if not citations:
+            return answer
+        if re.search(r"\[\d+\]", answer):
+            return answer
+        markers = "".join(f"[{citation.index}]" for citation in citations)
+        return f"{answer}\n\n参考来源：{markers}"
+
+    def _build_citation(
+        self,
+        *,
+        index: int,
+        rank: int,
+        namespace: str,
+        citation_id: str,
+        snippet: str,
+        score: float | None,
+        metadata: dict[str, Any],
+    ) -> Citation:
+        source_kind = self._resolve_source_kind(namespace=namespace, metadata=metadata)
+        source_path = self._resolve_source_path(metadata)
+        document_id = self._resolve_optional_str(metadata.get("document_id"))
+        chunk_id = self._resolve_optional_str(metadata.get("chunk_id")) or (
+            citation_id if source_kind == "document_chunk" else None
+        )
+        chunk_index = self._resolve_int(metadata.get("chunk_index"))
+        source_name = self._resolve_source_name(
+            source_kind=source_kind,
+            citation_id=citation_id,
+            source_path=source_path,
+            document_id=document_id,
+            metadata=metadata,
+        )
+        return Citation(
+            index=index,
+            citation_id=citation_id,
+            namespace=namespace,
+            source_kind=source_kind,
+            source_name=source_name,
+            source_path=source_path,
+            document_id=document_id,
+            chunk_id=chunk_id,
+            chunk_index=chunk_index,
+            snippet=snippet,
+            score=score,
+            vector_score=self._resolve_float(metadata.get("vector_score")),
+            keyword_score=self._resolve_float(metadata.get("keyword_score")),
+            vector_rank=self._resolve_int(metadata.get("vector_rank")),
+            keyword_rank=self._resolve_int(metadata.get("keyword_rank")),
+            matched_by=self._resolve_matched_by(metadata.get("matched_by")),
+            rank=rank,
+        )
+
+    def _build_citation_key(
+        self,
+        *,
+        namespace: str,
+        metadata: dict[str, Any],
+        citation_id: str,
+    ) -> tuple[str, str]:
+        chunk_id = self._resolve_optional_str(metadata.get("chunk_id"))
+        document_id = self._resolve_optional_str(metadata.get("document_id"))
+        return namespace, chunk_id or citation_id or document_id or "unknown"
+
+    def _resolve_source_kind(self, *, namespace: str, metadata: dict[str, Any]) -> str:
+        if metadata.get("chunk_id") is not None or metadata.get("document_id") is not None:
+            return "document_chunk"
+        source_kind_map = {
+            "products": "product",
+            "reviews": "review",
+            "orders": "order",
+            "inventory": "inventory",
+            "product_detail": "product_detail",
+            "documents": "document_chunk",
+        }
+        return source_kind_map.get(namespace, namespace)
+
+    def _resolve_source_name(
+        self,
+        *,
+        source_kind: str,
+        citation_id: str,
+        source_path: str | None,
+        document_id: str | None,
+        metadata: dict[str, Any],
+    ) -> str:
+        if source_kind == "document_chunk":
+            if source_path:
+                return Path(source_path).name
+            if document_id:
+                return document_id
+        for field_name in ("title", "name", "product_name", "order_id", "product_id", "review_id"):
+            resolved = self._resolve_optional_str(metadata.get(field_name))
+            if resolved:
+                return resolved
+        return citation_id
+
+    def _resolve_source_path(self, metadata: dict[str, Any]) -> str | None:
+        source_path = self._resolve_optional_str(metadata.get("source_path"))
+        if source_path:
+            return source_path
+        for field_name in ("product_id", "review_id", "order_id"):
+            resolved = self._resolve_optional_str(metadata.get(field_name))
+            if resolved:
+                return resolved
+        return None
+
+    def _resolve_optional_str(self, value: Any) -> str | None:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            return value
+        if isinstance(value, int | float):
+            return str(value)
+        return None
+
+    def _resolve_int(self, value: Any) -> int | None:
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, int):
+            return value
+        if isinstance(value, float) and value.is_integer():
+            return int(value)
+        if isinstance(value, str):
+            try:
+                return int(value)
+            except ValueError:
+                return None
+        return None
+
+    def _resolve_float(self, value: Any) -> float | None:
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, int | float):
+            return float(value)
+        if isinstance(value, str):
+            try:
+                return float(value)
+            except ValueError:
+                return None
+        return None
+
+    def _resolve_matched_by(self, value: Any) -> list[str]:
+        if not isinstance(value, list):
+            return []
+        return [str(item) for item in value if isinstance(item, str) and item]
 
 
 class SceneRegistry:
@@ -124,15 +407,11 @@ class ChatService:
             system_prompt=scene_definition.system_prompt
         )
         self._retriever = scene_definition.build_retriever()
-        registered_retrieval_tools = getattr(self._retriever, "tools", None)
-        if isinstance(registered_retrieval_tools, dict):
-            self._retrieval_tool_names = set(registered_retrieval_tools.keys())
-        else:
-            self._retrieval_tool_names = {
-                tool.name
-                for tool in scene_definition.build_tools()
-                if hasattr(tool, "name")
-            }
+        self._retrieval_executor = RetrievalExecutor(
+            scene_definition=scene_definition,
+            retriever=self._retriever,
+        )
+        self._citation_mapper = CitationMapper()
 
     def chat(self, payload: ChatRequest) -> ChatResponse:
         """执行一次完整对话流程，并返回统一结构。"""
@@ -167,11 +446,11 @@ class ChatService:
         )
         history_text = self._format_history(history_turns)
 
-        documents = self._retrieve_documents(
+        documents = self._retrieval_executor.retrieve(
             payload.message,
             mounted_knowledge_sources=mounted_knowledge_sources,
-        )
-        citations = self._citations_from_documents(documents)
+        ).documents
+        citations = self._citation_mapper.citations_from_documents(documents)
         knowledge_used = len(citations) > 0
         scene_metadata = self._scene_metadata()
 
@@ -242,95 +521,6 @@ class ChatService:
             )
         self.session_store.touch_session(session_id=session_id, now=timestamp)
 
-    def _retrieve_documents(
-        self,
-        message: str,
-        *,
-        mounted_knowledge_sources: tuple[str, ...],
-    ) -> list[Document]:
-        """兼容普通 retriever 与 agentic retriever 的检索输出。"""
-        candidate_tools = self._resolve_candidate_tools(mounted_knowledge_sources)
-        logger.info(
-            "Starting retrieval for scene=%s: message=%r, mounted_knowledge_sources=%s, candidate_tools=%s",
-            self.scene_definition.scene,
-            message,
-            mounted_knowledge_sources,
-            candidate_tools,
-        )
-        if hasattr(self._retriever, "retrieve_with_trace"):
-            outcome: AgenticRetrievalOutcome = self._retriever.retrieve_with_trace(  # type: ignore[attr-defined]
-                message,
-                candidate_tools=candidate_tools,
-            )
-            logger.info(
-                "Agentic retrieval completed for scene=%s: exit_reason=%s, rounds=%s, documents=%s",
-                self.scene_definition.scene,
-                outcome.exit_reason,
-                len(outcome.rounds),
-                len(outcome.documents),
-            )
-            return list(outcome.documents)
-        if hasattr(self._retriever, "search"):
-            documents = list(self._retriever.search(query=message))  # type: ignore[attr-defined]
-            logger.info(
-                "Retriever search completed for scene=%s: documents=%s",
-                self.scene_definition.scene,
-                len(documents),
-            )
-            return documents
-        if isinstance(self._retriever, BaseRetriever):
-            documents = list(self._retriever.invoke(message))
-            logger.info(
-                "BaseRetriever invoke completed for scene=%s: documents=%s",
-                self.scene_definition.scene,
-                len(documents),
-            )
-            return documents
-        raise TypeError("Retriever does not support document retrieval.")
-
-    def _resolve_candidate_tools(
-        self,
-        mounted_knowledge_sources: tuple[str, ...],
-    ) -> tuple[str, ...]:
-        """按会话挂载源组装当前可用的候选检索工具。"""
-        tool_names: list[str] = []
-        seen: set[str] = set()
-
-        if "documents" in mounted_knowledge_sources:
-            self._append_candidate_tool(tool_names, seen, "knowledge_document_search")
-
-        if "ecommerce" in mounted_knowledge_sources:
-            for tool_name in (
-                "product_semantic_search",
-                "review_semantic_search",
-                "order_semantic_search",
-                "inventory_lookup",
-                "product_detail_lookup",
-            ):
-                self._append_candidate_tool(tool_names, seen, tool_name)
-
-        if not tool_names:
-            raise ValueError("No retrieval tools available for mounted knowledge sources.")
-        logger.debug(
-            "Resolved candidate retrieval tools for scene=%s: mounted_knowledge_sources=%s, tool_names=%s",
-            self.scene_definition.scene,
-            mounted_knowledge_sources,
-            tool_names,
-        )
-        return tuple(tool_names)
-
-    def _append_candidate_tool(
-        self,
-        tool_names: list[str],
-        seen: set[str],
-        tool_name: str,
-    ) -> None:
-        """只在当前场景已注册该工具时，才加入候选工具列表。"""
-        if tool_name in seen or tool_name not in self._retrieval_tool_names:
-            return
-        seen.add(tool_name)
-        tool_names.append(tool_name)
-
     def _scene_metadata(self) -> SceneMetadata:
         """从场景定义中提取响应元数据。"""
         default_agent = self.scene_definition.metadata.get("default_agent")
@@ -338,38 +528,6 @@ class ChatService:
             scene=self.scene_definition.scene,
             agent=str(default_agent) if isinstance(default_agent, str) else None,
         )
-
-    def _citations_from_documents(self, documents: list[Document]) -> list[Citation]:
-        """从检索文档中提取并去重引用信息。"""
-        citations: list[Citation] = []
-        seen: set[tuple[str, str]] = set()
-
-        for rank, doc in enumerate(documents, start=1):
-            metadata = doc.metadata
-            namespace = str(metadata.get("namespace", "knowledge"))
-            citation_id = str(metadata.get("citation_id") or metadata.get("chunk_id") or "unknown")
-            key = self._build_citation_key(namespace=namespace, metadata=metadata, citation_id=citation_id)
-            if key in seen:
-                continue
-            seen.add(key)
-
-            score = metadata.get("score")
-            normalized_score = float(score) if isinstance(score, int | float) else None
-            snippet = truncate_snippet(doc.page_content)
-            if snippet:
-                citations.append(
-                    self._build_citation(
-                        index=len(citations) + 1,
-                        rank=rank,
-                        namespace=namespace,
-                        citation_id=citation_id,
-                        snippet=snippet,
-                        score=normalized_score,
-                        metadata=metadata,
-                    )
-                )
-
-        return citations
 
     def _invoke_chain_with_docs(
         self,
@@ -385,7 +543,7 @@ class ChatService:
         try:
             llm = self.model.build_chat_model_for_complexity(complexity)
             combine_docs_chain = create_stuff_documents_chain(llm=llm, prompt=self._rag_answer_template)
-            answer_documents = self._build_answer_documents(documents)
+            answer_documents = self._citation_mapper.build_answer_documents(documents)
             result = combine_docs_chain.invoke(
                 {
                     "context": answer_documents,
@@ -410,9 +568,9 @@ class ChatService:
                 request_id=request_id,
             )
 
-        answer_citations = self._citations_from_documents(documents)
+        answer_citations = self._citation_mapper.citations_from_documents(documents)
         final_citations = answer_citations if answer_citations else fallback_citations
-        final_answer = self._ensure_answer_citation_markers(answer, final_citations)
+        final_answer = self._citation_mapper.ensure_answer_citation_markers(answer, final_citations)
         return final_answer, final_citations
 
     def _format_history(self, history_turns: list[SessionTurn]) -> str:
@@ -425,207 +583,6 @@ class ChatService:
             lines.append(f"User: {turn.user_message}")
             lines.append(f"Assistant: {turn.assistant_answer}")
         return "\n".join(lines)
-
-    def _build_answer_documents(self, documents: list[Document]) -> list[Document]:
-        """把证据块改写为带编号的上下文，方便模型直接引用。"""
-        citations = self._citations_from_documents(documents)
-        citation_map = {
-            self._build_citation_key(
-                namespace=str(document.metadata.get("namespace", "knowledge")),
-                metadata=document.metadata,
-                citation_id=str(
-                    document.metadata.get("citation_id") or document.metadata.get("chunk_id") or "unknown"
-                ),
-            ): citation
-            for document, citation in zip(documents, citations, strict=False)
-        }
-
-        formatted_documents: list[Document] = []
-        for document in documents:
-            namespace = str(document.metadata.get("namespace", "knowledge"))
-            citation_id = str(document.metadata.get("citation_id") or document.metadata.get("chunk_id") or "unknown")
-            key = self._build_citation_key(
-                namespace=namespace,
-                metadata=document.metadata,
-                citation_id=citation_id,
-            )
-            citation = citation_map.get(key)
-            if citation is None:
-                continue
-            header = (
-                f"[{citation.index}] "
-                f"来源类型：{citation.source_kind}；"
-                f"来源名称：{citation.source_name}；"
-                f"来源路径：{citation.source_path or 'N/A'}；"
-                f"分块：{citation.chunk_id or 'N/A'}"
-            )
-            formatted_documents.append(
-                document.model_copy(
-                    update={
-                        "page_content": f"{header}\n{document.page_content}",
-                    }
-                )
-            )
-        return formatted_documents or documents
-
-    def _build_citation(
-        self,
-        *,
-        index: int,
-        rank: int,
-        namespace: str,
-        citation_id: str,
-        snippet: str,
-        score: float | None,
-        metadata: dict[str, Any],
-    ) -> Citation:
-        """把不同来源的 metadata 统一映射为 Citation。"""
-        source_kind = self._resolve_source_kind(namespace=namespace, metadata=metadata)
-        source_path = self._resolve_source_path(metadata)
-        document_id = self._resolve_optional_str(metadata.get("document_id"))
-        chunk_id = self._resolve_optional_str(metadata.get("chunk_id")) or (
-            citation_id if source_kind == "document_chunk" else None
-        )
-        chunk_index = self._resolve_int(metadata.get("chunk_index"))
-        source_name = self._resolve_source_name(
-            source_kind=source_kind,
-            citation_id=citation_id,
-            source_path=source_path,
-            document_id=document_id,
-            metadata=metadata,
-        )
-        return Citation(
-            index=index,
-            citation_id=citation_id,
-            namespace=namespace,
-            source_kind=source_kind,
-            source_name=source_name,
-            source_path=source_path,
-            document_id=document_id,
-            chunk_id=chunk_id,
-            chunk_index=chunk_index,
-            snippet=snippet,
-            score=score,
-            vector_score=self._resolve_float(metadata.get("vector_score")),
-            keyword_score=self._resolve_float(metadata.get("keyword_score")),
-            vector_rank=self._resolve_int(metadata.get("vector_rank")),
-            keyword_rank=self._resolve_int(metadata.get("keyword_rank")),
-            matched_by=self._resolve_matched_by(metadata.get("matched_by")),
-            rank=rank,
-        )
-
-    def _build_citation_key(
-        self,
-        *,
-        namespace: str,
-        metadata: dict[str, Any],
-        citation_id: str,
-    ) -> tuple[str, str]:
-        """为 citation 去重生成稳定键。"""
-        chunk_id = self._resolve_optional_str(metadata.get("chunk_id"))
-        document_id = self._resolve_optional_str(metadata.get("document_id"))
-        return namespace, chunk_id or citation_id or document_id or "unknown"
-
-    def _resolve_source_kind(self, *, namespace: str, metadata: dict[str, Any]) -> str:
-        """根据 metadata 判断引用来源类型。"""
-        if metadata.get("chunk_id") is not None or metadata.get("document_id") is not None:
-            return "document_chunk"
-        source_kind_map = {
-            "products": "product",
-            "reviews": "review",
-            "orders": "order",
-            "inventory": "inventory",
-            "product_detail": "product_detail",
-            "documents": "document_chunk",
-        }
-        return source_kind_map.get(namespace, namespace)
-
-    def _resolve_source_name(
-        self,
-        *,
-        source_kind: str,
-        citation_id: str,
-        source_path: str | None,
-        document_id: str | None,
-        metadata: dict[str, Any],
-    ) -> str:
-        """生成适合前端展示的来源名称。"""
-        if source_kind == "document_chunk":
-            if source_path:
-                return Path(source_path).name
-            if document_id:
-                return document_id
-        for field_name in ("title", "name", "product_name", "order_id", "product_id", "review_id"):
-            resolved = self._resolve_optional_str(metadata.get(field_name))
-            if resolved:
-                return resolved
-        return citation_id
-
-    def _resolve_source_path(self, metadata: dict[str, Any]) -> str | None:
-        """提取来源路径。"""
-        source_path = self._resolve_optional_str(metadata.get("source_path"))
-        if source_path:
-            return source_path
-        for field_name in ("product_id", "review_id", "order_id"):
-            resolved = self._resolve_optional_str(metadata.get(field_name))
-            if resolved:
-                return resolved
-        return None
-
-    def _ensure_answer_citation_markers(self, answer: str, citations: list[Citation]) -> str:
-        """确保最终回答里能看到与 citations 对应的编号。"""
-        if not citations:
-            return answer
-        if re.search(r"\[\d+\]", answer):
-            return answer
-        markers = "".join(f"[{citation.index}]" for citation in citations)
-        return f"{answer}\n\n参考来源：{markers}"
-
-    def _resolve_optional_str(self, value: Any) -> str | None:
-        """把可选标量安全转成字符串。"""
-        if value is None:
-            return None
-        if isinstance(value, str):
-            return value
-        if isinstance(value, int | float):
-            return str(value)
-        return None
-
-    def _resolve_int(self, value: Any) -> int | None:
-        """把数字安全转成 int。"""
-        if isinstance(value, bool):
-            return None
-        if isinstance(value, int):
-            return value
-        if isinstance(value, float) and value.is_integer():
-            return int(value)
-        if isinstance(value, str):
-            try:
-                return int(value)
-            except ValueError:
-                return None
-        return None
-
-    def _resolve_float(self, value: Any) -> float | None:
-        """把数字安全转成 float。"""
-        if isinstance(value, bool):
-            return None
-        if isinstance(value, int | float):
-            return float(value)
-        if isinstance(value, str):
-            try:
-                return float(value)
-            except ValueError:
-                return None
-        return None
-
-    def _resolve_matched_by(self, value: Any) -> list[str]:
-        """把 matched_by 归一化为字符串列表。"""
-        if not isinstance(value, list):
-            return []
-        return [str(item) for item in value if isinstance(item, str) and item]
-
-
 
 class ActiveSceneChatService:
     """统一 `/chat` 入口，通过会话绑定场景分发请求。"""
@@ -738,21 +695,20 @@ def build_default_scene_registry(
     app_settings: AppSettings | None = None,
     knowledge_service: object | None = None,
     document_retrieval_service: DocumentRetrievalService | None = None,
+    generic_business_extensions: tuple[GenericAssistantBusinessExtension, ...] | None = None,
+    include_default_business_extensions: bool = True,
 ) -> SceneRegistry:
     """构建默认场景注册表。"""
     resolved_settings = app_settings or settings
-    definitions = [
-        build_generic_assistant_scene_definition(
+    definitions = list(
+        build_default_scene_definitions(
             app_settings=resolved_settings,
             knowledge_service=knowledge_service,
             document_retrieval_service=document_retrieval_service,
-        ),
-        build_ecommerce_scene_definition(
-            app_settings=resolved_settings,
-            knowledge_service=knowledge_service,
-            document_retrieval_service=document_retrieval_service,
-        ),
-    ]
+            generic_business_extensions=generic_business_extensions,
+            include_default_business_extensions=include_default_business_extensions,
+        )
+    )
     return SceneRegistry(definitions=definitions, default_scene=resolved_settings.app.active_scene)
 
 
@@ -760,6 +716,8 @@ def create_chat_service(
     app_settings: AppSettings | None = None,
     knowledge_service: object | None = None,
     document_retrieval_service: DocumentRetrievalService | None = None,
+    generic_business_extensions: tuple[GenericAssistantBusinessExtension, ...] | None = None,
+    include_default_business_extensions: bool = True,
     session_store: SQLiteSessionStore | None = None,
     context_builder: PromptContextBuilder | None = None,
     model: ModelClient | None = None,
@@ -770,6 +728,8 @@ def create_chat_service(
         app_settings=resolved_settings,
         knowledge_service=knowledge_service,
         document_retrieval_service=document_retrieval_service,
+        generic_business_extensions=generic_business_extensions,
+        include_default_business_extensions=include_default_business_extensions,
     )
     return ActiveSceneChatService(
         scene_registry=scene_registry,

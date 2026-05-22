@@ -32,8 +32,16 @@ class SceneDefinition:
     description: str
     build_retriever: Callable[[], BaseRetriever]
     build_tools: Callable[[], tuple[BaseTool, ...]]
+    candidate_retrieval_tools_resolver: Callable[[tuple[str, ...]], tuple[str, ...]]
     system_prompt: str
     fallback_policy: SceneFallbackPolicy
     infer_complexity: Callable[[str], TaskComplexity]
     bootstrap: Callable[[], SceneBootstrapResult] | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+
+    def resolve_candidate_retrieval_tools(
+        self,
+        mounted_knowledge_sources: tuple[str, ...],
+    ) -> tuple[str, ...]:
+        """根据当前会话挂载知识源解析可用的候选检索工具。"""
+        return self.candidate_retrieval_tools_resolver(mounted_knowledge_sources)

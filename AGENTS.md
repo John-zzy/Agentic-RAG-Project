@@ -19,6 +19,7 @@
 - 场景定义与 prompt：
   - `backend/scenes/generic_assistant/definition.py`
   - `backend/scenes/ecommerce/definition.py`（可选演示场景，不是平台主线）
+  - `backend/scenes/registry.py`（默认 scene 与 business extension 组合装配入口）
 - Agentic Retrieval：
   - `backend/platform/rag/agentic.py`
   - `backend/platform/rag/core.py`
@@ -106,6 +107,7 @@
 
 - 主看 `backend/scenes/generic_assistant/definition.py`
 - 演示场景看 `backend/scenes/ecommerce/definition.py`
+- 默认场景组合装配看 `backend/scenes/registry.py`
 - 抽象定义在 `backend/scenes/base.py`
 
 ## 架构边界
@@ -131,6 +133,8 @@
 - 新会话默认挂载知识源是 `["documents"]`，可在 `POST /sessions` 里通过 `mounted_knowledge_sources` 显式扩展到 `["documents", "ecommerce"]`。
 - 日常切换场景优先走会话级 API 或前端选择，不要把改环境变量当主流程。
 - `scene` 负责 prompt 与运行时风格，知识源是否可用由会话挂载配置决定，不要再把二者视为同一个开关。
+- candidate retrieval tools 由 `SceneDefinition` 根据 `mounted_knowledge_sources` 解析；不要再在 runtime 中硬编码 knowledge source 到 tool name 的映射。
+- `generic_assistant` 持有默认 docs-first 主链；`ecommerce` 等业务场景通过 business extension 接入，不要再让 generic 反向依赖业务默认 judge / rewriter / tool builder。
 
 ### 数据位置
 

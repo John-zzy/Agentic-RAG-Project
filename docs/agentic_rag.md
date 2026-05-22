@@ -103,17 +103,12 @@ flowchart TD
 
 则 Agentic RAG 在文档检索之外，还可以按需使用电商工具。
 
-运行时组装规则位于 `backend/application/runtime/service.py`：
+候选工具不再由 runtime 维护硬编码映射，而是由当前 `SceneDefinition` 根据 `mounted_knowledge_sources` 解析：
 
-- 挂载 `documents` 时，加入 `knowledge_document_search`
-- 挂载 `ecommerce` 时，加入：
-  - `product_semantic_search`
-  - `review_semantic_search`
-  - `order_semantic_search`
-  - `inventory_lookup`
-  - `product_detail_lookup`
-
-未挂载 `ecommerce` 时，这些工具不会进入候选集合。
+- runtime 只读取 session 的 `mounted_knowledge_sources`
+- runtime 调用当前 scene definition 的 candidate tool resolver
+- generic scene 默认暴露 `knowledge_document_search`
+- 只有 scene 已注册业务扩展且当前会话挂载了对应 knowledge source 时，扩展工具才会进入候选集合
 
 ## 5. 首轮为什么默认先查文档
 
@@ -134,7 +129,7 @@ flowchart TD
 - `product/review/order semantic search` 用于语义召回
 - `inventory_lookup` 和 `product_detail_lookup` 用于结构化精查
 
-当前实现中，`generic_assistant` 和 `ecommerce` 两个场景的 `AgenticRetriever` 都把默认首轮工具设为：
+当前实现中，`generic_assistant` 和 `ecommerce` 两个场景都复用 generic docs-first 主链，默认首轮工具都是：
 
 ```text
 knowledge_document_search
@@ -175,13 +170,13 @@ flowchart TD
 
 ### 6.1 文档轮的决策
 
-当前 `EcommerceSufficiencyJudge` 的核心策略是“文档优先、按需切换”：
+当前 docs-first 主链由 `generic_assistant` 自己持有默认 sufficiency judge 和 query rewriter：
 
-- 如果当前问题更像文档问答，文档命中后可以直接 `finish`
-- 如果当前问题有明显电商意图，且会话允许用电商工具，则从文档轮切到合适的电商工具
-- 如果文档没命中，且会话允许电商工具，也可以直接转入电商检索
+- 如果当前问题更像文档问答，且文档证据已经足够，则直接 `finish`
+- 只有当 generic 默认判断认为证据不足时，才会按扩展顺序询问已挂载 business extension 是否接管
+- `ecommerce` 现在以 business extension 的形式参与 handoff 和 follow-up routing，而不是 generic 默认路由宿主
 
-也就是说，文档首轮并不意味着必须只看文档，它只是把“文档证据优先”作为默认主线。
+也就是说，文档首轮并不意味着必须只看文档，但“是否切业务知识源”的决定权已经收回到 generic scene extension contract。
 
 ### 6.2 switch_tool
 
@@ -356,9 +351,10 @@ sequenceDiagram
 
 - `build_generic_assistant_scene_definition()`
 - `_build_generic_agentic_retriever()`
-- `create_agentic_knowledge_retriever()`
-- `EcommerceSufficiencyJudge`
-- `EcommerceQueryRewriter`
+- `build_ecommerce_scene_definition()`
+- `GenericAssistantSufficiencyJudge`
+- `GenericAssistantQueryRewriter`
+- `EcommerceBusinessExtension`
 
 ### 具体 retrieval tools
 
