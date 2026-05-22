@@ -15,186 +15,74 @@
 
 ## 项目概览
 
-当前后端提供统一的聊天、会话、文件和知识文档接口，并支持基于场景的能力编排。
+当前项目已经具备一个可运行的多场景 RAG 后端，当前核心能力如下：
 
-核心能力包括：
+- 统一 `/chat` 入口，按会话绑定 `scene` 处理请求
+- 会话创建、查询、删除与 `mounted_knowledge_sources` 知识源挂载
+- 本地知识文件上传、预处理预览、正式入库、重处理与重切块
+- 文档切块、索引、语义检索与 `documents/chunks` 的 `Hybrid Search`
+- Agentic Retrieval 编排，支持“文档优先 + 按需切换场景工具”
+- 结构化 `citations`、回答正文引用编号与 session `retrieval_snippets` 落库
+- `Chroma` / `Elasticsearch` 可切换向量存储，以及基于 `SQLite` 的会话记忆
+- 内置 `generic_assistant` 与 `ecommerce` 两个场景，用于验证平台能力与场景扩展方式
 
-- 统一 `/chat` 入口，按会话绑定场景处理请求
-- 会话创建、查询、删除与场景选择，并支持会话级 `mounted_knowledge_sources`
-- 本地知识文件上传、下载、删除、预处理预览与索引管理
-- 文档清洗、规则化处理、版本化切块与向量检索
-- 文档知识 `Hybrid Search`，组合语义召回、BM25 关键词召回与融合排序
-- `platform.retrieval` 作为 `knowledge` 与 `rag` 共享的中立检索底座，承接共享向量文档模型、默认 hashing embedding / tokenizer 与读侧 repository 契约
-- Agentic RAG 的“文档优先 + 按需切电商”检索编排
-- 结构化 citations 与回答正文 `[1]` 编号引用
-- `citations` 与 session `retrieval_snippets` 透传 `vector_score`、`keyword_score`、`vector_rank`、`keyword_rank`、`matched_by`
-- `Chroma` 与 `Elasticsearch` 两种向量存储实现
-- 基于 `SQLite` 的会话记忆
+当前定位更偏“场景化 RAG / Agent Runtime 底座”，还不是完整产品。
 
-当前内置场景：
+## 功能版本规划及功能优先级
 
-- `generic_assistant`：通用助手场景，默认走文档知识与会话记忆
-- `ecommerce`：电商演示场景，包含商品、评价、订单、库存等检索与工具能力；是否可用仍受会话挂载知识源控制
+下面的规划按“先补主链路，再补工程化，最后补高阶能力”的顺序推进。每个版本下的功能项全部勾选完成后，表示该版本目标基本达成。
 
-## 按功能看当前状态
+### V0：当前已完成
 
-### 1. 架构与场景编排
+目标：形成可运行、可演示、可扩展的 RAG 基础版本。
 
-已支持：
+- [x] 三层后端结构：`platform / application / scenes`
+- [x] 统一聊天、会话、文件、知识文档 API
+- [x] 文档知识入库与 RAG 主链路
+- [x] 文档 `Hybrid Search`
+- [x] 会话级场景绑定与知识源挂载
+- [x] `generic_assistant` 与 `ecommerce` 两个示例场景
+- [x] 调试页、知识库管理页、基础测试与设计文档
 
-- 采用 `platform / application / scenes` 三层结构，平台能力、运行时装配和场景实现边界比较清晰。
-- 已内置 `generic_assistant` 与 `ecommerce` 两个场景，具备“通用能力 + 场景扩展”的基本形态。
-- 支持按会话绑定场景处理请求，能够作为多场景智能助手的运行时入口。
+### V1：最高优先级
 
-当前缺口：
+目标：补齐 Agent 主链路，让系统从“可运行的 RAG”升级为“可持续扩展的 Agent Runtime”。
 
-- 还没有显式的工作流编排机制，当前更偏固定 RAG 流程而不是可配置流程。
-- 还缺少多 Agent 分工协作、结果汇总和冲突处理机制。
-- 还缺少插件协议、标准化扩展接口和 Agent 开发套件。
+- [ ] 统一 Tool Registry、函数调用协议和工具路由
+- [ ] Planning、多步执行、查询改写、自我修正等 Agent 决策链
+- [ ] 任务状态机、中间态管理、超时控制、失败恢复和断点续跑
+- [ ] RAG 效果增强：ReRank、引用溯源完善、基础评测集与评测脚手架
+- [ ] `products/reviews` 这类文本型知识是否补关键词召回 / Hybrid Search，按收益评估后再推进
+- [ ] `orders/inventory/detail` 等结构化能力继续收敛为 structured tools + Agentic Retrieval 编排
 
-对外可讲：
+### V2：第二优先级
 
-- 三层架构适合强调“平台能力与业务场景解耦”。
-- 会话级场景路由适合强调“不是单一 Prompt Demo，而是场景化容器”。
+目标：补强工程化能力，使项目具备更稳定的对外演示与部署基础。
 
-### 2. 对话与会话能力
+- [ ] SSE / WebSocket 流式输出
+- [ ] 结构化日志、核心指标、Trace 链路
+- [ ] 限流、熔断、降级、幂等与智能重试
+- [ ] 登录鉴权、角色权限、租户隔离与操作审计
+- [ ] 异步任务队列、调度执行与长期任务框架
+- [ ] Docker、CI/CD、环境隔离与部署文档
 
-已支持：
+### V3：第三优先级
 
-- 提供统一 `/chat` 入口，按会话上下文处理对话请求。
-- 支持会话创建、查询、删除，以及会话级场景选择。
-- 已基于 `SQLite` 提供基础会话记忆与聊天上下文持久化。
+目标：补齐高阶 Agent 能力和产品化能力。
 
-当前缺口：
+- [ ] 可配置工作流编排，而不只依赖固定代码流程
+- [ ] Multi-Agent 分工协作、结果汇总与冲突处理
+- [ ] 插件协议与标准化扩展接口
+- [ ] 更完整的知识治理能力，如标签、版本、命中分析、分库权限
+- [ ] 正式产品界面替代当前调试页
+- [ ] 多模态输入与检索
+- [ ] 评测样本、错误案例与版本对比闭环
 
-- 还缺少显式的任务拆解、步骤规划和多步执行能力。
-- 还缺少摘要记忆、长期记忆、上下文压缩等更完整的 Memory 体系。
-- 还缺少 `SSE` / `WebSocket` 流式返回与长链路消息分发能力。
+### 推荐开发顺序
 
-对外可讲：
-
-- 当前实现已经足够支撑一个可运行的多轮对话后端。
-- 会话记忆已落地，适合包装成 Memory 的基础版实现。
-
-### 3. 知识库与 RAG 能力
-
-已支持：
-
-- 支持本地知识文件上传、下载、删除与索引管理。
-- 支持上传后预处理预览、规则选择、正式入库、重处理和重切块。
-- 支持文档切块、索引重建、向量检索和版本切换，RAG 主链路已经跑通。
-- `documents/chunks` 已落地 `Hybrid Search`，由 `platform.rag` 统一承接文档语义召回、BM25 关键词召回与融合排序。
-- `platform.knowledge` 现在只负责知识资产管理、provider 实现和 repository 工厂输出，`platform.rag` 不再直接依赖 `platform.knowledge.base.*`。
-- 向量存储已支持 `Chroma` 和 `Elasticsearch` 两种实现。
-- 已补充 `agentic_rag.md`，说明多轮召回、工具切换、Query Rewrite 和证据聚合思路。
-
-当前缺口：
-
-- 文档 `Hybrid Search` 已完成，但 `products/reviews/orders` 仍未接入关键词召回与 Hybrid Search。
-- `knowledge` 与 `rag` 的业务入口已拆开，但底层 provider 仍以复合 `VectorStore` 多接口方式复用，尚未达到完全物理解耦。
-- 还缺少 `ReRank`、缓存、增量更新等进一步的工程化 RAG 优化能力。
-- 还缺少评测集、效果指标和可重复执行的 Evaluation Harness。
-- 还缺少错误样本沉淀、版本对比和数据回放形成的数据闭环。
-
-对外可讲：
-
-- 文件上传、切块、索引、检索、回答生成已经形成完整闭环，适合讲“从 0 到可运行系统”。
-- 向量存储可切换，适合讲存储层可插拔设计。
-
-### 4. 工具与 Agent Runtime
-
-已支持：
-
-- 场景层已经有商品、评价、订单、库存等能力入口，具备继续演进为 Tool Use 的基础。
-- 当前项目结构允许把工具、检索和场景逻辑继续向运行时统一收敛。
-
-当前缺口：
-
-- 还缺少统一 `Tool Registry`、函数调用协议和工具路由策略。
-- 还缺少任务状态机、中间态存储、超时控制、失败恢复和断点续跑机制。
-- 还缺少 Reflection、自我修正、重试决策和错误归因链路。
-- 还缺少异步任务队列、调度执行和长期任务管理能力。
-
-对外可讲：
-
-- 电商场景中的能力入口说明项目已经具备 Tool Use 的扩展落点。
-- 当前仓库更像 Agent Runtime 的起点，而不是一次性问答 Demo。
-
-### 5. API、调试页面与测试
-
-已支持：
-
-- 后端已暴露聊天、会话、文件、知识文档、健康检查等统一接口。
-- 提供 API 调试页和知识库管理页，便于本地联调和演示。
-- 已有后端测试目录和 `pytest` 运行方式说明。
-
-当前缺口：
-
-- 目前前端仍以调试页为主，还不是完整产品化界面。
-- 还缺少更系统的自动化评测与端到端验证能力。
-
-对外可讲：
-
-- 本地可运行、可调试、可演示，适合做面试或方案展示时的现场演示。
-
-### 6. 工程化与生产能力
-
-已支持：
-
-- 已有基础运行说明、环境变量示例和向量存储切换方式。
-- 已具备本地启动后端与切换 `Elasticsearch` 的基本操作路径。
-
-当前缺口：
-
-- 还缺少结构化日志、指标监控、Trace 链路和关键节点埋点。
-- 还缺少限流、熔断、降级、幂等和智能重试等高可用机制。
-- 还缺少账号体系、权限边界、操作审计和敏感工具隔离能力。
-- 还缺少真实业务 API、数据库或第三方系统接入形成业务闭环。
-- 还缺少 `Docker`、`CI/CD`、环境隔离和线上部署说明。
-- 还缺少图片、语音、表格等多模态输入处理能力。
-
-对外可讲：
-
-- 这个仓库已经有清晰的工程骨架，适合作为继续补齐生产能力的底座。
-
-## 优先演进方向
-
-### P0：优先补齐 Agent 主链路
-
-- [ ] 在对话层补充 Planning、多步执行和更完整的 Memory 体系。
-- [ ] 在工具层补充统一 Tool Registry、函数调用协议和工具路由。
-- [ ] 在运行时补充状态机、中间态管理、超时控制、失败恢复和断点续跑。
-- [ ] 在 RAG 层继续补强 Query Rewrite、ReRank、引用溯源和效果评测，并把 `products/reviews/orders` 的 Hybrid Search 也统一收口到 `platform.rag`。
-- [ ] 在决策层补充 Reflection、错误归因和自我修正链路。
-
-### P1：补强工程化与可上线能力
-
-- [ ] 支持 SSE 或 WebSocket 流式输出与长链路消息分发。
-- [ ] 补充结构化日志、核心指标监控和 Trace 链路追踪。
-- [ ] 增加限流、熔断、降级、幂等和智能重试机制。
-- [ ] 增加登录鉴权、角色权限、租户隔离和操作审计能力。
-- [ ] 补充异步任务队列、调度执行和长期任务执行框架。
-- [ ] 接入真实业务 API、数据库或第三方系统形成业务闭环。
-- [ ] 补充 Docker、CI/CD、环境隔离和线上部署文档。
-
-### P2：补齐高阶 Agent 与产品化能力
-
-- [ ] 增加 Multi-Agent 分工协作、结果汇总和冲突处理机制。
-- [ ] 支持可配置工作流编排，而不只依赖固定代码流程。
-- [ ] 抽象插件协议与标准化工具接口，提升扩展性。
-- [ ] 把调试页升级为可演示完整链路的正式产品界面。
-- [ ] 支持图片、语音、表格等多模态输入与检索。
-- [ ] 增加标签、版本、命中分析和分库权限等知识治理能力。
-- [ ] 沉淀评测样本、错误案例和版本对比，形成持续优化闭环。
-
-## 当前最适合对外讲的亮点
-
-- [x] 三层架构已经清晰拆分，适合讲平台能力和业务场景解耦设计。
-- [x] 已支持会话级场景切换，能够体现多场景智能助手的运行时路由能力。
-- [x] 已跑通知识文件上传、切块、索引、检索和回答生成的基础 RAG 链路。
-- [x] 已支持 `Chroma` 和 `Elasticsearch` 两种向量存储，具备一定的存储层可插拔能力。
-- [x] 已有 `generic_assistant` 与 `ecommerce` 两个场景，具备继续扩展垂直业务场景的基础。
-- [x] 已提供调试页、知识库管理页和设计文档，便于做本地演示与面试讲解。
+1. `V1`：先补 Agent 主链路
+2. `V2`：再补工程化与稳定性
+3. `V3`：最后补高阶 Agent 与产品化
 
 ## 设计文档
 
@@ -204,64 +92,42 @@
 
 ## 系统架构
 
-后端采用三层结构，每层职责明确：
+后端采用 `platform / application / scenes` 三层结构：
 
 ### 1. Platform
 
-`backend/platform` 提供与具体场景无关的底层能力，包括：
+`backend/platform` 提供与具体场景无关的底层能力，主要包括：
 
 - 配置加载与模型路由
 - LLM 客户端封装
 - 会话存储与聊天上下文
 - 通用知识文档处理
 - RAG 检索核心协议与实现
+- `platform/retrieval` 作为 `knowledge` 与 `rag` 共享的中立检索底座
 
-其中 `backend/platform/retrieval` 作为 `knowledge` 与 `rag` 共享的中立检索底座，承接：
+当前关键边界：
 
-- 共享 `VectorStoreDocument`、`VectorSearchResult`、`VectorStoreHealth`
-- 默认 hashing embedder / tokenizer
-- 文档分块向量查询、活跃 chunk 文本源、命名空间级语义检索等读侧 repository 契约
-
-其中 `backend/platform/knowledge` 现在已经把原来的聚合式文档服务拆成更小的职责单元：
-
-- `base/store.py`
-  - 保留 `KnowledgeRetriever` 和 `KnowledgeDocumentRepository` 两套接口
-  - provider 可以同时实现两套接口，但调用方按职责分别依赖
-- `processing/`
-  - 负责标准化、规则清洗、预处理预览、处理统计和 provenance 元数据生成
-- `documents/application_service.py`
-  - 负责预处理预览、注册文档、删除文档、重处理和重切块这些写流程
-- `documents/query_service.py`
-  - 负责文档列表、文档详情、文件索引状态聚合
-- `documents/publisher.py`
-  - 负责新版本发布、旧版本失活、失败恢复和清理新分块
-- `documents/mappers.py`
-  - 负责把仓储记录转换成摘要、详情和操作结果
-- `backend/platform/rag` 现在已经承接文档检索统一入口：
-  - `DocumentRetrievalService` 组合 `DocumentSemanticRetriever`、`DocumentKeywordRetriever`、`HybridFusionRanker`
-  - scene/tool 侧文档检索统一通过这里进入，不再直接调用 `knowledge` 的文档召回业务 API
-  - 一期 Hybrid Search 目前只覆盖 `documents/chunks`，`products/reviews/orders` 后续扩展也必须继续放在 `platform.rag`
-  - 后续如果 `products/reviews/orders` 增加关键词召回、Hybrid Search 或 rerank，必须复用 `platform.retrieval + platform.rag` 的统一模式，不能回写到 `platform.knowledge` 或 `scenes/ecommerce/*`
-
-`backend/application/runtime/api/knowledge/routes.py` 也已经直接依赖拆分后的 `application service` 和 `query service`，不再通过旧的聚合服务中转。
+- 文档检索统一收口到 `platform.rag`
+- `platform.knowledge` 负责知识资产管理、预处理、发布和存储访问
+- `products/reviews` 这类文本型知识若继续补 Hybrid Search，应继续放在 `platform.rag`
+- `orders/inventory/detail` 这类结构化能力优先保持为 structured tools，经由 Agentic Retrieval 编排
 
 ### 2. Application
 
-`backend/application/runtime` 负责运行时装配，包括：
+`backend/application/runtime` 负责运行时装配，主要包括：
 
 - 应用启动引导
-- active scene 默认选择
-- Chat service 组装
+- 默认 scene 选择
+- Chat service 组装与依赖注入
 - FastAPI 应用与 API 路由注册
 
 ### 3. Scenes
 
-`backend/scenes` 放置具体场景定义，包括：
+`backend/scenes` 放置具体场景定义，主要包括：
 
 - 场景提示词与定义
-- 场景级检索工具
-- 场景知识组织方式
-- 场景特有的工具与服务
+- 场景级检索工具与决策逻辑
+- 场景知识组织方式与场景特有服务
 
 ## 目录结构
 

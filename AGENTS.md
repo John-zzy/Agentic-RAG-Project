@@ -1,135 +1,144 @@
 # AI RAG Project Agent Guide
 
-本文件用于帮助 AI / 开发者快速进入这个仓库。内容保持精简，重点说明项目定位、架构、关键模块、约定和运行方式。
+本文件主要服务 AI Agent，用于快速建立代码导航、理解架构边界、找到改动入口并避免常见误改。
 
-详细设计与清单请直接看 `docs/`：
+如需补充设计背景，再看 `docs/`：
 
 - 架构图：[docs/architecture.svg](./docs/architecture.svg)
 - 模块依赖图：[docs/module-deps.svg](./docs/module-deps.svg)
-- 外部依赖图：[docs/external-deps.svg](./docs/external-deps.svg)
-- 接口清单：[docs/api-list.md](./docs/api-list.md)
-- 数据模型：[docs/data-model.md](./docs/data-model.md)
-- 数据模型 ER 图：[docs/data-model-er.svg](./docs/data-model-er.svg)
 - Agentic RAG 说明：[docs/agentic_rag.md](./docs/agentic_rag.md)
+
+## 30 秒导航
+
+如果你要改下面这些能力，优先看这些文件：
+
+- 聊天主链路：
+  - `backend/application/runtime/service.py`
+  - `backend/application/runtime/api/chat/routes.py`
+  - `backend/application/runtime/api/chat/schemas.py`
+- 场景定义与 prompt：
+  - `backend/scenes/generic_assistant/definition.py`
+  - `backend/scenes/ecommerce/definition.py`（可选演示场景，不是平台主线）
+- Agentic Retrieval：
+  - `backend/platform/rag/agentic.py`
+  - `backend/platform/rag/core.py`
+  - `backend/platform/rag/document_retrieval_service.py`
+- 文档 Hybrid Search：
+  - `backend/platform/rag/document_retrieval_service.py`
+  - `backend/platform/rag/document_retrieval_semantic.py`
+  - `backend/platform/rag/document_retrieval_keyword.py`
+  - `backend/platform/rag/document_retrieval_fusion.py`
+- 知识文档写流程：
+  - `backend/platform/knowledge/documents/application_service.py`
+  - `backend/platform/knowledge/documents/publisher.py`
+  - `backend/platform/knowledge/processing/`
+- 知识文档读流程：
+  - `backend/platform/knowledge/documents/query_service.py`
+- 会话与记忆：
+  - `backend/platform/memory/base/session_store.py`
+  - `backend/platform/memory/chat/prompt_context.py`
+- 启动与依赖注入：
+  - `backend/run.py`
+  - `backend/application/runtime/api/app.py`
+  - `backend/application/runtime/bootstrap.py`
 
 ## 项目定位
 
-这是一个面向多场景智能助手的 RAG 示例项目，当前核心目标是：
+这是一个面向多场景智能助手的 RAG / Agent Runtime 示例项目。当前主线是：
 
-- 提供一个可运行的 FastAPI 后端
-- 支持按会话绑定场景的统一 `/chat` 入口
+- 提供可运行的 FastAPI 后端
+- 提供按会话绑定场景的统一 `/chat` 入口
 - 支持本地知识文件上传、文档索引、向量检索和回答生成
-- 用 `generic_assistant` 与 `ecommerce` 两个场景演示“平台能力 + 场景扩展”的结构
+- 用 `generic_assistant` 验证平台主链路
+- 用 `ecommerce` 作为可选演示场景，展示“平台能力 + 场景扩展”的组织方式
 
-从设计上，它不是单一 Prompt Demo，而是一个可继续演进的场景化 RAG / Agent Runtime 起点。
+它不是单一 Prompt Demo，而是一个可继续演进的场景化 RAG / Agent Runtime 起点。
 
-## 核心架构
+## 架构地图
 
-后端按三层组织：
+后端按 `platform / application / scenes` 三层组织：
 
 - `platform`
-  - 放通用底层能力，不感知具体业务场景。
-  - 包括配置、模型路由、会话记忆、知识处理、RAG 核心、工具协议。
-- `retrieval`
-  - 放 `knowledge` 与 `rag` 共享的中立检索底座。
-  - 包括共享向量文档模型、检索结果模型、默认 hashing embedder/tokenizer 与读侧 repository 契约。
+  - 通用底层能力，不感知具体业务场景
+  - 包括配置、模型路由、会话记忆、知识处理、RAG 核心、工具协议
+  - `platform/retrieval` 是其子模块，不是独立顶层
 - `application`
-  - 放运行时装配与 API 暴露。
-  - 包括启动、依赖注入、Chat service 组装、FastAPI 路由注册。
+  - 运行时装配与 API 暴露
+  - 包括启动、依赖注入、Chat service 组装、FastAPI 路由注册
 - `scenes`
-  - 放具体场景定义。
-  - 当前内置 `generic_assistant` 和 `ecommerce`。
+  - 具体场景定义
+  - 当前以 `generic_assistant` 为主，`ecommerce` 为可选演示场景
 
-如果要看图而不是读代码，优先看：
+## 常见任务
 
-- [docs/architecture.svg](./docs/architecture.svg)
-- [docs/module-deps.svg](./docs/module-deps.svg)
+### 改 `/chat` 主链路
 
-## 关键模块
+- 先看 `backend/application/runtime/service.py`
+- 再看 `backend/application/runtime/api/chat/routes.py`
+- 响应结构改动再看 `backend/application/runtime/api/chat/schemas.py`
 
-### `backend/run.py`
+### 改文档检索或 Hybrid Search
 
-后端启动入口。负责启动 FastAPI 应用。
+- 先看 `backend/platform/rag/document_retrieval_service.py`
+- 语义召回看 `backend/platform/rag/document_retrieval_semantic.py`
+- 关键词召回看 `backend/platform/rag/document_retrieval_keyword.py`
+- 融合排序看 `backend/platform/rag/document_retrieval_fusion.py`
 
-### `backend/application/runtime`
+### 改 Agentic Retrieval 决策
 
-运行时装配层。
+- 先看 `backend/platform/rag/agentic.py`
+- 协议类型在 `backend/platform/rag/core.py`
+- scene 级策略在 `backend/scenes/*/definition.py`
 
-- `bootstrap.py`
-  - 初始化当前激活场景和运行时摘要。
-- `service.py`
-  - 统一聊天主链路，核心类是 `ActiveSceneChatService` 和 `ChatService`。
-- `api/app.py`
-  - 创建 FastAPI 应用并注册路由。
-- `api/chat/`
-  - 聊天、场景、会话接口。
-- `api/file/`
-  - 文件上传、列表、删除、下载接口。
-- `api/knowledge/`
-  - 知识文档预处理预览、注册、列表、详情、删除、重处理、重分块接口。
+### 改知识文档入库、重处理、发布
 
-### `backend/platform`
+- 先看 `backend/platform/knowledge/documents/application_service.py`
+- 发布切换看 `backend/platform/knowledge/documents/publisher.py`
+- 预处理逻辑看 `backend/platform/knowledge/processing/`
 
-平台公共能力层。
+### 改会话、历史、挂载知识源
 
-- `config/`
-  - 环境变量、模型配置、向量库配置。
-- `models/`
-  - 模型路由与 LLM 客户端封装。
-- `memory/`
-  - SQLite 会话、轮次、消息历史持久化。
-- `knowledge/`
-  - 通用知识文件读取、预处理、切块、索引管理、向量存储抽象。
-  - `base/store.py` 里已经拆出 `KnowledgeRetriever`、`KnowledgeDocumentRepository`、`DocumentChunkVectorRepository`、`ActiveDocumentChunkSource` 等分职责接口。
-  - 当前 `knowledge` 只负责知识管理、底层 provider 实现和 repository 工厂输出，共享检索基础设施不要再放回这里。
-  - `processing/` 负责标准化、规则清洗、预览、统计和 provenance 元数据生成。
-  - `documents/application_service.py` 负责预处理预览、注册、删除、重处理、重切块这类写流程。
-  - `documents/query_service.py` 负责文档列表、详情和文件索引状态聚合查询。
-  - `documents/publisher.py` 负责新版本发布、旧版本失活、失败恢复和清理。
-  - `documents/mappers.py` 负责 DTO 映射，不要再把映射逻辑塞回应用服务。
-- `rag/`
-  - 检索编排、Sufficiency 判断、Query Rewrite 等 Agentic RAG 核心协议。
-  - 文档知识检索统一入口也在这里，当前由 `DocumentRetrievalService` 组合语义召回、BM25 关键词召回和 `HybridFusionRanker`。
-  - 文档低相关过滤、受管文档过滤与后续多知识源 Hybrid Search 规则也应继续收口在这里。
-- `tools/`
-  - 通用工具协议与结构化工具封装。
+- 先看 `backend/platform/memory/base/session_store.py`
+- prompt 上下文组装看 `backend/platform/memory/chat/prompt_context.py`
+- 会话 API 看 `backend/application/runtime/api/chat/routes.py`
 
-### `backend/scenes`
+### 改 scene prompt、tool 或场景编排
 
-场景层。
+- 主看 `backend/scenes/generic_assistant/definition.py`
+- 演示场景看 `backend/scenes/ecommerce/definition.py`
+- 抽象定义在 `backend/scenes/base.py`
 
-- `generic_assistant/`
-  - 通用文档问答场景。
-- `ecommerce/`
-  - 电商演示场景，包含商品、评论、订单、库存、知识文档等多源检索与工具能力。
-- `base.py`
-  - 场景抽象定义。
+## 架构边界
 
-## 关键约定
-
-### 代码组织
+### 分层边界
 
 - 优先遵守 `platform / application / scenes` 的分层边界。
 - 不要把运行时装配逻辑塞进 `platform` 或 `__init__.py`。
 - `__init__.py` 保持轻量，避免引入循环依赖。
-- 文档召回、关键词召回、Hybrid Search、rerank 这类读侧检索算法统一进 `platform.rag`，不要再把它们放回 `platform.knowledge`。
-- `platform.knowledge` 只承接知识管理、底层存储和仓储访问，不要新增面向 scene/chat 的文档召回业务 API。
 - `platform.retrieval` 只放共享类型、默认算法和基础读侧契约，不要引入 `platform.knowledge` 或 `platform.rag` 依赖。
 
-### 会话与场景
+### RAG 与 Knowledge 边界
+
+- 文档召回、关键词召回、Hybrid Search、rerank 这类读侧检索算法统一进 `platform.rag`。
+- `platform.knowledge` 只承接知识管理、底层存储和仓储访问，不要新增面向 scene/chat 的文档召回业务 API。
+- 文档检索统一通过 `DocumentRetrievalService` 进入，不要在 scene 里重造文档召回入口。
+- 如果后续为 `products/reviews` 增加关键词召回或 Hybrid Search，继续放在 `platform.rag`。
+- `orders/inventory/detail` 这类结构化能力优先保持为 structured tools，经由 Agentic Retrieval 编排。
+
+### 会话、场景与知识源
 
 - 新会话默认场景由 `AI_RAG_APP__ACTIVE_SCENE` 控制。
 - 新会话默认挂载知识源是 `["documents"]`，可在 `POST /sessions` 里通过 `mounted_knowledge_sources` 显式扩展到 `["documents", "ecommerce"]`。
 - 日常切换场景优先走会话级 API 或前端选择，不要把改环境变量当主流程。
 - `scene` 负责 prompt 与运行时风格，知识源是否可用由会话挂载配置决定，不要再把二者视为同一个开关。
 
-### 数据与存储
+### 数据位置
 
 - 会话记忆默认落在 `backend/data/sessions.db`
 - 文件上传目录默认在 `backend/data/files`
 - 向量存储默认是 Chroma，可切换到 Elasticsearch
 
-### 文档与图资产
+### 文档同步
 
 - 如果改动了架构、接口、数据模型、运行方式或环境变量，优先同步检查：
   - `README.md`
@@ -139,17 +148,11 @@
   - `docs/data-model.md`
   - `docs/*.mmd` 与对应 `.svg`
 
-### 编码与修改方式
-
-- 仓库文本文件默认按 UTF-8 处理。
-- 在 PowerShell 5.1 下读源码或 Markdown 时显式使用 `-Encoding UTF8`。
-- 做局部修改优先保持最小 diff，不要无关重排。
-
-## 怎么跑
+## 最小运行与验证
 
 以下命令默认在仓库根目录执行。
 
-### 1. 创建虚拟环境并安装依赖
+### 安装依赖
 
 ```powershell
 python -m venv backend\.venv
@@ -159,9 +162,7 @@ python -m pip install -r backend\requirements.txt
 Copy-Item backend\.env.example backend\.env
 ```
 
-### 2. 配置最小环境变量
-
-至少配置：
+### 最小环境变量
 
 ```env
 AI_RAG_MODELS__SIMPLE__API_KEY=your-dashscope-api-key
@@ -171,68 +172,35 @@ AI_RAG_APP__ACTIVE_SCENE=generic_assistant
 AI_RAG_VECTOR_STORE__PROVIDER=chroma
 ```
 
-### 3. 启动后端
+### 启动后端
 
 ```powershell
 backend\.venv\Scripts\python.exe backend\run.py
 ```
 
-默认地址：
+### 运行测试
 
-- API: `http://127.0.0.1:8000`
-- Swagger: `http://127.0.0.1:8000/docs`
-- API 调试页: `http://127.0.0.1:8000/frontend/api-tester.html`
-- 知识库管理页: `http://127.0.0.1:8000/frontend/knowledge-manager.html`
-
-知识库管理页当前流程：
-
-- 上传 `json`、`csv`、`txt`、`md` 文件后会自动打开“数据预处理”弹窗
-- 通过 `preprocess-preview` 预览规则、样本和统计，再确认正式入库
-- 未入库但可处理文件状态为 `awaiting_processing`
-- `pdf`、`docx`、`xlsx` 当前允许上传，但不会进入预处理与索引链路
-
-### 4. 切换到 Elasticsearch
-
-本地启动：
-
-```powershell
-docker compose -f docs/elasticsearch/docker-compose.yml up -d
-```
-
-对应说明见：
-
-- [docs/elasticsearch/README.md](./docs/elasticsearch/README.md)
-
-### 5. 运行测试
-
-全量后端测试：
+- 全量测试：
 
 ```powershell
 backend\.venv\Scripts\python.exe -m pytest backend\tests -q -c backend\tests\pytest.ini
 ```
 
-单文件示例：
+- 单文件示例：
 
 ```powershell
 backend\.venv\Scripts\python.exe -m pytest backend\tests\test_chat_api.py -q -c backend\tests\pytest.ini
 ```
 
-## 禁区
-
-- 待补充
-
-## 历史包袱
-
-### 修改时的注意事项
+## 修改注意事项
 
 - 使用 `apply_patch` 做手工文件修改
 - 避免大面积无关格式化 diff
 - 修改 `__init__.py` 时保持最小化，避免引入运行时依赖导致循环导入
 - 如果改动了架构、启动方式、环境变量或测试命令，要同步检查 `README.md`、`AGENTS.md`、`backend/.env.example`
 - 知识文档写流程统一接到 `KnowledgeDocumentApplicationService` 和 `KnowledgeDocumentPublisher`，不要恢复聚合式文档服务
-- 后续如果为 `products`、`reviews`、`orders` 增加关键词召回或 Hybrid Search，必须进入 `platform.rag`，不要直接堆到 `scenes/ecommerce/*` 或 `platform.knowledge`
 
-### 高频错误
+## 高频错误
 
 - 使用了错误的 Python 解释器，而不是 `backend\.venv\Scripts\python.exe`
 - 改完实际代码后，没有同步更新文档和环境样例
@@ -240,7 +208,7 @@ backend\.venv\Scripts\python.exe -m pytest backend\tests\test_chat_api.py -q -c 
 - 用不精确的覆盖式写文件方式修改内容，导致文件损坏或内容串乱
 - 架构相关改动后，没有补跑受影响测试或全量测试
 
-### Encoding And Patch Discipline
+## Encoding And Patch Discipline
 
 - This repo's code and docs should be treated as UTF-8 unless the file itself clearly proves otherwise.
 - In this Windows PowerShell 5.1 environment, `Get-Content` without `-Encoding` may decode files with the system ANSI code page (`gb2312` here), which will garble UTF-8 Chinese text. Do not use default decoding when reading source files that may contain non-ASCII text.
