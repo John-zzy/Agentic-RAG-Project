@@ -10,7 +10,10 @@ class ChatRequest(BaseModel):
 
     message: str = Field(min_length=1, max_length=4000, description="用户本轮输入的问题。")
     session_id: str | None = Field(default=None, description="会话 ID，不传时由服务端自动创建。")
-    stream: bool = Field(default=False, description="是否请求流式输出；当前接口暂未启用。")
+    stream: bool = Field(
+        default=False,
+        description="是否请求流式输出；为 true 时返回 SSE，仅最终回答阶段按 chunk 推送。",
+    )
     top_k: int | None = Field(default=None, ge=1, le=20, description="检索条数上限。")
 
 

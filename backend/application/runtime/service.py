@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
 import logging
@@ -7,8 +8,6 @@ from pathlib import Path
 import re
 from typing import Any, Protocol
 from uuid import uuid4
-
-from langchain_classic.chains.combine_documents import create_stuff_documents_chain
 from langchain_core.documents import Document
 from langchain_core.retrievers import BaseRetriever
 
@@ -44,6 +43,24 @@ class RetrievalChainModel(Protocol):
         """按复杂度构建可用于 RAG 链的聊天模型实例。"""
         ...
 
+    def invoke_template(
+        self,
+        prompt_template: Any,
+        variables: dict[str, Any],
+        complexity: TaskComplexity = "simple",
+    ) -> str:
+        """使用模板变量同步调用模型。"""
+        ...
+
+    def stream_template(
+        self,
+        prompt_template: Any,
+        variables: dict[str, Any],
+        complexity: TaskComplexity = "simple",
+    ) -> Iterator[str]:
+        """使用模板变量流式调用模型。"""
+        ...
+
 
 class ChatServiceError(RuntimeError):
     """封装可返回给 API 层的业务错误。"""
@@ -69,6 +86,30 @@ class RetrievalExecutionResult:
     """封装一次检索执行后的文档与来源工具信息。"""
 
     documents: list[Document]
+
+
+@dataclass(frozen=True)
+class PreparedChatTurn:
+    """封装同步和流式路径共享的聊天准备结果。"""
+
+    session_id: str
+    request_id: str
+    timestamp: str
+    user_message: str
+    history_text: str
+    documents: list[Document]
+    citations: list[Citation]
+    knowledge_used: bool
+    scene_metadata: SceneMetadata
+    complexity: TaskComplexity | None
+
+
+@dataclass(frozen=True)
+class ChatStreamEvent:
+    """描述一条待编码为 SSE 的聊天流事件。"""
+
+    event: str
+    data: dict[str, Any]
 
 
 class RetrievalExecutor:
@@ -415,76 +456,46 @@ class ChatService:
 
     def chat(self, payload: ChatRequest) -> ChatResponse:
         """执行一次完整对话流程，并返回统一结构。"""
-        request_id = uuid4().hex
-        session_id = payload.session_id or uuid4().hex
-        timestamp = datetime.now(UTC).isoformat()
-        resolved_scene = self.scene_definition.scene
-
-        if payload.stream:
-            raise ChatServiceError(
-                status_code=501,
-                code="STREAM_NOT_SUPPORTED",
-                message="Streaming mode is reserved but not enabled on this endpoint yet.",
-                request_id=request_id,
-            )
-
-        self._ensure_session_ready(
-            session_id=session_id,
-            timestamp=timestamp,
-            request_id=request_id,
-            scene=resolved_scene,
-        )
-        session = self.session_store.get_session(session_id)
-        mounted_knowledge_sources = (
-            session.mounted_knowledge_sources
-            if session is not None
-            else DEFAULT_MOUNTED_KNOWLEDGE_SOURCES
-        )
-        history_turns = self.session_store.get_recent_turns(
-            session_id=session_id,
-            limit=self.settings.session.window_size,
-        )
-        history_text = self._format_history(history_turns)
-
-        documents = self._retrieval_executor.retrieve(
-            payload.message,
-            mounted_knowledge_sources=mounted_knowledge_sources,
-        ).documents
-        citations = self._citation_mapper.citations_from_documents(documents)
-        knowledge_used = len(citations) > 0
-        scene_metadata = self._scene_metadata()
-
-        if knowledge_used:
-            complexity = self.scene_definition.infer_complexity(payload.message)
-            answer, citations = self._invoke_chain_with_docs(
-                documents=documents,
-                user_message=payload.message,
-                history_text=history_text,
-                complexity=complexity,
-                request_id=request_id,
-                fallback_citations=citations,
-            )
-        else:
-            answer = self.scene_definition.fallback_policy.no_hit_message
-
-        self.session_store.append_turn(
-            session_id=session_id,
-            request_id=request_id,
-            user_message=payload.message,
-            assistant_answer=answer,
-            retrieval_snippets=[citation.model_dump() for citation in citations],
-            timestamp=timestamp,
-        )
-
-        return ChatResponse(
-            session_id=session_id,
-            request_id=request_id,
+        prepared = self._prepare_chat_turn(payload)
+        answer, citations = self._generate_answer(prepared)
+        self._persist_turn(prepared=prepared, answer=answer, citations=citations)
+        return self._build_chat_response(
+            prepared=prepared,
             answer=answer,
-            knowledge_used=knowledge_used,
-            scene=scene_metadata.scene,
-            agent=scene_metadata.agent,
             citations=citations,
         )
+
+    def chat_stream(self, payload: ChatRequest) -> Iterator[ChatStreamEvent]:
+        """执行一次流式对话流程，并产出结构化事件。"""
+        prepared = self._prepare_chat_turn(payload)
+        yield ChatStreamEvent(
+            event="start",
+            data={
+                "session_id": prepared.session_id,
+                "request_id": prepared.request_id,
+                "knowledge_used": prepared.knowledge_used,
+                "scene": prepared.scene_metadata.scene,
+                "agent": prepared.scene_metadata.agent,
+            },
+        )
+
+        if not prepared.knowledge_used:
+            answer, citations = self._build_fallback_answer(prepared)
+            yield ChatStreamEvent(event="chunk", data={"delta": answer})
+        else:
+            answer_parts: list[str] = []
+            for chunk in self._stream_model_answer(prepared):
+                answer_parts.append(chunk)
+                yield ChatStreamEvent(event="chunk", data={"delta": chunk})
+            answer, citations = self._finalize_streamed_answer(prepared, answer_parts)
+
+        self._persist_turn(prepared=prepared, answer=answer, citations=citations)
+        response = self._build_chat_response(
+            prepared=prepared,
+            answer=answer,
+            citations=citations,
+        )
+        yield ChatStreamEvent(event="done", data=response.model_dump())
 
     def _ensure_session_ready(
         self,
@@ -529,49 +540,197 @@ class ChatService:
             agent=str(default_agent) if isinstance(default_agent, str) else None,
         )
 
-    def _invoke_chain_with_docs(
+    def _prepare_chat_turn(self, payload: ChatRequest) -> PreparedChatTurn:
+        """准备一次对话执行所需的共享上下文。"""
+        request_id = uuid4().hex
+        session_id = payload.session_id or uuid4().hex
+        timestamp = datetime.now(UTC).isoformat()
+        resolved_scene = self.scene_definition.scene
+
+        self._ensure_session_ready(
+            session_id=session_id,
+            timestamp=timestamp,
+            request_id=request_id,
+            scene=resolved_scene,
+        )
+        session = self.session_store.get_session(session_id)
+        mounted_knowledge_sources = (
+            session.mounted_knowledge_sources
+            if session is not None
+            else DEFAULT_MOUNTED_KNOWLEDGE_SOURCES
+        )
+        history_turns = self.session_store.get_recent_turns(
+            session_id=session_id,
+            limit=self.settings.session.window_size,
+        )
+        history_text = self._format_history(history_turns)
+        documents = self._retrieval_executor.retrieve(
+            payload.message,
+            mounted_knowledge_sources=mounted_knowledge_sources,
+        ).documents
+        citations = self._citation_mapper.citations_from_documents(documents)
+        knowledge_used = len(citations) > 0
+        return PreparedChatTurn(
+            session_id=session_id,
+            request_id=request_id,
+            timestamp=timestamp,
+            user_message=payload.message,
+            history_text=history_text,
+            documents=documents,
+            citations=citations,
+            knowledge_used=knowledge_used,
+            scene_metadata=self._scene_metadata(),
+            complexity=(
+                self.scene_definition.infer_complexity(payload.message)
+                if knowledge_used
+                else None
+            ),
+        )
+
+    def _generate_answer(self, prepared: PreparedChatTurn) -> tuple[str, list[Citation]]:
+        """根据准备结果生成最终答案。"""
+        if not prepared.knowledge_used:
+            return self._build_fallback_answer(prepared)
+        return self._invoke_answer_template(prepared=prepared)
+
+    def _invoke_answer_template(
         self,
         *,
-        documents: list[Document],
-        user_message: str,
-        history_text: str,
-        complexity: TaskComplexity,
-        request_id: str,
-        fallback_citations: list[Citation],
+        prepared: PreparedChatTurn,
     ) -> tuple[str, list[Citation]]:
         """调用模型链生成答案，并返回答案与引用。"""
         try:
-            llm = self.model.build_chat_model_for_complexity(complexity)
-            combine_docs_chain = create_stuff_documents_chain(llm=llm, prompt=self._rag_answer_template)
-            answer_documents = self._citation_mapper.build_answer_documents(documents)
-            result = combine_docs_chain.invoke(
-                {
-                    "context": answer_documents,
-                    "input": user_message,
-                    "history": history_text,
-                }
+            answer = self.model.invoke_template(
+                prompt_template=self._rag_answer_template,
+                variables=self._build_answer_variables(prepared),
+                complexity=prepared.complexity or "simple",
             )
+        except ValueError as exc:
+            if str(exc) == "Model returned empty content":
+                raise ChatServiceError(
+                    status_code=502,
+                    code="MODEL_EMPTY_RESPONSE",
+                    message="Model returned empty response.",
+                    request_id=prepared.request_id,
+                ) from exc
+            raise ChatServiceError(
+                status_code=502,
+                code="MODEL_INVOCATION_FAILED",
+                message="Model invocation failed. Please retry later.",
+                request_id=prepared.request_id,
+            ) from exc
         except Exception as exc:
             raise ChatServiceError(
                 status_code=502,
                 code="MODEL_INVOCATION_FAILED",
                 message="Model invocation failed. Please retry later.",
-                request_id=request_id,
+                request_id=prepared.request_id,
             ) from exc
 
-        answer = str(result).strip() if isinstance(result, str) else str(result.get("answer", "")).strip()
-        if not answer:
+        return self._finalize_answer_text(answer, prepared.citations)
+
+    def _stream_model_answer(self, prepared: PreparedChatTurn) -> Iterator[str]:
+        """对最终答案生成阶段执行流式调用。"""
+        try:
+            yield from self.model.stream_template(
+                prompt_template=self._rag_answer_template,
+                variables=self._build_answer_variables(prepared),
+                complexity=prepared.complexity or "simple",
+            )
+        except ValueError as exc:
+            message = str(exc)
+            if message == "Model returned empty streaming content":
+                raise ChatServiceError(
+                    status_code=502,
+                    code="MODEL_EMPTY_RESPONSE",
+                    message="Model returned empty response.",
+                    request_id=prepared.request_id,
+                ) from exc
+            raise ChatServiceError(
+                status_code=502,
+                code="MODEL_INVOCATION_FAILED",
+                message="Model invocation failed. Please retry later.",
+                request_id=prepared.request_id,
+            ) from exc
+        except Exception as exc:
+            raise ChatServiceError(
+                status_code=502,
+                code="MODEL_INVOCATION_FAILED",
+                message="Model invocation failed. Please retry later.",
+                request_id=prepared.request_id,
+            ) from exc
+
+    def _finalize_streamed_answer(
+        self,
+        prepared: PreparedChatTurn,
+        answer_parts: list[str],
+    ) -> tuple[str, list[Citation]]:
+        """将流式片段拼接为最终权威答案。"""
+        joined_answer = "".join(answer_parts).strip()
+        if not joined_answer:
             raise ChatServiceError(
                 status_code=502,
                 code="MODEL_EMPTY_RESPONSE",
                 message="Model returned empty response.",
-                request_id=request_id,
+                request_id=prepared.request_id,
             )
+        return self._finalize_answer_text(joined_answer, prepared.citations)
 
-        answer_citations = self._citation_mapper.citations_from_documents(documents)
-        final_citations = answer_citations if answer_citations else fallback_citations
-        final_answer = self._citation_mapper.ensure_answer_citation_markers(answer, final_citations)
-        return final_answer, final_citations
+    def _build_fallback_answer(self, prepared: PreparedChatTurn) -> tuple[str, list[Citation]]:
+        """构造无命中时的 fallback 回答。"""
+        return self.scene_definition.fallback_policy.no_hit_message, []
+
+    def _finalize_answer_text(
+        self,
+        answer: str,
+        citations: list[Citation],
+    ) -> tuple[str, list[Citation]]:
+        """统一补齐 citation markers，并返回最终答案与引用。"""
+        final_answer = self._citation_mapper.ensure_answer_citation_markers(answer.strip(), citations)
+        return final_answer, citations
+
+    def _build_answer_variables(self, prepared: PreparedChatTurn) -> dict[str, Any]:
+        """构造最终回答模板需要的变量。"""
+        return {
+            "context": self._citation_mapper.build_answer_documents(prepared.documents),
+            "input": prepared.user_message,
+            "history": prepared.history_text,
+        }
+
+    def _persist_turn(
+        self,
+        *,
+        prepared: PreparedChatTurn,
+        answer: str,
+        citations: list[Citation],
+    ) -> None:
+        """以既有语义写入最终对话轮次。"""
+        self.session_store.append_turn(
+            session_id=prepared.session_id,
+            request_id=prepared.request_id,
+            user_message=prepared.user_message,
+            assistant_answer=answer,
+            retrieval_snippets=[citation.model_dump() for citation in citations],
+            timestamp=prepared.timestamp,
+        )
+
+    def _build_chat_response(
+        self,
+        *,
+        prepared: PreparedChatTurn,
+        answer: str,
+        citations: list[Citation],
+    ) -> ChatResponse:
+        """统一构造聊天响应。"""
+        return ChatResponse(
+            session_id=prepared.session_id,
+            request_id=prepared.request_id,
+            answer=answer,
+            knowledge_used=prepared.knowledge_used,
+            scene=prepared.scene_metadata.scene,
+            agent=prepared.scene_metadata.agent,
+            citations=citations,
+        )
 
     def _format_history(self, history_turns: list[SessionTurn]) -> str:
         """将历史轮次格式化为模型可读文本。"""
@@ -612,6 +771,11 @@ class ActiveSceneChatService:
         """将请求转发给会话绑定的场景。"""
         scene = self.resolve_session_scene(payload.session_id)
         return self._get_scene_service(scene).chat(payload)
+
+    def chat_stream(self, payload: ChatRequest) -> Iterator[ChatStreamEvent]:
+        """将流式请求转发给会话绑定的场景。"""
+        scene = self.resolve_session_scene(payload.session_id)
+        yield from self._get_scene_service(scene).chat_stream(payload)
 
     def list_scenes(self) -> tuple[SceneDefinition, ...]:
         """列出所有可用场景定义。"""

@@ -16,16 +16,29 @@
 - 主要入参：
   - Body `message`: 用户输入文本，必填，1-4000 字符。
   - Body `session_id`: 会话 ID，可选；不传时由服务侧按默认逻辑处理。
-  - Body `stream`: 是否流式，布尔值；当前接口保留字段，传 `true` 会报未支持。
+  - Body `stream`: 是否流式，布尔值；传 `false` 或不传时返回 JSON，传 `true` 时返回 `text/event-stream`。
   - Body `top_k`: 检索条数上限，可选，1-20。
 - 返回结构：
-  - `session_id`: 会话 ID。
-  - `request_id`: 本次请求 ID。
-  - `answer`: 模型回答；有 citations 时应包含可见引用编号，若模型未生成编号，服务会在尾部补 `参考来源：[1][2]`。
-  - `knowledge_used`: 是否使用了知识检索结果。
-  - `scene`: 当前响应所属场景。
-  - `agent`: 代理/角色标识，可为空。
-  - `citations`: 统一引用列表，每项包含 `index`、`citation_id`、`namespace`、`source_kind`、`source_name`、`source_path`、`document_id`、`chunk_id`、`chunk_index`、`snippet`、`score`、`vector_score`、`keyword_score`、`vector_rank`、`keyword_rank`、`matched_by`、`rank`。
+  - 非流式 `stream=false`：
+    - `session_id`: 会话 ID。
+    - `request_id`: 本次请求 ID。
+    - `answer`: 模型回答；有 citations 时应包含可见引用编号，若模型未生成编号，服务会在尾部补 `参考来源：[1][2]`。
+    - `knowledge_used`: 是否使用了知识检索结果。
+    - `scene`: 当前响应所属场景。
+    - `agent`: 代理/角色标识，可为空。
+    - `citations`: 统一引用列表，每项包含 `index`、`citation_id`、`namespace`、`source_kind`、`source_name`、`source_path`、`document_id`、`chunk_id`、`chunk_index`、`snippet`、`score`、`vector_score`、`keyword_score`、`vector_rank`、`keyword_rank`、`matched_by`、`rank`。
+  - 流式 `stream=true`：
+    - 响应头为 `Content-Type: text/event-stream`。
+    - 事件类型固定为 `start`、`chunk`、`done`、`error`，且 `data` 一律为 JSON。
+    - `start.data` 包含 `session_id`、`request_id`、`knowledge_used`、`scene`、`agent`。
+    - `chunk.data` 包含 `delta`，表示最终回答文本增量。
+    - `done.data` 与非流式 `ChatResponse` 结构一致，客户端应以 `done.answer` 作为最终权威文本。
+    - `error.data` 包含 `code`、`message`、`request_id`。
+
+补充说明：
+
+- `stream=true` 只会流式输出“最终回答生成阶段”；Agentic RAG 检索、文档召回、证据聚合与 citations 计算仍在服务端同步完成。
+- 无知识命中时，`stream=true` 仍返回 SSE 成功态，事件顺序为 `start -> chunk -> done`，其中 `done.knowledge_used` 为 `false`。
 
 ### `GET /scenes`
 

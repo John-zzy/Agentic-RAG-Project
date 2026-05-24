@@ -18,6 +18,7 @@
 当前项目已经具备一个可运行的多场景 RAG 后端，当前核心能力如下：
 
 - 统一 `/chat` 入口，按会话绑定 `scene` 处理请求
+- `/chat` 支持 `stream=true` 的 SSE 最终回答流式输出
 - 会话创建、查询、删除与 `mounted_knowledge_sources` 知识源挂载
 - 本地知识文件上传、预处理预览、正式入库、重处理与重切块
 - 文档切块、索引、语义检索与 `documents/chunks` 的 `Hybrid Search`
@@ -48,7 +49,7 @@
 当前 README 已同步到最近一轮 generic/ecommerce 解耦后的状态。后续优先事项聚焦在“补能力”而不是“继续拆边界”：
 
 - `Tool Registry`、函数调用协议、多步执行与任务状态管理
-- `SSE / WebSocket` 流式输出
+- `WebSocket` 双向流式协议
 - RAG 评测脚手架、ReRank 与更系统的效果验证
 - 鉴权、观测、部署与长期任务框架
 - 正式产品界面替代当前调试页
@@ -205,6 +206,7 @@ backend\.venv\Scripts\python.exe backend\run.py
 1. 启动服务
 2. 通过 `POST /sessions` 创建会话并指定场景，可选传入 `mounted_knowledge_sources`
 3. 通过 `POST /chat` 发起对话；运行时会根据会话挂载源动态组装 candidate tools
+   传 `stream=true` 时，接口会以 SSE 返回 `start`、`chunk`、`done`、`error` 四类事件，仅最终回答阶段流式输出
 4. 如需知识增强，先通过 `POST /files/upload` 上传知识文件
 5. 通过 `POST /knowledge/documents/preprocess-preview` 预览清洗规则、样本和统计
 6. 通过 `POST /knowledge/documents` 确认入库；后续按需调用 `.../reprocess` 或 `.../rechunk`
@@ -252,6 +254,19 @@ backend\.venv\Scripts\python.exe -m pytest backend\tests -q -c backend\tests\pyt
 ```powershell
 backend\.venv\Scripts\python.exe -m pytest backend\tests\test_chat_api.py -q -c backend\tests\pytest.ini
 ```
+
+最小 SSE 验证：
+
+```powershell
+$body = @{ message = "推荐续航好的手机"; stream = $true } | ConvertTo-Json
+Invoke-WebRequest -Uri http://127.0.0.1:8000/chat -Method Post -ContentType "application/json" -Body $body
+```
+
+说明：
+
+- `stream=true` 的响应头应包含 `Content-Type: text/event-stream`
+- 事件顺序应为 `start -> chunk... -> done`
+- 客户端应以 `done.answer` 作为最终权威文本；若中途失败，会收到 `error` 事件
 
 ## 开发说明
 

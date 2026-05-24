@@ -1,3 +1,4 @@
+import json
 from typing import Any
 
 from fastapi.testclient import TestClient
@@ -87,13 +88,47 @@ class FakeDocumentRetrievalService:
 
 
 class FakeModel:
-    def __init__(self, answer: str = "mock-answer") -> None:
+    def __init__(self, answer: str = "mock-answer", stream_chunks: list[str] | None = None) -> None:
         self.answer = answer
         self.chat_model_calls: list[str] = []
+        self.stream_template_calls: list[str] = []
+        self.stream_chunks = stream_chunks or [answer]
 
     def build_chat_model_for_complexity(self, complexity: str):
         self.chat_model_calls.append(complexity)
         return RunnableLambda(lambda _: self.answer)
+
+    def invoke_template(self, prompt_template: Any, variables: dict[str, Any], complexity: str = "simple") -> str:
+        del prompt_template, variables
+        self.chat_model_calls.append(complexity)
+        return self.answer
+
+    def stream_template(
+        self,
+        prompt_template: Any,
+        variables: dict[str, Any],
+        complexity: str = "simple",
+    ):
+        del prompt_template, variables
+        self.stream_template_calls.append(complexity)
+        for chunk in self.stream_chunks:
+            yield chunk
+
+
+def _parse_sse_events(raw_text: str) -> list[dict[str, Any]]:
+    events: list[dict[str, Any]] = []
+    for block in raw_text.strip().split("\n\n"):
+        if not block.strip():
+            continue
+        event_name = ""
+        data_payload = ""
+        for line in block.splitlines():
+            if line.startswith("event: "):
+                event_name = line[len("event: ") :]
+            if line.startswith("data: "):
+                data_payload = line[len("data: ") :]
+        events.append({"event": event_name, "data": data_payload})
+    return events
 
 
 def _build_chat_service(
@@ -198,6 +233,63 @@ def test_chat_api_success_path() -> None:
     assert model.chat_model_calls
 
 
+def test_chat_api_sse_success_path_returns_structured_events() -> None:
+    knowledge = FakeKnowledgeService()
+    document_retrieval_service = FakeDocumentRetrievalService(
+        documents=[
+            _result(
+                doc_id="doc-1",
+                content="P001 手机，续航强，电池 5000mAh。",
+                score=0.92,
+                metadata={
+                    "document_id": "doc-1",
+                    "source_path": "doc.txt",
+                    "namespace": "documents",
+                    "is_managed_document": True,
+                    "chunk_id": "chunk-doc-1",
+                    "chunk_index": 0,
+                },
+            )
+        ]
+    )
+    model = FakeModel(
+        answer="推荐 P001，续航表现较好。[1]",
+        stream_chunks=["推荐 P001，", "续航表现较好。[1]"],
+    )
+    service = _build_chat_service("chat-api-sse-success", knowledge, document_retrieval_service, model)
+    app = create_app(chat_service=service)
+
+    with TestClient(app) as client:
+        response = client.post("/chat", json={"message": "推荐续航好的手机", "stream": True})
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    events = _parse_sse_events(response.text)
+    assert [event["event"] for event in events] == ["start", "chunk", "chunk", "done"]
+
+    start_data = events[0]["data"]
+    done_data = events[-1]["data"]
+    assert start_data
+    assert done_data
+
+    start_payload = json.loads(start_data)
+    done_payload = json.loads(done_data)
+    assert start_payload["session_id"]
+    assert start_payload["request_id"]
+    assert start_payload["knowledge_used"] is True
+    assert done_payload["answer"] == "推荐 P001，续航表现较好。[1]"
+    assert done_payload["knowledge_used"] is True
+    assert done_payload["scene"] == "generic_assistant"
+    assert len(done_payload["citations"]) == 1
+    saved_turns, total_turns = service.session_store.get_session_detail(
+        done_payload["session_id"],
+        limit=10,
+    )
+    assert total_turns == 1
+    assert saved_turns[0].assistant_answer == "推荐 P001，续航表现较好。[1]"
+    assert model.stream_template_calls == ["simple"]
+
+
 def test_chat_api_validation_error_when_message_missing() -> None:
     service = _build_chat_service(
         "chat-api-validation-error",
@@ -228,6 +320,74 @@ def test_chat_api_no_hit_fallback_sets_knowledge_used_false() -> None:
     assert payload["scene"] == "generic_assistant"
     assert payload["agent"] is None
     assert model.chat_model_calls == []
+
+
+def test_chat_api_sse_no_hit_uses_fallback_without_model_streaming() -> None:
+    model = FakeModel(answer="unused", stream_chunks=["unused"])
+    service = _build_chat_service(
+        "chat-api-sse-no-hit",
+        FakeKnowledgeService(),
+        FakeDocumentRetrievalService(),
+        model,
+    )
+    app = create_app(chat_service=service)
+
+    with TestClient(app) as client:
+        response = client.post("/chat", json={"message": "火星基地快递多久到", "stream": True})
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    events = _parse_sse_events(response.text)
+    assert [event["event"] for event in events] == ["start", "chunk", "done"]
+
+    chunk_payload = json.loads(events[1]["data"])
+    done_payload = json.loads(events[2]["data"])
+    assert "暂时没有检索到足够相关的文档知识" in chunk_payload["delta"]
+    assert done_payload["knowledge_used"] is False
+    assert done_payload["citations"] == []
+    assert model.stream_template_calls == []
+    assert model.chat_model_calls == []
+
+
+def test_chat_api_non_stream_response_and_session_persistence_do_not_regress() -> None:
+    knowledge = FakeKnowledgeService()
+    document_retrieval_service = FakeDocumentRetrievalService(
+        documents=[
+            _result(
+                doc_id="doc-1",
+                content="AeroPhone X 当前有货，售价 4599 元。",
+                score=0.93,
+                metadata={
+                    "document_id": "doc-1",
+                    "source_path": "manual.md",
+                    "namespace": "documents",
+                    "is_managed_document": True,
+                    "chunk_id": "chunk-manual-1",
+                    "chunk_index": 0,
+                },
+            )
+        ]
+    )
+    model = FakeModel(answer="AeroPhone X 当前有货，售价 4599 元。[1]")
+    service = _build_chat_service(
+        "chat-api-non-stream-regression",
+        knowledge,
+        document_retrieval_service,
+        model,
+    )
+    app = create_app(chat_service=service)
+
+    with TestClient(app) as client:
+        response = client.post("/chat", json={"message": "AeroPhone X 多少钱", "stream": False})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["answer"] == "AeroPhone X 当前有货，售价 4599 元。[1]"
+    assert payload["knowledge_used"] is True
+    turns, total_turns = service.session_store.get_session_detail(payload["session_id"], limit=10)
+    assert total_turns == 1
+    assert turns[0].assistant_answer == "AeroPhone X 当前有货，售价 4599 元。[1]"
+    assert turns[0].retrieval_snippets[0]["citation_id"] == "chunk-manual-1"
 
 
 def test_session_management_endpoints() -> None:

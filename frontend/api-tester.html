@@ -1260,7 +1260,8 @@
       scenes: [],
       activeScene: "",
       sceneLoading: false,
-      mountedKnowledgeSources: ["documents"]
+      mountedKnowledgeSources: ["documents"],
+      streamAnimation: null
     };
 
     const refs = {
@@ -1405,9 +1406,105 @@
         citations: Array.isArray(meta.citations) ? meta.citations.slice(0, 4) : [],
         knowledgeUsed: meta.knowledgeUsed,
         scene: meta.scene || state.activeScene,
-        sourcePrompt: meta.sourcePrompt || ""
+        sourcePrompt: meta.sourcePrompt || "",
+        streaming: !!meta.streaming
       });
       renderMessages();
+      return messageId;
+    }
+
+    function updateMessage(messageId, patch) {
+      const target = state.messages.find(function (message) {
+        return message.id === messageId;
+      });
+      if (!target) {
+        return;
+      }
+      Object.assign(target, patch || {});
+      if (Array.isArray(target.citations)) {
+        target.citations = target.citations.slice(0, 4);
+      }
+      renderMessages();
+    }
+
+    function appendMessageText(messageId, delta) {
+      if (!delta) {
+        return;
+      }
+      const target = state.messages.find(function (message) {
+        return message.id === messageId;
+      });
+      if (!target) {
+        return;
+      }
+      target.text = String(target.text || "") + String(delta);
+      renderMessages();
+    }
+
+    function resetStreamAnimation() {
+      if (!state.streamAnimation) {
+        return;
+      }
+      if (state.streamAnimation.timerId) {
+        clearInterval(state.streamAnimation.timerId);
+      }
+      state.streamAnimation = null;
+    }
+
+    function ensureStreamAnimation(messageId) {
+      if (state.streamAnimation && state.streamAnimation.messageId === messageId) {
+        return state.streamAnimation;
+      }
+      resetStreamAnimation();
+      state.streamAnimation = {
+        messageId: messageId,
+        queue: [],
+        timerId: 0,
+        resolveIdle: null
+      };
+      return state.streamAnimation;
+    }
+
+    function queueStreamDelta(messageId, delta) {
+      if (!delta) {
+        return;
+      }
+      const animation = ensureStreamAnimation(messageId);
+      Array.prototype.push.apply(animation.queue, Array.from(String(delta)));
+      if (animation.timerId) {
+        return;
+      }
+      animation.timerId = window.setInterval(function () {
+        const current = state.streamAnimation;
+        if (!current || current.messageId !== messageId) {
+          return;
+        }
+        if (!current.queue.length) {
+          clearInterval(current.timerId);
+          current.timerId = 0;
+          if (typeof current.resolveIdle === "function") {
+            const done = current.resolveIdle;
+            current.resolveIdle = null;
+            done();
+          }
+          return;
+        }
+        const burst = current.queue.splice(0, 2).join("");
+        appendMessageText(messageId, burst);
+      }, 28);
+    }
+
+    function waitForStreamAnimation(messageId) {
+      const animation = state.streamAnimation;
+      if (!animation || animation.messageId !== messageId) {
+        return Promise.resolve();
+      }
+      if (!animation.queue.length && !animation.timerId) {
+        return Promise.resolve();
+      }
+      return new Promise(function (resolve) {
+        animation.resolveIdle = resolve;
+      });
     }
 
     function toggleKnowledgeDetails(messageId) {
@@ -1623,6 +1720,9 @@
             '</span>'
           );
         }
+        if (!isUser && message.streaming) {
+          metaChips.push('<span class="meta-chip ok">Streaming</span>');
+        }
 
         const citations = !isUser && message.citations.length && state.expandedKnowledge[message.id]
           ? (
@@ -1648,7 +1748,7 @@
               '<div class="message-avatar">' + (isUser ? "客" : "AI") + '</div>' +
               '<div class="bubble">' +
                 '<div class="message-meta">' + metaChips.join("") + '</div>' +
-                '<p>' + escapeHtml(message.text) + '</p>' +
+                '<p>' + escapeHtml(message.text || (message.streaming ? "正在生成回答..." : "")) + '</p>' +
                 renderKnowledgeSummary(message) +
               '</div>' +
             '</article>' +
@@ -1726,6 +1826,124 @@
         throw new Error(data && data.detail ? JSON.stringify(data.detail) : "服务请求失败");
       }
       return data;
+    }
+
+    async function streamChatRequest(payload, handlers) {
+      const response = await fetch(API_BASE_URL + "/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+
+      if (!response.ok) {
+        const text = await response.text();
+        let data = null;
+        try {
+          data = text ? JSON.parse(text) : null;
+        } catch (_) {
+          data = text;
+        }
+        throw new Error(data && data.detail ? JSON.stringify(data.detail) : "服务请求失败");
+      }
+
+      const contentType = response.headers.get("content-type") || "";
+      if (contentType.indexOf("text/event-stream") < 0) {
+        throw new Error("服务未返回流式响应。");
+      }
+      if (!response.body || !response.body.getReader) {
+        throw new Error("当前浏览器不支持读取流式响应。");
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder("utf-8");
+      let buffer = "";
+
+      while (true) {
+        const result = await reader.read();
+        if (result.done) {
+          break;
+        }
+        buffer += decoder.decode(result.value, { stream: true });
+        buffer = consumeSseBuffer(buffer, handlers);
+      }
+
+      buffer += decoder.decode();
+      consumeSseBuffer(buffer, handlers, true);
+    }
+
+    function consumeSseBuffer(buffer, handlers, flush) {
+      let normalized = String(buffer || "").replace(/\r\n/g, "\n");
+      let separatorIndex = normalized.indexOf("\n\n");
+
+      while (separatorIndex >= 0) {
+        const block = normalized.slice(0, separatorIndex).trim();
+        normalized = normalized.slice(separatorIndex + 2);
+        if (block) {
+          dispatchSseEvent(block, handlers);
+        }
+        separatorIndex = normalized.indexOf("\n\n");
+      }
+
+      if (flush) {
+        const tail = normalized.trim();
+        if (tail) {
+          dispatchSseEvent(tail, handlers);
+        }
+        return "";
+      }
+
+      return normalized;
+    }
+
+    function dispatchSseEvent(block, handlers) {
+      const event = parseSseEventBlock(block);
+      if (!event || !event.event) {
+        return;
+      }
+      if (event.event === "start" && handlers && handlers.onStart) {
+        handlers.onStart(event.data || {});
+        return;
+      }
+      if (event.event === "chunk" && handlers && handlers.onChunk) {
+        handlers.onChunk(event.data || {});
+        return;
+      }
+      if (event.event === "done" && handlers && handlers.onDone) {
+        handlers.onDone(event.data || {});
+        return;
+      }
+      if (event.event === "error" && handlers && handlers.onError) {
+        handlers.onError(event.data || {});
+      }
+    }
+
+    function parseSseEventBlock(block) {
+      const lines = String(block || "").split("\n");
+      let eventName = "";
+      const dataLines = [];
+
+      lines.forEach(function (line) {
+        if (line.indexOf("event:") === 0) {
+          eventName = line.slice(6).trim();
+          return;
+        }
+        if (line.indexOf("data:") === 0) {
+          dataLines.push(line.slice(5).trim());
+        }
+      });
+
+      if (!eventName) {
+        return null;
+      }
+
+      const rawData = dataLines.join("\n");
+      let parsedData = rawData;
+      try {
+        parsedData = rawData ? JSON.parse(rawData) : {};
+      } catch (_) {
+        parsedData = rawData;
+      }
+      return { event: eventName, data: parsedData };
     }
 
     async function checkHealth() {
@@ -1816,37 +2034,100 @@
       setInteractiveState();
       setComposerStatus("正在生成回复...");
 
+      let assistantMessageId = "";
+      let streamCompleted = false;
+
       try {
-        const data = await apiRequest("/chat", {
-          method: "POST",
-          body: JSON.stringify({
-            message: text,
-            session_id: state.sessionId || null,
-            stream: false,
-            top_k: 4
-          })
+        await streamChatRequest({
+          message: text,
+          session_id: state.sessionId || null,
+          stream: true,
+          top_k: 4
+        }, {
+          onStart: function (data) {
+            state.sessionId = data.session_id || state.sessionId;
+            updateSessionBadge();
+            removeTyping();
+            assistantMessageId = addMessage("assistant", "", {
+              citations: [],
+              knowledgeUsed: data.knowledge_used,
+              scene: data.scene || state.activeScene,
+              sourcePrompt: text,
+              streaming: true
+            });
+            setComposerStatus(data.knowledge_used ? "检索完成，正在流式生成..." : "正在流式输出回复...");
+          },
+          onChunk: function (data) {
+            if (!assistantMessageId) {
+              removeTyping();
+              assistantMessageId = addMessage("assistant", "", {
+                citations: [],
+                knowledgeUsed: false,
+                scene: state.activeScene,
+                sourcePrompt: text,
+                streaming: true
+              });
+            }
+            queueStreamDelta(assistantMessageId, data.delta || "");
+          },
+          onDone: async function (data) {
+            streamCompleted = true;
+            state.sessionId = data.session_id || state.sessionId;
+            updateSessionBadge();
+            removeTyping();
+            await waitForStreamAnimation(assistantMessageId);
+            if (!assistantMessageId) {
+              assistantMessageId = addMessage("assistant", data.answer || "当前没有生成可展示的回答。", {
+                citations: data.citations,
+                knowledgeUsed: data.knowledge_used,
+                scene: data.scene || state.activeScene,
+                sourcePrompt: text,
+                streaming: false
+              });
+            } else {
+              updateMessage(assistantMessageId, {
+                text: data.answer || "当前没有生成可展示的回答。",
+                citations: data.citations,
+                knowledgeUsed: data.knowledge_used,
+                scene: data.scene || state.activeScene,
+                sourcePrompt: text,
+                streaming: false
+              });
+            }
+            resetStreamAnimation();
+            setServiceStatus(true);
+            setComposerStatus(data.knowledge_used ? "回复完成，已命中知识" : "回复完成");
+          },
+          onError: function (data) {
+            throw new Error((data && data.message) || "服务暂时没有返回完整结果。");
+          }
         });
-        state.sessionId = data.session_id || state.sessionId;
-        updateSessionBadge();
+
+        if (!streamCompleted) {
+          throw new Error("服务未返回完成事件。");
+        }
+      } catch (error) {
         removeTyping();
-        addMessage("assistant", data.answer || "当前没有生成可展示的回答。", {
-          citations: data.citations,
-          knowledgeUsed: data.knowledge_used,
-          scene: data.scene || state.activeScene,
-          sourcePrompt: text
-        });
-        setServiceStatus(true);
-        setComposerStatus(data.knowledge_used ? "回复完成，已命中知识" : "回复完成");
-      } catch (_) {
-        removeTyping();
-        showError("服务暂时没有返回结果，请稍后重试。");
-        addMessage("assistant", "抱歉，当前服务暂时不可用。你可以稍后重试，或者切换场景后重新发起会话。", {
-          knowledgeUsed: false,
-          scene: state.activeScene,
-          sourcePrompt: text
-        });
+        resetStreamAnimation();
+        if (assistantMessageId) {
+          updateMessage(assistantMessageId, {
+            text: "抱歉，当前服务暂时不可用。你可以稍后重试，或者切换场景后重新发起会话。",
+            citations: [],
+            knowledgeUsed: false,
+            scene: state.activeScene,
+            sourcePrompt: text,
+            streaming: false
+          });
+        } else {
+          addMessage("assistant", "抱歉，当前服务暂时不可用。你可以稍后重试，或者切换场景后重新发起会话。", {
+            knowledgeUsed: false,
+            scene: state.activeScene,
+            sourcePrompt: text
+          });
+        }
+        showError((error && error.message) || "服务暂时没有返回完整结果，请稍后重试。");
         setServiceStatus(false);
-        setComposerStatus("服务暂时不可用");
+        setComposerStatus("流式输出中断");
       } finally {
         state.sending = false;
         setInteractiveState();

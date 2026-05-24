@@ -115,16 +115,25 @@ class ModelClient:
             complexity=complexity,
         )
 
-    def stream(self, prompt: str, complexity: TaskComplexity = "simple") -> Iterator[str]:
-        """以流式方式输出模型生成的文本片段。"""
+    def stream_template(
+        self,
+        prompt_template: BasePromptTemplate,
+        variables: dict[str, Any],
+        complexity: TaskComplexity = "simple",
+    ) -> Iterator[str]:
+        """使用指定模板以流式方式输出文本片段。"""
         routed_model = get_model_for_task(complexity)
         if not routed_model.supports_streaming:
             raise ValueError(f"Streaming is not supported for model complexity: {routed_model.complexity}")
 
-        chain = self._build_text_chain(routed_model)
+        chain = self.get_runnable(
+            complexity=routed_model.complexity,
+            prompt_template=prompt_template,
+            output_parser=self._output_parser,
+        )
         yielded = False
-        for chunk in chain.stream({"prompt": prompt}):
-            text = str(chunk).strip()
+        for chunk in chain.stream(variables):
+            text = str(chunk)
             if not text:
                 continue
             yielded = True
@@ -132,6 +141,14 @@ class ModelClient:
 
         if not yielded:
             raise ValueError("Model returned empty streaming content")
+
+    def stream(self, prompt: str, complexity: TaskComplexity = "simple") -> Iterator[str]:
+        """以流式方式输出模型生成的文本片段。"""
+        yield from self.stream_template(
+            prompt_template=self._prompt_template,
+            variables={"prompt": prompt},
+            complexity=complexity,
+        )
 
 
 model_client = ModelClient()
