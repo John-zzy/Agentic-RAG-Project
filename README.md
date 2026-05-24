@@ -28,67 +28,41 @@
 
 当前定位更偏“场景化 RAG / Agent Runtime 底座”，还不是完整产品。
 
-## 功能版本规划及功能优先级
+## 当前进展
 
-下面的规划按“先补主链路，再补工程化，最后补高阶能力”的顺序推进。每个版本下的功能项全部勾选完成后，表示该版本目标基本达成。
-
-### V0：当前已完成
-
-目标：形成可运行、可演示、可扩展的 RAG 基础版本。
+当前主链路已经不是“单一文档检索 Demo”，而是一个完成过一轮边界收敛的 scene-based Agentic RAG Runtime：
 
 - [x] 三层后端结构：`platform / application / scenes`
-- [x] 统一聊天、会话、文件、知识文档 API
-- [x] 文档知识入库与 RAG 主链路
-- [x] 文档 `Hybrid Search`
-- [x] 会话级场景绑定与知识源挂载
-- [x] `generic_assistant` 与 `ecommerce` 两个示例场景
-- [x] 调试页、知识库管理页、基础测试与设计文档
+- [x] 统一 `/chat`、`/sessions`、`/files`、`/knowledge/documents` API
+- [x] `generic_assistant` 独立 docs-first 检索链路
+- [x] `GenericAssistantSufficiencyJudge` 与 `GenericAssistantQueryRewriter`
+- [x] 会话级 `mounted_knowledge_sources` 挂载与 scene definition 候选工具解析
+- [x] `ecommerce` 以 business extension 方式接入 generic 主链，而不是反向成为默认依赖
+- [x] 文档 `Hybrid Search`：语义召回 + 关键词召回 + 融合排序
+- [x] 知识文档预处理预览、注册、重处理、重分块、软删除与文件维度索引视图
+- [x] 结构化 `citations`、回答正文引用编号与 session `retrieval_snippets` 持久化
+- [x] `Chroma` / `Elasticsearch` 可切换向量存储，`SQLite` 会话持久化
 
-### V1：最高优先级
+## 后续重点
 
-目标：补齐 Agent 主链路，让系统从“可运行的 RAG”升级为“可持续扩展的 Agent Runtime”。
+当前 README 已同步到最近一轮 generic/ecommerce 解耦后的状态。后续优先事项聚焦在“补能力”而不是“继续拆边界”：
 
-- [ ] 统一 Tool Registry、函数调用协议和工具路由
-- [ ] Planning、多步执行、查询改写、自我修正等 Agent 决策链
-- [ ] 任务状态机、中间态管理、超时控制、失败恢复和断点续跑
-- [ ] RAG 效果增强：ReRank、引用溯源完善、基础评测集与评测脚手架
-- [ ] `products/reviews` 这类文本型知识是否补关键词召回 / Hybrid Search，按收益评估后再推进
-- [ ] `orders/inventory/detail` 等结构化能力继续收敛为 structured tools + Agentic Retrieval 编排
-
-### V2：第二优先级
-
-目标：补强工程化能力，使项目具备更稳定的对外演示与部署基础。
-
-- [ ] SSE / WebSocket 流式输出
-- [ ] 结构化日志、核心指标、Trace 链路
-- [ ] 限流、熔断、降级、幂等与智能重试
-- [ ] 登录鉴权、角色权限、租户隔离与操作审计
-- [ ] 异步任务队列、调度执行与长期任务框架
-- [ ] Docker、CI/CD、环境隔离与部署文档
-
-### V3：第三优先级
-
-目标：补齐高阶 Agent 能力和产品化能力。
-
-- [ ] 可配置工作流编排，而不只依赖固定代码流程
-- [ ] Multi-Agent 分工协作、结果汇总与冲突处理
-- [ ] 插件协议与标准化扩展接口
-- [ ] 更完整的知识治理能力，如标签、版本、命中分析、分库权限
-- [ ] 正式产品界面替代当前调试页
-- [ ] 多模态输入与检索
-- [ ] 评测样本、错误案例与版本对比闭环
-
-### 推荐开发顺序
-
-1. `V1`：先补 Agent 主链路
-2. `V2`：再补工程化与稳定性
-3. `V3`：最后补高阶 Agent 与产品化
+- `Tool Registry`、函数调用协议、多步执行与任务状态管理
+- `SSE / WebSocket` 流式输出
+- RAG 评测脚手架、ReRank 与更系统的效果验证
+- 鉴权、观测、部署与长期任务框架
+- 正式产品界面替代当前调试页
 
 ## 设计文档
 
 如果你希望先从设计层面理解这个项目，而不是直接读代码，可以先看下面的文档：
 
-- [Agentic RAG 设计说明](./docs/agentic_rag.md)：解释本项目在多轮召回、工具切换、query 改写、证据聚合和最终回答生成上的完整链路
+- [系统架构图](./docs/architecture.svg)
+- [知识管理流程图](./docs/knowledge-document-flow.svg)
+- [Agentic RAG 流程图](./docs/agentic-rag-retrieval-flow.svg)
+- [接口文档](./docs/api-list.md)
+- [数据模型](./docs/data-model.md)
+- [Agentic RAG 设计说明](./docs/agentic_rag.md)：解释多轮召回、扩展 handoff、证据聚合和最终回答生成链路
 
 ## 系统架构
 

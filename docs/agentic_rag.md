@@ -55,23 +55,7 @@
 
 用户请求进入系统后，不是直接把问题丢给模型，而是先经过会话绑定的场景与知识源配置。
 
-```mermaid
-flowchart TD
-    A["用户请求 /chat"] --> B["ActiveSceneChatService 根据 session 选择 scene"]
-    B --> C["读取 session.mounted_knowledge_sources"]
-    C --> D["Scene 对应 ChatService"]
-    D --> E["按挂载源组装 candidate tools"]
-    E --> F["AgenticRetriever 开始检索"]
-    F --> G["一轮或多轮 retrieval tool 调用"]
-    G --> H["聚合 documents 与 citations"]
-    H --> I{"证据是否足够?"}
-    I -- "是" --> J["RAG Answer Chain 生成回答"]
-    I -- "否，且还能继续" --> F
-    I -- "否，且不能继续" --> K["返回兜底回答或追问用户"]
-    J --> L["写入 session memory 与 retrieval_snippets"]
-    K --> L
-    L --> M["返回 answer + citations"]
-```
+完整流程图见：[docs/agentic-rag-retrieval-flow.svg](./agentic-rag-retrieval-flow.svg)
 
 一句话概括：
 
@@ -153,21 +137,6 @@ knowledge_document_search
 - `rewrite`：query 太弱，需要改写后重查
 - `ask_user`：证据不足，且没有更合适的继续方式，应该让用户补充信息
 
-```mermaid
-flowchart TD
-    A["开始一轮检索"] --> B["当前 tool 执行 retrieve"]
-    B --> C["得到 RetrievalResult"]
-    C --> D["累积 documents / citations / records"]
-    D --> E["SufficiencyJudge 判断证据是否充足"]
-    E --> F{"next_action"}
-    F -- "finish" --> G["结束检索"]
-    F -- "switch_tool" --> H["切换下一个 retrieval tool"]
-    F -- "rewrite" --> I["QueryRewriter 改写 query"]
-    F -- "ask_user" --> J["停止并提示用户补充信息"]
-    H --> A
-    I --> A
-```
-
 ### 6.1 文档轮的决策
 
 当前 docs-first 主链由 `generic_assistant` 自己持有默认 sufficiency judge 和 query rewriter：
@@ -198,12 +167,12 @@ flowchart TD
 
 如果当前 query 太模糊、结果为空，或者 judge 认为需要扩大召回面，系统会调用 `QueryRewriter` 改写 query。
 
-当前电商改写器会把口语问法扩展成更适合检索的表达，例如补上：
+当前默认是 `generic_assistant` 自己的通用改写器。它会把弱查询改写成更适合文档检索的表述，例如补上：
 
-- `product`
-- `specs`
-- `reviews`
 - `documents`
+- `manual`
+- `FAQ`
+- `guide`
 
 目的不是润色语言，而是提高下一轮检索的命中概率。
 
@@ -220,33 +189,6 @@ flowchart TD
 `AeroPhone X 现在有货吗？`
 
 为例，当前链路通常是这样：
-
-```mermaid
-sequenceDiagram
-    participant U as User
-    participant R as AgenticRetriever
-    participant D as knowledge_document_search
-    participant J as SufficiencyJudge
-    participant P as product_semantic_search
-    participant I as inventory_lookup
-    participant L as LLM Answer Chain
-
-    U->>R: AeroPhone X 现在有货吗？
-    R->>D: 查询已挂载文档知识
-    D-->>R: 返回手册/FAQ 或空结果
-    R->>J: 当前证据够了吗？
-    J-->>R: 不够，切换 product_semantic_search
-    R->>P: 查询商品候选
-    P-->>R: 找到产品 P005
-    R->>J: 当前证据够了吗？
-    J-->>R: 不够，切换 inventory_lookup，query=P005
-    R->>I: 查询库存
-    I-->>R: 返回库存状态
-    R->>J: 现在证据够了吗？
-    J-->>R: 够了，finish
-    R->>L: 传入文档 + 商品 + 库存证据
-    L-->>U: 生成带引用编号的回答
-```
 
 这个例子说明，用户的自然语言问题会在检索过程中逐步转成更适合执行的动作，而不是一上来就交给模型自由发挥。
 
@@ -325,9 +267,9 @@ sequenceDiagram
 
 - `ActiveSceneChatService`
 - `ChatService`
-- `_retrieve_documents()`
-- `_resolve_candidate_tools()`
-- `_citations_from_documents()`
+- `RetrievalExecutor.retrieve()`
+- `SceneDefinition.resolve_candidate_retrieval_tools()`
+- `CitationMapper.citations_from_documents()`
 - `_invoke_chain_with_docs()`
 
 ### Agentic RAG 编排核心

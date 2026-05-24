@@ -5,7 +5,10 @@
 如需补充设计背景，再看 `docs/`：
 
 - 架构图：[docs/architecture.svg](./docs/architecture.svg)
-- 模块依赖图：[docs/module-deps.svg](./docs/module-deps.svg)
+- 知识管理流程图：[docs/knowledge-document-flow.svg](./docs/knowledge-document-flow.svg)
+- Agentic RAG 流程图：[docs/agentic-rag-retrieval-flow.svg](./docs/agentic-rag-retrieval-flow.svg)
+- 接口文档：[docs/api-list.md](./docs/api-list.md)
+- 数据模型：[docs/data-model.md](./docs/data-model.md)
 - Agentic RAG 说明：[docs/agentic_rag.md](./docs/agentic_rag.md)
 
 ## 30 秒导航
