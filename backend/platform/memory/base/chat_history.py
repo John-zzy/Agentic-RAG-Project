@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from collections.abc import Sequence
 
 from langchain_core.chat_history import BaseChatMessageHistory
@@ -16,19 +17,35 @@ class SQLiteChatMessageHistory(BaseChatMessageHistory):
         session_id: str,
         *,
         store: SQLiteSessionStore | None = None,
+        request_id: str | None = None,
+        timestamp: str | None = None,
+        message_limit: int | None = None,
+        message_transform: Callable[[list[BaseMessage]], list[BaseMessage]] | None = None,
     ) -> None:
         """基于指定会话 ID 暴露 LangChain 可直接消费的消息历史。"""
         self.session_id = session_id
         self.store = store or SQLiteSessionStore()
+        self.request_id = request_id
+        self.timestamp = timestamp
+        self.message_limit = message_limit
+        self.message_transform = message_transform
 
     @property
     def messages(self) -> list[BaseMessage]:
         """读取会话全部 LangChain message。"""
-        return self.store.get_messages(self.session_id)
+        messages = self.store.get_messages(self.session_id, limit=self.message_limit)
+        if self.message_transform is None:
+            return messages
+        return self.message_transform(messages)
 
     def add_messages(self, messages: Sequence[BaseMessage]) -> None:
         """批量写入消息，减少持久化往返次数。"""
-        self.store.append_messages(self.session_id, list(messages))
+        self.store.append_messages(
+            self.session_id,
+            list(messages),
+            timestamp=self.timestamp,
+            request_id=self.request_id,
+        )
 
     def clear(self) -> None:
         """清空当前会话对应的持久化消息和轮次。"""

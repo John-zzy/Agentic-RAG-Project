@@ -1,5 +1,4 @@
 from backend.platform.knowledge.base.store import (
-    SUPPORTED_NAMESPACES,
     ChromaVectorStore,
     ElasticsearchVectorStore,
     KnowledgeDocumentRepository,
@@ -21,7 +20,6 @@ from backend.platform.retrieval import (
 __all__ = [
     "ActiveDocumentChunkSource",
     "DocumentChunkVectorRepository",
-    "SUPPORTED_NAMESPACES",
     "ChromaVectorStore",
     "EmbeddingStrategy",
     "ElasticsearchVectorStore",

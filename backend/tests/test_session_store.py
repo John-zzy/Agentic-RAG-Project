@@ -1,7 +1,11 @@
 import sqlite3
 
+from langchain_core.messages import AIMessage, HumanMessage
+
 import backend.platform.memory.base.session_store as session_store_module
+from backend.platform.memory.base.chat_history import SQLiteChatMessageHistory
 from backend.platform.memory.base.session_store import SQLiteSessionStore
+from backend.platform.memory.chat.prompt_context import PromptContextBuilder
 from backend.tests.test_support import make_test_runtime_dir
 
 
@@ -228,3 +232,65 @@ def test_session_store_normalizes_legacy_retrieval_snippets() -> None:
             "rank": 1,
         }
     ]
+
+
+def test_sqlite_chat_message_history_reads_trimmed_recent_messages() -> None:
+    store = _build_store("session-store-chat-message-history-window")
+    for index in range(1, 4):
+        store.append_messages(
+            "session-history-window",
+            [
+                HumanMessage(content=f"u-{index}"),
+                AIMessage(content=f"a-{index}"),
+            ],
+            timestamp=f"2026-04-23T00:0{index}:00+00:00",
+            request_id=f"req-{index}",
+        )
+
+    history = SQLiteChatMessageHistory(
+        "session-history-window",
+        store=store,
+        message_limit=4,
+        message_transform=PromptContextBuilder(window_size=2).trim_messages,
+    )
+
+    messages = history.messages
+
+    assert [message.content for message in messages] == ["u-2", "a-2", "u-3", "a-3"]
+
+
+def test_session_store_exposes_message_view_with_assistant_metadata() -> None:
+    store = _build_store("session-store-message-view")
+    store.append_turn(
+        session_id="session-message-view",
+        request_id="req-1",
+        user_message="AeroPhone X 有货吗",
+        assistant_answer="AeroPhone X 当前有货。[1]",
+        retrieval_snippets=[
+            {
+                "citation_id": "chunk-1",
+                "namespace": "documents",
+                "source_kind": "document_chunk",
+                "source_name": "manual.md",
+                "source_path": "manual.md",
+                "document_id": "doc-1",
+                "chunk_id": "chunk-1",
+                "chunk_index": 0,
+                "snippet": "AeroPhone X 当前有货。",
+                "score": 0.93,
+                "rank": 1,
+            }
+        ],
+        timestamp="2026-04-23T00:00:00+00:00",
+    )
+
+    messages, total_messages = store.get_session_messages("session-message-view", limit=10)
+
+    assert total_messages == 2
+    assert [message.message_type for message in messages] == ["human", "ai"]
+    assert messages[0].content == "AeroPhone X 有货吗"
+    assert messages[0].knowledge_used is None
+    assert messages[1].request_id == "req-1"
+    assert messages[1].timestamp == "2026-04-23T00:00:00+00:00"
+    assert messages[1].knowledge_used is True
+    assert messages[1].citations[0]["citation_id"] == "chunk-1"

@@ -1,7 +1,6 @@
 """平台配置入口。"""
 
 from backend.platform.config.settings import (
-    APP_RUNTIME_VALUES,
     BASE_DIR,
     CHROMA_DIR,
     DATA_DIR,
@@ -9,7 +8,6 @@ from backend.platform.config.settings import (
     ENV_FILE,
     FILES_DIR,
     LEGACY_SQLITE_PATH,
-    MODEL_ROUTING_CONFIG,
     MODEL_ROUTING_FILE,
     SQLITE_PATH,
     AppRuntimeConfig,
@@ -26,7 +24,6 @@ from backend.platform.config.settings import (
 )
 
 __all__ = [
-    "APP_RUNTIME_VALUES",
     "BASE_DIR",
     "CHROMA_DIR",
     "DATA_DIR",
@@ -34,7 +31,6 @@ __all__ = [
     "ENV_FILE",
     "FILES_DIR",
     "LEGACY_SQLITE_PATH",
-    "MODEL_ROUTING_CONFIG",
     "MODEL_ROUTING_FILE",
     "SQLITE_PATH",
     "AppRuntimeConfig",

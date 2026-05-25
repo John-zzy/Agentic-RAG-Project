@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Literal
 
 from dotenv import dotenv_values, load_dotenv
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -124,14 +124,6 @@ def load_vector_store_config() -> dict[str, object]:
                 "index_name": get_env_value("AI_RAG_VECTOR_STORE__ORDERS__INDEX_NAME") or "ai-rag-orders",
             },
         },
-        "products": {
-            "collection_name": get_env_value("AI_RAG_VECTOR_STORE__PRODUCTS__COLLECTION_NAME") or "products",
-            "index_name": get_env_value("AI_RAG_VECTOR_STORE__PRODUCTS__INDEX_NAME") or "ai-rag-products",
-        },
-        "reviews": {
-            "collection_name": get_env_value("AI_RAG_VECTOR_STORE__REVIEWS__COLLECTION_NAME") or "reviews",
-            "index_name": get_env_value("AI_RAG_VECTOR_STORE__REVIEWS__INDEX_NAME") or "ai-rag-reviews",
-        },
         "documents": {
             "index_name": get_env_value("AI_RAG_VECTOR_STORE__DOCUMENTS__INDEX_NAME") or "documents",
         },
@@ -157,18 +149,11 @@ def load_vector_store_config() -> dict[str, object]:
 
 
 def load_app_runtime_config() -> dict[str, object]:
-    """汇总应用运行时配置，兼容新旧 active_scene 环境变量。"""
+    """汇总应用运行时配置。"""
     active_scene = get_env_value("AI_RAG_APP__ACTIVE_SCENE")
     return {
         "active_scene": active_scene or "generic_assistant",
     }
-
-
-MODEL_ROUTING_CONFIG = load_model_routing_config()["models"]
-MODEL_API_KEYS = load_api_keys()
-VECTOR_STORE_VALUES = load_vector_store_config()
-APP_RUNTIME_VALUES = load_app_runtime_config()
-
 
 class ModelRoutingConfig(BaseModel):
     simple: ModelEndpointConfig
@@ -225,60 +210,12 @@ class VectorStoreConfig(BaseModel):
             ),
         }
     )
-    products: VectorNamespaceConfig | None = Field(
-        default_factory=lambda: VectorNamespaceConfig(
-            collection_name="products",
-            index_name="ai-rag-products",
-        )
-    )
-    reviews: VectorNamespaceConfig | None = Field(
-        default_factory=lambda: VectorNamespaceConfig(
-            collection_name="reviews",
-            index_name="ai-rag-reviews",
-        )
-    )
-    orders: VectorNamespaceConfig | None = Field(
-        default_factory=lambda: VectorNamespaceConfig(
-            collection_name="orders",
-            index_name="ai-rag-orders",
-        )
-    )
     documents: DocumentIndexConfig = Field(
         default_factory=lambda: DocumentIndexConfig(index_name="documents")
     )
     chunks: DocumentIndexConfig = Field(default_factory=lambda: DocumentIndexConfig(index_name="chunks"))
     chroma: ChromaConfig = ChromaConfig()
     elasticsearch: ElasticsearchConfig = ElasticsearchConfig()
-
-    @model_validator(mode="before")
-    @classmethod
-    def merge_legacy_knowledge_sources(cls, value: object) -> object:
-        """兼容旧版 namespace 字段，同时支持统一知识源映射。"""
-        if not isinstance(value, dict):
-            return value
-
-        raw_value = dict(value)
-        raw_sources = raw_value.get("knowledge_sources")
-        merged_sources: dict[str, object] = {}
-        if isinstance(raw_sources, dict):
-            merged_sources.update(raw_sources)
-
-        for legacy_key in ("products", "reviews", "orders"):
-            legacy_config = raw_value.get(legacy_key)
-            if legacy_config is not None:
-                merged_sources[legacy_key] = legacy_config
-
-        if merged_sources:
-            raw_value["knowledge_sources"] = merged_sources
-        return raw_value
-
-    @model_validator(mode="after")
-    def sync_legacy_knowledge_source_aliases(self) -> "VectorStoreConfig":
-        """同步旧字段别名，保证未迁移调用方保持兼容。"""
-        self.products = self.knowledge_sources.get("products")
-        self.reviews = self.knowledge_sources.get("reviews")
-        self.orders = self.knowledge_sources.get("orders")
-        return self
 
 
 class SessionConfig(BaseModel):
@@ -302,62 +239,47 @@ class AppSettings(BaseSettings):
     port: int = Field(default=8000, ge=1, le=65535)
 
     data_dir: Path = DATA_DIR
-    app: AppRuntimeConfig = Field(default_factory=lambda: AppRuntimeConfig(**APP_RUNTIME_VALUES))
-    vector_store: VectorStoreConfig = Field(default_factory=lambda: VectorStoreConfig(**VECTOR_STORE_VALUES))
+    app: AppRuntimeConfig = Field(default_factory=lambda: AppRuntimeConfig(**load_app_runtime_config()))
+    vector_store: VectorStoreConfig = Field(default_factory=lambda: VectorStoreConfig(**load_vector_store_config()))
     session: SessionConfig = SessionConfig()
     models: ModelRoutingConfig = Field(
-        default_factory=lambda: ModelRoutingConfig(
-            simple=ModelEndpointConfig(
-                provider=str(MODEL_ROUTING_CONFIG["simple"]["provider"]),
-                model_name=str(MODEL_ROUTING_CONFIG["simple"]["model_name"]),
-                api_base=str(MODEL_ROUTING_CONFIG["simple"]["api_base"]),
-                api_key=MODEL_API_KEYS["simple"],
-                supports_streaming=bool(MODEL_ROUTING_CONFIG["simple"].get("supports_streaming", False)),
-            ),
-            moderate=ModelEndpointConfig(
-                provider=str(MODEL_ROUTING_CONFIG["moderate"]["provider"]),
-                model_name=str(MODEL_ROUTING_CONFIG["moderate"]["model_name"]),
-                api_base=str(MODEL_ROUTING_CONFIG["moderate"]["api_base"]),
-                api_key=MODEL_API_KEYS["moderate"],
-                supports_streaming=bool(MODEL_ROUTING_CONFIG["moderate"].get("supports_streaming", False)),
-            ),
-            complex=ModelEndpointConfig(
-                provider=str(MODEL_ROUTING_CONFIG["complex"]["provider"]),
-                model_name=str(MODEL_ROUTING_CONFIG["complex"]["model_name"]),
-                api_base=str(MODEL_ROUTING_CONFIG["complex"]["api_base"]),
-                api_key=MODEL_API_KEYS["complex"],
-                supports_streaming=bool(MODEL_ROUTING_CONFIG["complex"].get("supports_streaming", False)),
-            ),
-        )
+        default_factory=lambda: build_model_routing_settings()
     )
-
-    @model_validator(mode="before")
-    @classmethod
-    def merge_legacy_active_scene(cls, value: object) -> object:
-        """兼容旧版顶层 active_scene 输入，同时支持新的 app.active_scene 结构。"""
-        if not isinstance(value, dict):
-            return value
-
-        raw_value = dict(value)
-        raw_app = raw_value.get("app")
-        merged_app = dict(raw_app) if isinstance(raw_app, dict) else {}
-        legacy_active_scene = raw_value.pop("active_scene", None)
-        if legacy_active_scene is not None and "active_scene" not in merged_app:
-            merged_app["active_scene"] = legacy_active_scene
-        if merged_app:
-            raw_value["app"] = merged_app
-        return raw_value
-
-    @property
-    def active_scene(self) -> str:
-        """兼容旧调用方访问顶层 active_scene。"""
-        return self.app.active_scene
 
     model_config = SettingsConfigDict(
         env_file=ENV_FILE,
         env_file_encoding="utf-8",
         env_prefix="AI_RAG_",
         extra="ignore",
+    )
+
+
+def build_model_routing_settings() -> ModelRoutingConfig:
+    """根据当前文件与环境变量构建模型路由配置。"""
+    models = load_model_routing_config()["models"]
+    api_keys = load_api_keys()
+    return ModelRoutingConfig(
+        simple=ModelEndpointConfig(
+            provider=str(models["simple"]["provider"]),
+            model_name=str(models["simple"]["model_name"]),
+            api_base=str(models["simple"]["api_base"]),
+            api_key=api_keys["simple"],
+            supports_streaming=bool(models["simple"].get("supports_streaming", False)),
+        ),
+        moderate=ModelEndpointConfig(
+            provider=str(models["moderate"]["provider"]),
+            model_name=str(models["moderate"]["model_name"]),
+            api_base=str(models["moderate"]["api_base"]),
+            api_key=api_keys["moderate"],
+            supports_streaming=bool(models["moderate"].get("supports_streaming", False)),
+        ),
+        complex=ModelEndpointConfig(
+            provider=str(models["complex"]["provider"]),
+            model_name=str(models["complex"]["model_name"]),
+            api_base=str(models["complex"]["api_base"]),
+            api_key=api_keys["complex"],
+            supports_streaming=bool(models["complex"].get("supports_streaming", False)),
+        ),
     )
 
 

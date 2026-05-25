@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 
 
 def build_rag_answer_prompt_template(system_prompt: str | None = None) -> ChatPromptTemplate:
@@ -19,10 +19,10 @@ def build_rag_answer_prompt_template(system_prompt: str | None = None) -> ChatPr
                     "不要编造不存在的编号；如果证据不足，就明确说明不确定。"
                 ),
             ),
+            MessagesPlaceholder("history"),
             (
                 "human",
                 (
-                    "历史对话：\n{history}\n\n"
                     "用户问题：\n{input}\n\n"
                     "检索上下文：\n{context}\n\n"
                     "请输出最终回答。\n"

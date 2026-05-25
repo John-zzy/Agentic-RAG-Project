@@ -57,6 +57,19 @@ class SessionTurn:
         ]
 
 
+@dataclass(frozen=True)
+class SessionMessageRecord:
+    """描述会话消息视图中的单条 message 记录。"""
+
+    session_id: str
+    request_id: str
+    message_type: str
+    content: str
+    timestamp: str
+    knowledge_used: bool | None
+    citations: list[dict[str, Any]]
+
+
 class SQLiteSessionStore:
     """基于 SQLite 的会话、轮次与 LangChain message 持久化实现。"""
 
@@ -214,10 +227,22 @@ class SQLiteSessionStore:
         assistant_answer: str,
         retrieval_snippets: list[dict[str, Any]],
         timestamp: str,
+        *,
+        persist_messages: bool = True,
     ) -> None:
         """写入一轮问答记录，并同步写入 LangChain message 历史。"""
         self.create_session(session_id=session_id, now=timestamp)
-        payload = json.dumps(retrieval_snippets, ensure_ascii=False)
+        normalized_retrieval_snippets = [
+            self._normalize_retrieval_snippet(item, index)
+            for index, item in enumerate(retrieval_snippets, start=1)
+        ]
+        payload = json.dumps(normalized_retrieval_snippets, ensure_ascii=False)
+        assistant_message = self._build_assistant_message(
+            request_id=request_id,
+            content=assistant_answer,
+            timestamp=timestamp,
+            citations=normalized_retrieval_snippets,
+        )
         with self._lock, self._connect() as conn:
             conn.execute(
                 """
@@ -239,16 +264,26 @@ class SQLiteSessionStore:
                     timestamp,
                 ),
             )
-            self._insert_messages(
-                conn=conn,
-                session_id=session_id,
-                request_id=request_id,
-                messages=[
-                    HumanMessage(content=user_message),
-                    AIMessage(content=assistant_answer),
-                ],
-                timestamp=timestamp,
-            )
+            if persist_messages:
+                self._insert_messages(
+                    conn=conn,
+                    session_id=session_id,
+                    request_id=request_id,
+                    messages=[
+                        HumanMessage(content=user_message),
+                        assistant_message,
+                    ],
+                    timestamp=timestamp,
+                )
+            else:
+                self._sync_turn_messages(
+                    conn=conn,
+                    session_id=session_id,
+                    request_id=request_id,
+                    user_message=user_message,
+                    assistant_message=assistant_message,
+                    timestamp=timestamp,
+                )
             self._touch_session_record(conn, session_id=session_id, timestamp=timestamp)
             conn.commit()
 
@@ -344,6 +379,21 @@ class SQLiteSessionStore:
             return 0
         return int(row["turn_count"])
 
+    def count_messages(self, session_id: str) -> int:
+        """统计会话累计消息数。"""
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT COUNT(*) AS message_count
+                FROM chat_messages
+                WHERE session_id = ?
+                """,
+                (session_id,),
+            ).fetchone()
+        if row is None:
+            return 0
+        return int(row["message_count"])
+
     def get_session_detail(
         self, session_id: str, limit: int
     ) -> tuple[list[SessionTurn], int]:
@@ -376,10 +426,47 @@ class SQLiteSessionStore:
         turns = [self._row_to_session_turn(row) for row in ordered_rows]
         return turns, total_turns
 
+    def get_session_messages(
+        self,
+        session_id: str,
+        limit: int,
+    ) -> tuple[list[SessionMessageRecord], int]:
+        """获取会话消息视图：最近消息列表及总消息数。"""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) AS cnt FROM chat_messages WHERE session_id = ?",
+                (session_id,),
+            ).fetchone()
+            total_messages = int(row["cnt"]) if row else 0
+
+            rows = conn.execute(
+                """
+                SELECT
+                    chat_messages.session_id,
+                    chat_messages.request_id,
+                    chat_messages.message_type,
+                    chat_messages.message_payload,
+                    chat_messages.created_at,
+                    chat_turns.retrieval_snippets
+                FROM chat_messages
+                LEFT JOIN chat_turns
+                    ON chat_turns.session_id = chat_messages.session_id
+                   AND chat_turns.request_id = chat_messages.request_id
+                WHERE chat_messages.session_id = ?
+                ORDER BY chat_messages.id DESC
+                LIMIT ?
+                """,
+                (session_id, limit),
+            ).fetchall()
+
+        ordered_rows = list(reversed(rows))
+        messages = [self._row_to_session_message(row) for row in ordered_rows]
+        return messages, total_messages
+
     def delete_session(self, session_id: str) -> int:
-        """删除会话全部记录并返回删除条数。"""
+        """删除会话全部记录并返回删除消息数。"""
         with self._lock, self._connect() as conn:
-            conn.execute(
+            message_cursor = conn.execute(
                 """
                 DELETE FROM chat_messages
                 WHERE session_id = ?
@@ -401,7 +488,7 @@ class SQLiteSessionStore:
                 (session_id,),
             )
             conn.commit()
-        return max(int(turn_cursor.rowcount), 0)
+        return max(int(message_cursor.rowcount), 0)
 
     def _ensure_schema(self) -> None:
         """创建会话、轮次与消息历史表。"""
@@ -533,6 +620,7 @@ class SQLiteSessionStore:
                 request_id,
                 user_message,
                 assistant_answer,
+                retrieval_snippets,
                 created_at
             FROM chat_turns
             WHERE NOT EXISTS (
@@ -552,7 +640,12 @@ class SQLiteSessionStore:
                 request_id=str(row["request_id"]),
                 messages=[
                     HumanMessage(content=str(row["user_message"])),
-                    AIMessage(content=str(row["assistant_answer"])),
+                    self._build_assistant_message(
+                        request_id=str(row["request_id"]),
+                        content=str(row["assistant_answer"]),
+                        timestamp=str(row["created_at"]),
+                        citations=self._parse_retrieval_snippets(row["retrieval_snippets"]),
+                    ),
                 ],
                 timestamp=str(row["created_at"]),
             )
@@ -595,6 +688,40 @@ class SQLiteSessionStore:
             ) VALUES (?, ?, ?, ?, ?, ?)
             """,
             rows,
+        )
+
+    def _sync_turn_messages(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        session_id: str,
+        request_id: str,
+        user_message: str,
+        assistant_message: AIMessage,
+        timestamp: str,
+    ) -> None:
+        """将 turn 结果同步回 message 视图，保证最终 assistant 内容与 metadata 一致。"""
+        assistant_payload = json.dumps(message_to_dict(assistant_message), ensure_ascii=False)
+        updated = conn.execute(
+            """
+            UPDATE chat_messages
+            SET message_payload = ?, created_at = ?
+            WHERE session_id = ? AND request_id = ? AND message_type = 'ai'
+            """,
+            (assistant_payload, timestamp, session_id, request_id),
+        )
+        if int(updated.rowcount) > 0:
+            return
+
+        self._insert_messages(
+            conn=conn,
+            session_id=session_id,
+            request_id=request_id,
+            messages=[
+                HumanMessage(content=user_message),
+                assistant_message,
+            ],
+            timestamp=timestamp,
         )
 
     def _touch_session_record(
@@ -692,19 +819,32 @@ class SQLiteSessionStore:
         """将消息表记录解析为 LangChain message 列表。"""
         messages: list[BaseMessage] = []
         for row in rows:
-            payload = row["message_payload"]
-            if not isinstance(payload, str) or not payload:
-                continue
-            try:
-                serialized = json.loads(payload)
-            except json.JSONDecodeError:
-                continue
-            if not isinstance(serialized, dict):
-                continue
-            parsed = messages_from_dict([serialized])
-            if parsed:
-                messages.extend(parsed)
+            message = self._parse_message_from_serialized(
+                self._load_message_payload(row["message_payload"])
+            )
+            if message is not None:
+                messages.append(message)
         return messages
+
+    def _row_to_session_message(self, row: sqlite3.Row) -> SessionMessageRecord:
+        """将 SQLite 消息记录转换为 SessionMessageRecord。"""
+        serialized = self._load_message_payload(row["message_payload"])
+        message = self._parse_message_from_serialized(serialized)
+        metadata = self._extract_message_metadata(serialized)
+        citations = self._extract_message_citations(metadata, row["retrieval_snippets"])
+        return SessionMessageRecord(
+            session_id=str(row["session_id"]),
+            request_id=self._coerce_str(metadata.get("request_id")) or str(row["request_id"]),
+            message_type=str(row["message_type"]),
+            content=self._message_content_to_str(message.content if message is not None else ""),
+            timestamp=self._coerce_str(metadata.get("timestamp")) or str(row["created_at"]),
+            knowledge_used=self._extract_knowledge_used(
+                message_type=str(row["message_type"]),
+                metadata=metadata,
+                citations=citations,
+            ),
+            citations=citations,
+        )
 
     def _row_to_session_turn(self, row: sqlite3.Row) -> SessionTurn:
         """将 SQLite 轮次记录转换为 SessionTurn。"""
@@ -716,6 +856,101 @@ class SQLiteSessionStore:
             retrieval_snippets=self._parse_retrieval_snippets(row["retrieval_snippets"]),
             timestamp=str(row["created_at"]),
         )
+
+    def _build_assistant_message(
+        self,
+        *,
+        request_id: str,
+        content: str,
+        timestamp: str,
+        citations: list[dict[str, Any]],
+    ) -> AIMessage:
+        """构造带运行时 metadata 的 assistant message。"""
+        return AIMessage(
+            content=content,
+            additional_kwargs={
+                "request_id": request_id,
+                "timestamp": timestamp,
+                "knowledge_used": len(citations) > 0,
+                "citations": citations,
+            },
+        )
+
+    def _load_message_payload(self, payload: Any) -> dict[str, Any] | None:
+        """解析序列化后的 LangChain message payload。"""
+        if not isinstance(payload, str) or not payload:
+            return None
+        try:
+            serialized = json.loads(payload)
+        except json.JSONDecodeError:
+            return None
+        if not isinstance(serialized, dict):
+            return None
+        return serialized
+
+    def _parse_message_from_serialized(
+        self,
+        serialized: dict[str, Any] | None,
+    ) -> BaseMessage | None:
+        """从序列化 payload 中恢复 LangChain message。"""
+        if serialized is None:
+            return None
+        parsed = messages_from_dict([serialized])
+        if not parsed:
+            return None
+        return parsed[0]
+
+    def _extract_message_metadata(
+        self,
+        serialized: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        """提取 message payload 中的 additional kwargs metadata。"""
+        if serialized is None:
+            return {}
+        data = serialized.get("data")
+        if not isinstance(data, dict):
+            return {}
+        additional_kwargs = data.get("additional_kwargs")
+        if not isinstance(additional_kwargs, dict):
+            return {}
+        return additional_kwargs
+
+    def _extract_message_citations(
+        self,
+        metadata: dict[str, Any],
+        fallback_payload: Any,
+    ) -> list[dict[str, Any]]:
+        """提取 assistant message 的 citations，缺失时回退到 turn 存储。"""
+        payload_citations = metadata.get("citations")
+        if isinstance(payload_citations, list):
+            return [
+                self._normalize_retrieval_snippet(item, index)
+                for index, item in enumerate(payload_citations, start=1)
+            ]
+        return self._parse_retrieval_snippets(fallback_payload)
+
+    def _extract_knowledge_used(
+        self,
+        *,
+        message_type: str,
+        metadata: dict[str, Any],
+        citations: list[dict[str, Any]],
+    ) -> bool | None:
+        """解析 assistant message 的 knowledge_used 标志。"""
+        if message_type != "ai":
+            return None
+        value = metadata.get("knowledge_used")
+        if isinstance(value, bool):
+            return value
+        return len(citations) > 0
+
+    def _message_content_to_str(self, content: Any) -> str:
+        """将 LangChain message content 归一化为字符串。"""
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list | dict):
+            return json.dumps(content, ensure_ascii=False)
+        return str(content)
 
     def _parse_session_record(self, row: sqlite3.Row | None) -> SessionRecord | None:
         """将 SQLite 行解析为 SessionRecord。"""

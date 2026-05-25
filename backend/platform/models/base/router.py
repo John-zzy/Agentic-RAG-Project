@@ -52,11 +52,6 @@ class ModelRouter:
         config = getattr(self._config, complexity)
         return RoutedModel.from_config(complexity, config)
 
-    def route_by_complexity(self, complexity: TaskComplexity) -> RoutedModel:
-        """复杂度路由的别名方法。"""
-        return self.select(complexity)
-
-
 router = ModelRouter()
 
 

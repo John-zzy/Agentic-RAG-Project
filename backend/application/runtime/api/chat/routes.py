@@ -16,7 +16,7 @@ from backend.application.runtime.api.chat.schemas import (
     SessionCreateResponse,
     SessionDeleteResponse,
     SessionDetailResponse,
-    SessionTurnResponse,
+    SessionMessageResponse,
 )
 from backend.application.runtime.service import ChatServiceError
 from backend.platform.knowledge.sources import MountedKnowledgeSourceValidationError
@@ -168,21 +168,25 @@ def get_session(
         if session is not None
         else list(service.default_mounted_knowledge_sources())
     )
-    turns, total_turns = service.session_store.get_session_detail(session_id=session_id, limit=limit)
+    messages, total_messages = service.session_store.get_session_messages(
+        session_id=session_id,
+        limit=limit,
+    )
     return SessionDetailResponse(
         session_id=session_id,
         scene=session_scene,
         mounted_knowledge_sources=mounted_knowledge_sources,
-        total_turns=total_turns,
-        turns=[
-            SessionTurnResponse(
-                request_id=turn.request_id,
-                user_message=turn.user_message,
-                assistant_answer=turn.assistant_answer,
-                retrieval_snippets=turn.retrieval_snippets,
-                timestamp=turn.timestamp,
+        total_messages=total_messages,
+        messages=[
+            SessionMessageResponse(
+                type=message.message_type,
+                content=message.content,
+                request_id=message.request_id,
+                timestamp=message.timestamp,
+                knowledge_used=message.knowledge_used,
+                citations=message.citations,
             )
-            for turn in turns
+            for message in messages
         ],
     )
 
@@ -191,8 +195,8 @@ def get_session(
 def delete_session(session_id: str, request: Request) -> SessionDeleteResponse:
     """删除指定会话及其全部历史消息。"""
     service = _get_chat_service(request)
-    deleted_turns = service.session_store.delete_session(session_id=session_id)
-    return SessionDeleteResponse(session_id=session_id, deleted_turns=deleted_turns)
+    deleted_messages = service.session_store.delete_session(session_id=session_id)
+    return SessionDeleteResponse(session_id=session_id, deleted_messages=deleted_messages)
 
 
 def _get_chat_service(request: Request) -> Any:

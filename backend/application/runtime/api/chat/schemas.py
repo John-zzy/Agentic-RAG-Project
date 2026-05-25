@@ -101,6 +101,23 @@ class SessionTurnResponse(BaseModel):
     timestamp: str = Field(description="该轮写入时间。")
 
 
+class SessionMessageResponse(BaseModel):
+    """会话单条 message 响应体。"""
+
+    type: str = Field(description="消息类型，例如 human、ai。")
+    content: str = Field(description="消息内容。")
+    request_id: str = Field(description="所属请求 ID。")
+    timestamp: str = Field(description="消息写入时间。")
+    knowledge_used: bool | None = Field(
+        default=None,
+        description="仅 assistant 消息可用，表示该回答是否使用了知识检索。",
+    )
+    citations: list[Citation] = Field(
+        default_factory=list,
+        description="仅 assistant 消息可用，表示该回答关联的结构化引用。",
+    )
+
+
 class SessionDetailResponse(BaseModel):
     """会话详情响应体。"""
 
@@ -110,12 +127,15 @@ class SessionDetailResponse(BaseModel):
         default_factory=list,
         description="该会话当前挂载的知识源列表。",
     )
-    total_turns: int = Field(description="该会话历史总轮数。")
-    turns: list[SessionTurnResponse] = Field(default_factory=list, description="最近的会话轮次列表。")
+    total_messages: int = Field(description="该会话历史总消息数。")
+    messages: list[SessionMessageResponse] = Field(
+        default_factory=list,
+        description="最近的会话消息列表。",
+    )
 
 
 class SessionDeleteResponse(BaseModel):
     """会话删除响应体。"""
 
     session_id: str = Field(description="被删除的会话 ID。")
-    deleted_turns: int = Field(description="被删除的轮次数量。")
+    deleted_messages: int = Field(description="被删除的消息数量。")

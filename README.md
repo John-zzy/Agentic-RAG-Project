@@ -18,7 +18,7 @@
 当前项目已经具备一个可运行的多场景 RAG 后端，当前核心能力如下：
 
 - 统一 `/chat` 入口，按会话绑定 `scene` 处理请求
-- `/chat` 支持 `stream=true` 的 SSE 最终回答流式输出
+- `/chat` 支持 `stream=true` 的 SSE 事件流输出，包含 history/tool 可观测事件与最终回答增量
 - 会话创建、查询、删除与 `mounted_knowledge_sources` 知识源挂载
 - 本地知识文件上传、预处理预览、正式入库、重处理与重切块
 - 文档切块、索引、语义检索与 `documents/chunks` 的 `Hybrid Search`
@@ -26,6 +26,12 @@
 - 结构化 `citations`、回答正文引用编号与 session `retrieval_snippets` 落库
 - `Chroma` / `Elasticsearch` 可切换向量存储，以及基于 `SQLite` 的会话记忆
 - 内置 `generic_assistant` 与 `ecommerce` 两个场景，用于验证平台能力与场景扩展方式
+
+当前 `/chat` runtime 已采用现代 LangChain message-history 主链：
+
+- prompt 基于 `ChatPromptTemplate + MessagesPlaceholder("history")`
+- 多轮历史通过 `RunnableWithMessageHistory` 注入
+- 不再使用旧式 `ConversationBufferMemory` / `ConversationBufferWindowMemory`
 
 当前定位更偏“场景化 RAG / Agent Runtime 底座”，还不是完整产品。
 
@@ -206,7 +212,7 @@ backend\.venv\Scripts\python.exe backend\run.py
 1. 启动服务
 2. 通过 `POST /sessions` 创建会话并指定场景，可选传入 `mounted_knowledge_sources`
 3. 通过 `POST /chat` 发起对话；运行时会根据会话挂载源动态组装 candidate tools
-   传 `stream=true` 时，接口会以 SSE 返回 `start`、`chunk`、`done`、`error` 四类事件，仅最终回答阶段流式输出
+   传 `stream=true` 时，接口会以 SSE 返回 `start`、`history`、`tool`、`chunk`、`done`、`error` 事件；其中只有最终回答阶段按 `chunk` 流式输出文本，`history/tool` 用于暴露主链上下文
 4. 如需知识增强，先通过 `POST /files/upload` 上传知识文件
 5. 通过 `POST /knowledge/documents/preprocess-preview` 预览清洗规则、样本和统计
 6. 通过 `POST /knowledge/documents` 确认入库；后续按需调用 `.../reprocess` 或 `.../rechunk`
@@ -265,8 +271,23 @@ Invoke-WebRequest -Uri http://127.0.0.1:8000/chat -Method Post -ContentType "app
 说明：
 
 - `stream=true` 的响应头应包含 `Content-Type: text/event-stream`
-- 事件顺序应为 `start -> chunk... -> done`
+- 成功路径事件顺序通常为 `start -> history -> tool -> chunk... -> done`
+- 失败路径会输出 `error` 事件
 - 客户端应以 `done.answer` 作为最终权威文本；若中途失败，会收到 `error` 事件
+
+## Runtime Memory
+
+当前 runtime 的 memory 设计已经切到 LangChain message-based 方式：
+
+- session 历史主存储位于 `chat_messages`
+- runtime 通过 `RunnableWithMessageHistory` 自动把历史消息注入 prompt
+- `/sessions/{id}` 返回的是 message 视图，而不是旧的 turn 视图
+
+这意味着当前主链的 memory 心智应该理解为：
+
+- model 层只负责 runnable 执行
+- runtime 层负责 history 注入与 SSE 事件组织
+- memory 层负责会话持久化与 LangChain `BaseChatMessageHistory` 适配
 
 ## 开发说明
 

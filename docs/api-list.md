@@ -29,16 +29,20 @@
     - `citations`: 统一引用列表，每项包含 `index`、`citation_id`、`namespace`、`source_kind`、`source_name`、`source_path`、`document_id`、`chunk_id`、`chunk_index`、`snippet`、`score`、`vector_score`、`keyword_score`、`vector_rank`、`keyword_rank`、`matched_by`、`rank`。
   - 流式 `stream=true`：
     - 响应头为 `Content-Type: text/event-stream`。
-    - 事件类型固定为 `start`、`chunk`、`done`、`error`，且 `data` 一律为 JSON。
+    - 事件类型为 `start`、`history`、`tool`、`chunk`、`done`、`error`，且 `data` 一律为 JSON。
     - `start.data` 包含 `session_id`、`request_id`、`knowledge_used`、`scene`、`agent`。
+    - `history.data` 包含 `session_id`、`request_id`、`window_size`、`message_count`、`messages`，用于暴露本轮注入模型前的历史消息窗口；`messages` 每项包含 `type` 与 `content`。
+    - `tool.data` 包含 retrieval 阶段的结构化结果，固定补充 `session_id`、`request_id`、`knowledge_used`、`citations`；当前常见字段还包括 `stage`、`mode`、`candidate_tools`、`documents`、`rounds`。
     - `chunk.data` 包含 `delta`，表示最终回答文本增量。
     - `done.data` 与非流式 `ChatResponse` 结构一致，客户端应以 `done.answer` 作为最终权威文本。
     - `error.data` 包含 `code`、`message`、`request_id`。
 
 补充说明：
 
-- `stream=true` 只会流式输出“最终回答生成阶段”；Agentic RAG 检索、文档召回、证据聚合与 citations 计算仍在服务端同步完成。
-- 无知识命中时，`stream=true` 仍返回 SSE 成功态，事件顺序为 `start -> chunk -> done`，其中 `done.knowledge_used` 为 `false`。
+- `stream=true` 只会对“最终回答生成阶段”按 `chunk` 推送文本增量；但在生成回答前，服务端会先发送 `history` 和 `tool` 事件用于暴露可观测上下文。
+- 命中知识时，成功路径事件顺序通常为 `start -> history -> tool -> chunk... -> done`。
+- 无知识命中时，仍返回 SSE 成功态，事件顺序为 `start -> history -> tool -> chunk -> done`，其中 `tool.documents = 0`，`done.knowledge_used = false`。
+- 失败路径事件顺序为 `start -> history -> tool -> error`。
 
 ### `GET /scenes`
 
@@ -64,23 +68,29 @@
 
 ### `GET /sessions/{session_id}`
 
-- 一句话说明：查询指定会话的详情和历史轮次。
+- 一句话说明：查询指定会话的详情和最近消息视图。
 - 主要入参：
   - Path `session_id`: 会话 ID。
-  - Query `limit`: 返回最近多少轮会话，默认 `20`，范围 `1-100`。
+  - Query `limit`: 返回最近多少条消息，默认 `20`，范围 `1-100`。
 - 返回结构：
   - `session_id`: 会话 ID。
   - `scene`: 会话所属场景。
   - `mounted_knowledge_sources`: 会话挂载的知识源列表；历史会话缺失该字段时默认回填 `["documents"]`。
-  - `total_turns`: 历史总轮数。
-  - `turns`: 轮次列表，每项包含 `request_id`、`user_message`、`assistant_answer`、`retrieval_snippets`、`timestamp`。
-  - `retrieval_snippets`: 与当前 `citations` 契约兼容的历史引用列表；当前会透传 `vector_score`、`keyword_score`、`vector_rank`、`keyword_rank`、`matched_by`，读取旧历史时会做字段补齐和结构兼容。
+  - `total_messages`: 历史总消息数。
+  - `messages`: 最近消息列表，每项包含：
+    - `type`: 消息类型，例如 `human`、`ai`。
+    - `content`: 消息内容。
+    - `request_id`: 所属请求 ID。
+    - `timestamp`: 写入时间。
+    - `knowledge_used`: 仅 assistant 消息可用，表示该回答是否使用了知识检索。
+    - `citations`: 仅 assistant 消息可用，对应结构化引用列表；兼容旧历史中的 `retrieval_snippets`，会按当前 citation 契约做字段补齐。
 
 补充说明：
 
 - 当前上传文档检索已经由 `platform.rag.DocumentRetrievalService` 统一承接。
 - `documents/chunks` 会执行 Hybrid Search：语义召回 + BM25 关键词召回 + 融合排序。
-- 新增调试字段主要用于后端引用透传、session history 持久化和排障，本期前端页面可不展示。
+- 当前 session 详情已经贴近 `chat_messages` 主数据模型，而不是旧的 turn 兼容视图。
+- 新增调试字段主要用于后端引用透传、message history 持久化和排障，本期前端页面可不展示。
 
 ### `DELETE /sessions/{session_id}`
 
@@ -89,7 +99,7 @@
   - Path `session_id`: 会话 ID。
 - 返回结构：
   - `session_id`: 被删除的会话 ID。
-  - `deleted_turns`: 被删除的历史轮次数量。
+  - `deleted_messages`: 被删除的消息数量。
 
 ## File Management
 

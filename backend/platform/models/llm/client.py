@@ -8,11 +8,11 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import BasePromptTemplate, PromptTemplate
 from langchain_core.runnables import Runnable, RunnableSerializable
 
-from backend.platform.models.base.router import RoutedModel, TaskComplexity, get_model_for_task
+from backend.platform.models.base.router import TaskComplexity, RoutedModel, get_model_for_task
 
 
 class ModelClient:
-    """封装基于复杂度路由的 LangChain 聊天模型入口。"""
+    """封装基于复杂度路由的 LangChain 聊天模型与 runnable 入口。"""
 
     def __init__(self, chat_model_factory: Callable[..., Any] | None = None) -> None:
         """初始化模型客户端与默认提示词模板。"""
@@ -56,7 +56,7 @@ class ModelClient:
     ) -> RunnableSerializable[Any, Any]:
         """返回可组合的 LangChain runnable。
 
-        未传入 `prompt_template` 时直接返回 `BaseChatModel`，方便后续绑定 tools。
+        未传入 `prompt_template` 时直接返回 `BaseChatModel`，作为 LCEL 可继续组合的 runnable。
         传入模板后返回 `prompt -> model -> parser` 链。
         """
         chat_model = self.get_chat_model(complexity)
@@ -65,6 +65,42 @@ class ModelClient:
 
         parser = output_parser or self._output_parser
         return prompt_template | chat_model | parser
+
+    def invoke_runnable(
+        self,
+        runnable: Runnable[Any, Any],
+        input: Any,
+        *,
+        config: Any | None = None,
+    ) -> Any:
+        """执行 runnable，并对空结果应用统一保护。"""
+        content = runnable.invoke(input, config=config)
+        if not content:
+            raise ValueError("Model returned empty content")
+        if isinstance(content, str):
+            return content.strip()
+        return content
+
+    def stream_runnable(
+        self,
+        runnable: Runnable[Any, Any],
+        input: Any,
+        *,
+        config: Any | None = None,
+    ) -> Iterator[Any]:
+        """流式执行 runnable，并过滤空 chunk。"""
+        yielded = False
+        for chunk in runnable.stream(input, config=config):
+            if not chunk:
+                continue
+            yielded = True
+            if isinstance(chunk, str):
+                yield chunk
+                continue
+            yield chunk
+
+        if not yielded:
+            raise ValueError("Model returned empty streaming content")
 
     def _resolve_chat_model_factory(self) -> Callable[..., Any]:
         """延迟解析 ChatOpenAI 工厂，支持依赖注入。"""
@@ -82,30 +118,19 @@ class ModelClient:
         self._chat_model_factory = ChatOpenAI
         return ChatOpenAI
 
-    def _build_text_chain(self, routed_model: RoutedModel) -> RunnableSerializable[dict[str, Any], str]:
-        """构造兼容旧字符串 API 的文本输出链。"""
-        return self.get_runnable(
-            complexity=routed_model.complexity,
-            prompt_template=self._prompt_template,
-            output_parser=self._output_parser,
-        )
-
     def invoke_template(
         self,
         prompt_template: BasePromptTemplate,
         variables: dict[str, Any],
         complexity: TaskComplexity = "simple",
     ) -> str:
-        """使用指定模板同步调用模型，并兼容返回纯文本。"""
-        chain = self.get_runnable(
+        """兼容 helper：基于模板执行一次同步文本调用。"""
+        runnable = self.get_runnable(
             complexity=complexity,
             prompt_template=prompt_template,
             output_parser=self._output_parser,
         )
-        content = chain.invoke(variables)
-        if not content:
-            raise ValueError("Model returned empty content")
-        return str(content).strip()
+        return str(self.invoke_runnable(runnable, variables)).strip()
 
     def invoke(self, prompt: str, complexity: TaskComplexity = "simple") -> str:
         """使用默认模板执行一次非流式文本调用。"""
@@ -121,26 +146,18 @@ class ModelClient:
         variables: dict[str, Any],
         complexity: TaskComplexity = "simple",
     ) -> Iterator[str]:
-        """使用指定模板以流式方式输出文本片段。"""
+        """兼容 helper：基于模板执行一次流式文本调用。"""
         routed_model = get_model_for_task(complexity)
         if not routed_model.supports_streaming:
             raise ValueError(f"Streaming is not supported for model complexity: {routed_model.complexity}")
 
-        chain = self.get_runnable(
+        runnable = self.get_runnable(
             complexity=routed_model.complexity,
             prompt_template=prompt_template,
             output_parser=self._output_parser,
         )
-        yielded = False
-        for chunk in chain.stream(variables):
-            text = str(chunk)
-            if not text:
-                continue
-            yielded = True
-            yield text
-
-        if not yielded:
-            raise ValueError("Model returned empty streaming content")
+        for chunk in self.stream_runnable(runnable, variables):
+            yield str(chunk)
 
     def stream(self, prompt: str, complexity: TaskComplexity = "simple") -> Iterator[str]:
         """以流式方式输出模型生成的文本片段。"""
@@ -171,3 +188,18 @@ def get_runnable(
         prompt_template=prompt_template,
         output_parser=output_parser,
     )
+
+
+def invoke_runnable(runnable: Runnable[Any, Any], input: Any, *, config: Any | None = None) -> Any:
+    """模块级快捷入口，执行 runnable 并应用统一空结果保护。"""
+    return model_client.invoke_runnable(runnable, input, config=config)
+
+
+def stream_runnable(
+    runnable: Runnable[Any, Any],
+    input: Any,
+    *,
+    config: Any | None = None,
+) -> Iterator[Any]:
+    """模块级快捷入口，流式执行 runnable 并过滤空 chunk。"""
+    yield from model_client.stream_runnable(runnable, input, config=config)

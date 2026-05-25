@@ -3,7 +3,9 @@ from typing import Any
 
 from fastapi.testclient import TestClient
 from langchain_core.documents import Document
-from langchain_core.runnables import RunnableLambda
+from langchain_core.messages import BaseMessage
+from langchain_core.prompt_values import ChatPromptValue
+from langchain_core.runnables import RunnableLambda, RunnableSerializable
 
 from backend.application.runtime.api.app import create_app
 from backend.application.runtime import ChatService, SceneChatService, build_default_scene_registry
@@ -90,18 +92,55 @@ class FakeDocumentRetrievalService:
 class FakeModel:
     def __init__(self, answer: str = "mock-answer", stream_chunks: list[str] | None = None) -> None:
         self.answer = answer
-        self.chat_model_calls: list[str] = []
-        self.stream_template_calls: list[str] = []
+        self.get_runnable_calls: list[str] = []
+        self.invoke_runnable_calls: list[dict[str, Any]] = []
+        self.stream_runnable_calls: list[dict[str, Any]] = []
+        self.history_recorder = HistoryRecorder()
         self.stream_chunks = stream_chunks or [answer]
 
-    def build_chat_model_for_complexity(self, complexity: str):
-        self.chat_model_calls.append(complexity)
-        return RunnableLambda(lambda _: self.answer)
+    def get_runnable(
+        self,
+        complexity: str = "simple",
+        prompt_template: Any | None = None,
+        *,
+        output_parser: Any | None = None,
+    ):
+        del output_parser
+        self.get_runnable_calls.append(complexity)
+        if prompt_template is None:
+            return FakeAnswerRunnable(
+                answer=self.answer,
+                stream_chunks=self.stream_chunks,
+                history_recorder=self.history_recorder,
+            )
+        return prompt_template | FakeAnswerRunnable(
+            answer=self.answer,
+            stream_chunks=self.stream_chunks,
+            history_recorder=self.history_recorder,
+        )
+
+    def invoke_runnable(self, runnable: Any, input: Any, *, config: Any | None = None) -> str:
+        self.invoke_runnable_calls.append({"runnable": runnable, "input": input, "config": config})
+        return runnable.invoke(input, config=config)
+
+    def stream_runnable(
+        self,
+        runnable: Any,
+        input: Any,
+        *,
+        config: Any | None = None,
+    ):
+        self.stream_runnable_calls.append({"runnable": runnable, "input": input, "config": config})
+        yield from runnable.stream(input, config=config)
+
+    def build_chat_model_for_complexity(
+        self,
+        complexity: str = "simple",
+    ):
+        raise AssertionError("runtime should use get_runnable instead of build_chat_model_for_complexity")
 
     def invoke_template(self, prompt_template: Any, variables: dict[str, Any], complexity: str = "simple") -> str:
-        del prompt_template, variables
-        self.chat_model_calls.append(complexity)
-        return self.answer
+        raise AssertionError("runtime should use invoke_runnable instead of invoke_template")
 
     def stream_template(
         self,
@@ -109,10 +148,54 @@ class FakeModel:
         variables: dict[str, Any],
         complexity: str = "simple",
     ):
-        del prompt_template, variables
-        self.stream_template_calls.append(complexity)
+        raise AssertionError("runtime should use stream_runnable instead of stream_template")
+
+
+class FakeAnswerRunnable(RunnableSerializable[Any, str]):
+    answer: str
+    stream_chunks: list[str]
+    history_recorder: Any
+
+    def invoke(
+        self,
+        input: Any,
+        config: Any | None = None,
+        **kwargs: Any,
+    ) -> str:
+        del config, kwargs
+        self._record_prompt_messages(input)
+        return self.answer
+
+    def stream(
+        self,
+        input: Any,
+        config: Any | None = None,
+        **kwargs: Any,
+    ):
+        del config, kwargs
+        self._record_prompt_messages(input)
         for chunk in self.stream_chunks:
             yield chunk
+
+    def _record_prompt_messages(self, input: Any) -> None:
+        if isinstance(input, ChatPromptValue):
+            messages = input.to_messages()
+        elif isinstance(input, list) and all(isinstance(message, BaseMessage) for message in input):
+            messages = list(input)
+        else:
+            return
+
+        history_messages = [
+            message
+            for message in messages[:-1]
+            if isinstance(message, BaseMessage) and message.type in {"human", "ai"}
+        ]
+        self.history_recorder.snapshots.append(history_messages)
+
+
+class HistoryRecorder:
+    def __init__(self) -> None:
+        self.snapshots: list[list[BaseMessage]] = []
 
 
 def _parse_sse_events(raw_text: str) -> list[dict[str, Any]]:
@@ -230,7 +313,8 @@ def test_chat_api_success_path() -> None:
     saved_session = service.session_store.get_session(payload["session_id"])
     assert saved_session is not None
     assert saved_session.mounted_knowledge_sources == ("documents",)
-    assert model.chat_model_calls
+    assert model.get_runnable_calls == ["simple"]
+    assert len(model.invoke_runnable_calls) == 1
 
 
 def test_chat_api_sse_success_path_returns_structured_events() -> None:
@@ -265,18 +349,29 @@ def test_chat_api_sse_success_path_returns_structured_events() -> None:
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/event-stream")
     events = _parse_sse_events(response.text)
-    assert [event["event"] for event in events] == ["start", "chunk", "chunk", "done"]
+    assert [event["event"] for event in events] == ["start", "history", "tool", "chunk", "chunk", "done"]
 
     start_data = events[0]["data"]
+    history_data = events[1]["data"]
+    tool_data = events[2]["data"]
     done_data = events[-1]["data"]
     assert start_data
+    assert history_data
+    assert tool_data
     assert done_data
 
     start_payload = json.loads(start_data)
+    history_payload = json.loads(history_data)
+    tool_payload = json.loads(tool_data)
     done_payload = json.loads(done_data)
     assert start_payload["session_id"]
     assert start_payload["request_id"]
     assert start_payload["knowledge_used"] is True
+    assert history_payload["message_count"] == 0
+    assert history_payload["messages"] == []
+    assert tool_payload["knowledge_used"] is True
+    assert tool_payload["documents"] == 1
+    assert tool_payload["rounds"][0]["tool_name"] == "knowledge_document_search"
     assert done_payload["answer"] == "推荐 P001，续航表现较好。[1]"
     assert done_payload["knowledge_used"] is True
     assert done_payload["scene"] == "generic_assistant"
@@ -287,7 +382,8 @@ def test_chat_api_sse_success_path_returns_structured_events() -> None:
     )
     assert total_turns == 1
     assert saved_turns[0].assistant_answer == "推荐 P001，续航表现较好。[1]"
-    assert model.stream_template_calls == ["simple"]
+    assert model.get_runnable_calls == ["simple"]
+    assert len(model.stream_runnable_calls) == 1
 
 
 def test_chat_api_validation_error_when_message_missing() -> None:
@@ -319,7 +415,8 @@ def test_chat_api_no_hit_fallback_sets_knowledge_used_false() -> None:
     assert "暂时没有检索到足够相关的文档知识" in payload["answer"]
     assert payload["scene"] == "generic_assistant"
     assert payload["agent"] is None
-    assert model.chat_model_calls == []
+    assert model.get_runnable_calls == []
+    assert model.invoke_runnable_calls == []
 
 
 def test_chat_api_sse_no_hit_uses_fallback_without_model_streaming() -> None:
@@ -338,15 +435,66 @@ def test_chat_api_sse_no_hit_uses_fallback_without_model_streaming() -> None:
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/event-stream")
     events = _parse_sse_events(response.text)
-    assert [event["event"] for event in events] == ["start", "chunk", "done"]
+    assert [event["event"] for event in events] == ["start", "history", "tool", "chunk", "done"]
 
-    chunk_payload = json.loads(events[1]["data"])
-    done_payload = json.loads(events[2]["data"])
+    history_payload = json.loads(events[1]["data"])
+    tool_payload = json.loads(events[2]["data"])
+    chunk_payload = json.loads(events[3]["data"])
+    done_payload = json.loads(events[4]["data"])
+    assert history_payload["messages"] == []
+    assert history_payload["message_count"] == 0
+    assert tool_payload["knowledge_used"] is False
+    assert tool_payload["documents"] == 0
     assert "暂时没有检索到足够相关的文档知识" in chunk_payload["delta"]
     assert done_payload["knowledge_used"] is False
     assert done_payload["citations"] == []
-    assert model.stream_template_calls == []
-    assert model.chat_model_calls == []
+    assert model.get_runnable_calls == []
+    assert model.stream_runnable_calls == []
+    assert model.invoke_runnable_calls == []
+
+
+def test_chat_api_sse_error_path_keeps_runtime_event_order() -> None:
+    class ErrorModel(FakeModel):
+        def stream_runnable(
+            self,
+            runnable: Any,
+            input: Any,
+            *,
+            config: Any | None = None,
+        ):
+            self.stream_runnable_calls.append({"runnable": runnable, "input": input, "config": config})
+            raise ValueError("Model returned empty streaming content")
+
+    knowledge = FakeKnowledgeService()
+    document_retrieval_service = FakeDocumentRetrievalService(
+        documents=[
+            _result(
+                doc_id="doc-1",
+                content="P001 手机，续航强，电池 5000mAh。",
+                score=0.92,
+                metadata={
+                    "document_id": "doc-1",
+                    "source_path": "doc.txt",
+                    "namespace": "documents",
+                    "is_managed_document": True,
+                    "chunk_id": "chunk-doc-1",
+                    "chunk_index": 0,
+                },
+            )
+        ]
+    )
+    model = ErrorModel(answer="unused", stream_chunks=["unused"])
+    service = _build_chat_service("chat-api-sse-error", knowledge, document_retrieval_service, model)
+    app = create_app(chat_service=service)
+
+    with TestClient(app) as client:
+        response = client.post("/chat", json={"message": "推荐续航好的手机", "stream": True})
+
+    assert response.status_code == 200
+    events = _parse_sse_events(response.text)
+    assert [event["event"] for event in events] == ["start", "history", "tool", "error"]
+    error_payload = json.loads(events[-1]["data"])
+    assert error_payload["code"] == "MODEL_EMPTY_RESPONSE"
 
 
 def test_chat_api_non_stream_response_and_session_persistence_do_not_regress() -> None:
@@ -390,6 +538,175 @@ def test_chat_api_non_stream_response_and_session_persistence_do_not_regress() -
     assert turns[0].retrieval_snippets[0]["citation_id"] == "chunk-manual-1"
 
 
+def test_chat_api_uses_message_history_for_follow_up_turns() -> None:
+    knowledge = FakeKnowledgeService()
+    document_retrieval_service = FakeDocumentRetrievalService(
+        documents=[
+            _result(
+                doc_id="doc-1",
+                content="AeroPhone X 当前有货，售价 4599 元。",
+                score=0.93,
+                metadata={
+                    "document_id": "doc-1",
+                    "source_path": "manual.md",
+                    "namespace": "documents",
+                    "is_managed_document": True,
+                    "chunk_id": "chunk-manual-1",
+                    "chunk_index": 0,
+                },
+            )
+        ]
+    )
+    model = FakeModel(answer="AeroPhone X 当前有货，售价 4599 元。[1]")
+    service = _build_chat_service(
+        "chat-api-message-history-follow-up",
+        knowledge,
+        document_retrieval_service,
+        model,
+    )
+    app = create_app(chat_service=service)
+
+    with TestClient(app) as client:
+        first = client.post("/chat", json={"message": "AeroPhone X 多少钱"})
+        assert first.status_code == 200
+        session_id = first.json()["session_id"]
+
+        second = client.post(
+            "/chat",
+            json={"message": "那它现在有货吗", "session_id": session_id},
+        )
+
+    assert second.status_code == 200
+    assert len(model.history_recorder.snapshots) >= 2
+    second_history = model.history_recorder.snapshots[-1]
+    assert len(second_history) == 2
+    assert second_history[0].type == "human"
+    assert second_history[0].content == "AeroPhone X 多少钱"
+    assert second_history[1].type == "ai"
+    assert second_history[1].content == "AeroPhone X 当前有货，售价 4599 元。[1]"
+
+    messages = service.session_store.get_messages(session_id)
+    assert len(messages) == 4
+    assert messages[0].type == "human"
+    assert messages[1].type == "ai"
+    assert messages[2].type == "human"
+    assert messages[3].type == "ai"
+
+
+def test_chat_api_message_history_respects_window_size() -> None:
+    knowledge = FakeKnowledgeService()
+    document_retrieval_service = FakeDocumentRetrievalService(
+        documents=[
+            _result(
+                doc_id="doc-1",
+                content="AeroPhone X 当前有货，售价 4599 元。",
+                score=0.93,
+                metadata={
+                    "document_id": "doc-1",
+                    "source_path": "manual.md",
+                    "namespace": "documents",
+                    "is_managed_document": True,
+                    "chunk_id": "chunk-manual-1",
+                    "chunk_index": 0,
+                },
+            )
+        ]
+    )
+    model = FakeModel(answer="AeroPhone X 当前有货，售价 4599 元。[1]")
+    service = _build_chat_service(
+        "chat-api-message-history-window",
+        knowledge,
+        document_retrieval_service,
+        model,
+    )
+    app = create_app(chat_service=service)
+
+    with TestClient(app) as client:
+        session_id: str | None = None
+        for index in range(1, 4):
+            response = client.post(
+                "/chat",
+                json={
+                    "message": f"第{index}轮问题",
+                    **({"session_id": session_id} if session_id else {}),
+                },
+            )
+            assert response.status_code == 200
+            session_id = response.json()["session_id"]
+
+    assert session_id is not None
+    latest_history = model.history_recorder.snapshots[-1]
+    assert len(latest_history) == 4
+    assert [message.content for message in latest_history] == [
+        "第1轮问题",
+        "AeroPhone X 当前有货，售价 4599 元。[1]",
+        "第2轮问题",
+        "AeroPhone X 当前有货，售价 4599 元。[1]",
+    ]
+    messages = service.session_store.get_messages(session_id)
+    assert len(messages) == 6
+
+
+def test_chat_api_sse_history_event_uses_trimmed_message_window() -> None:
+    knowledge = FakeKnowledgeService()
+    document_retrieval_service = FakeDocumentRetrievalService(
+        documents=[
+            _result(
+                doc_id="doc-1",
+                content="AeroPhone X 当前有货，售价 4599 元。",
+                score=0.93,
+                metadata={
+                    "document_id": "doc-1",
+                    "source_path": "manual.md",
+                    "namespace": "documents",
+                    "is_managed_document": True,
+                    "chunk_id": "chunk-manual-1",
+                    "chunk_index": 0,
+                },
+            )
+        ]
+    )
+    model = FakeModel(
+        answer="AeroPhone X 当前有货，售价 4599 元。[1]",
+        stream_chunks=["AeroPhone X 当前", "有货，售价 4599 元。[1]"],
+    )
+    service = _build_chat_service(
+        "chat-api-sse-history-window",
+        knowledge,
+        document_retrieval_service,
+        model,
+    )
+    app = create_app(chat_service=service)
+
+    with TestClient(app) as client:
+        session_id: str | None = None
+        for index in range(1, 4):
+            response = client.post(
+                "/chat",
+                json={
+                    "message": f"第{index}轮问题",
+                    "stream": index == 3,
+                    **({"session_id": session_id} if session_id else {}),
+                },
+            )
+            assert response.status_code == 200
+            if index < 3:
+                session_id = response.json()["session_id"]
+            else:
+                events = _parse_sse_events(response.text)
+
+    assert session_id is not None
+    assert [event["event"] for event in events] == ["start", "history", "tool", "chunk", "chunk", "done"]
+    history_payload = json.loads(events[1]["data"])
+    assert history_payload["message_count"] == 4
+    assert [message["content"] for message in history_payload["messages"]] == [
+        "第1轮问题",
+        "AeroPhone X 当前有货，售价 4599 元。[1]",
+        "第2轮问题",
+        "AeroPhone X 当前有货，售价 4599 元。[1]",
+    ]
+
+
 def test_session_management_endpoints() -> None:
     service = _build_chat_service(
         "chat-api-session-endpoints",
@@ -413,8 +730,8 @@ def test_session_management_endpoints() -> None:
         assert empty_session_response.status_code == 200
         assert empty_session_response.json()["scene"] == "generic_assistant"
         assert empty_session_response.json()["mounted_knowledge_sources"] == ["documents"]
-        assert empty_session_response.json()["total_turns"] == 0
-        assert empty_session_response.json()["turns"] == []
+        assert empty_session_response.json()["total_messages"] == 0
+        assert empty_session_response.json()["messages"] == []
 
         chat_response = client.post("/chat", json={"message": "你好", "session_id": session_id})
         assert chat_response.status_code == 200
@@ -424,17 +741,24 @@ def test_session_management_endpoints() -> None:
         payload = populated_session_response.json()
         assert payload["session_id"] == session_id
         assert payload["mounted_knowledge_sources"] == ["documents"]
-        assert payload["total_turns"] == 1
-        assert len(payload["turns"]) == 1
-        assert payload["turns"][0]["user_message"] == "你好"
+        assert payload["total_messages"] == 2
+        assert len(payload["messages"]) == 2
+        assert payload["messages"][0]["type"] == "human"
+        assert payload["messages"][0]["content"] == "你好"
+        assert payload["messages"][0]["knowledge_used"] is None
+        assert payload["messages"][1]["type"] == "ai"
+        assert payload["messages"][1]["request_id"] == chat_response.json()["request_id"]
+        assert payload["messages"][1]["content"] == chat_response.json()["answer"]
+        assert payload["messages"][1]["knowledge_used"] is False
+        assert payload["messages"][1]["citations"] == []
 
         delete_response = client.delete(f"/sessions/{session_id}")
         assert delete_response.status_code == 200
-        assert delete_response.json()["deleted_turns"] == 1
+        assert delete_response.json()["deleted_messages"] == 2
 
         after_delete_response = client.get(f"/sessions/{session_id}")
         assert after_delete_response.status_code == 200
-        assert after_delete_response.json()["total_turns"] == 0
+        assert after_delete_response.json()["total_messages"] == 0
 
 
 def test_chat_api_rejects_expired_session() -> None:
@@ -714,6 +1038,7 @@ def test_chat_service_resolves_candidate_tools_from_scene_definition() -> None:
             class _Outcome:
                 documents: list[Document] = []
                 exit_reason = "sufficient"
+                success = True
                 rounds: list[object] = []
 
             return _Outcome()
@@ -772,6 +1097,7 @@ def test_chat_service_passes_through_scene_defined_custom_candidate_tools() -> N
             class _Outcome:
                 documents: list[Document] = []
                 exit_reason = "sufficient"
+                success = True
                 rounds: list[object] = []
 
             return _Outcome()
@@ -903,8 +1229,10 @@ def test_session_detail_normalizes_legacy_retrieval_snippets() -> None:
         response = client.get("/sessions/legacy-session")
 
     assert response.status_code == 200
-    turn = response.json()["turns"][0]
-    assert turn["retrieval_snippets"] == [
+    assistant_message = response.json()["messages"][1]
+    assert assistant_message["type"] == "ai"
+    assert assistant_message["knowledge_used"] is True
+    assert assistant_message["citations"] == [
         {
             "index": 1,
             "citation_id": "legacy-doc",
@@ -925,6 +1253,52 @@ def test_session_detail_normalizes_legacy_retrieval_snippets() -> None:
             "rank": 1,
         }
     ]
+
+
+def test_session_detail_returns_message_view_with_assistant_metadata() -> None:
+    knowledge = FakeKnowledgeService()
+    document_retrieval_service = FakeDocumentRetrievalService(
+        documents=[
+            _result(
+                doc_id="doc-1",
+                content="AeroPhone X 当前有货，售价 4599 元。",
+                score=0.93,
+                metadata={
+                    "document_id": "doc-1",
+                    "source_path": "manual.md",
+                    "namespace": "documents",
+                    "is_managed_document": True,
+                    "chunk_id": "chunk-manual-1",
+                    "chunk_index": 0,
+                },
+            )
+        ]
+    )
+    model = FakeModel(answer="AeroPhone X 当前有货，售价 4599 元。[1]")
+    service = _build_chat_service(
+        "chat-api-session-message-view",
+        knowledge,
+        document_retrieval_service,
+        model,
+    )
+    app = create_app(chat_service=service)
+
+    with TestClient(app) as client:
+        chat_response = client.post("/chat", json={"message": "AeroPhone X 有货吗"})
+        assert chat_response.status_code == 200
+        chat_payload = chat_response.json()
+
+        session_response = client.get(f"/sessions/{chat_payload['session_id']}")
+
+    assert session_response.status_code == 200
+    payload = session_response.json()
+    assert payload["total_messages"] == 2
+    assert [message["type"] for message in payload["messages"]] == ["human", "ai"]
+    assistant_message = payload["messages"][1]
+    assert assistant_message["request_id"] == chat_payload["request_id"]
+    assert assistant_message["timestamp"]
+    assert assistant_message["knowledge_used"] is True
+    assert assistant_message["citations"][0]["citation_id"] == "chunk-manual-1"
 
 
 def test_chat_api_real_runtime_filters_low_relevance_document_hits_for_greeting() -> None:
@@ -1003,7 +1377,7 @@ def test_chat_api_real_runtime_filters_low_relevance_document_hits_for_greeting(
     assert payload["knowledge_used"] is False
     assert payload["citations"] == []
     assert "暂时没有检索到足够相关的文档知识" in payload["answer"]
-    assert model.chat_model_calls == []
+    assert model.get_runnable_calls == []
 
 
 def test_chat_api_ignores_builtin_orders_json_in_documents_only_session() -> None:
@@ -1078,4 +1452,4 @@ def test_chat_api_ignores_builtin_orders_json_in_documents_only_session() -> Non
     payload = response.json()
     assert payload["knowledge_used"] is False
     assert payload["citations"] == []
-    assert model.chat_model_calls == []
+    assert model.get_runnable_calls == []

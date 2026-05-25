@@ -28,7 +28,6 @@ except ModuleNotFoundError:  # pragma: no cover
     Elasticsearch = None  # type: ignore[assignment]
 
 
-SUPPORTED_NAMESPACES = tuple(settings.vector_store.knowledge_sources.keys())
 DOCUMENT_INDEX_KINDS = ("documents", "chunks")
 
 

@@ -9,7 +9,9 @@ import re
 from typing import Any, Protocol
 from uuid import uuid4
 from langchain_core.documents import Document
+from langchain_core.messages import BaseMessage
 from langchain_core.retrievers import BaseRetriever
+from langchain_core.runnables.history import RunnableWithMessageHistory
 
 from backend.application.runtime.api.chat.prompts import build_rag_answer_prompt_template
 from backend.application.runtime.api.chat.schemas import ChatRequest, ChatResponse, Citation
@@ -22,10 +24,10 @@ from backend.platform.rag.agentic import AgenticRetrievalOutcome
 from backend.platform.rag.document_retrieval import DocumentRetrievalService
 from backend.scenes.base import SceneDefinition
 from backend.platform.knowledge.base.text import truncate_snippet
+from backend.platform.memory.base.chat_history import SQLiteChatMessageHistory
 from backend.platform.memory.base.session_store import (
     SQLiteSessionStore,
     SessionRecord,
-    SessionTurn,
 )
 from backend.platform.memory.chat.prompt_context import PromptContextBuilder
 from backend.platform.models.base.router import TaskComplexity
@@ -39,26 +41,34 @@ logger = logging.getLogger(__name__)
 class RetrievalChainModel(Protocol):
     """定义运行时依赖的最小模型构建协议。"""
 
-    def build_chat_model_for_complexity(self, complexity: TaskComplexity) -> Any:
-        """按复杂度构建可用于 RAG 链的聊天模型实例。"""
+    def get_runnable(
+        self,
+        complexity: TaskComplexity = "simple",
+        prompt_template: Any | None = None,
+        *,
+        output_parser: Any | None = None,
+    ) -> Any:
+        """返回可供 runtime 执行的 LCEL runnable。"""
         ...
 
-    def invoke_template(
+    def invoke_runnable(
         self,
-        prompt_template: Any,
-        variables: dict[str, Any],
-        complexity: TaskComplexity = "simple",
-    ) -> str:
-        """使用模板变量同步调用模型。"""
+        runnable: Any,
+        input: Any,
+        *,
+        config: Any | None = None,
+    ) -> Any:
+        """同步执行 runnable。"""
         ...
 
-    def stream_template(
+    def stream_runnable(
         self,
-        prompt_template: Any,
-        variables: dict[str, Any],
-        complexity: TaskComplexity = "simple",
-    ) -> Iterator[str]:
-        """使用模板变量流式调用模型。"""
+        runnable: Any,
+        input: Any,
+        *,
+        config: Any | None = None,
+    ) -> Iterator[Any]:
+        """流式执行 runnable。"""
         ...
 
 
@@ -86,6 +96,7 @@ class RetrievalExecutionResult:
     """封装一次检索执行后的文档与来源工具信息。"""
 
     documents: list[Document]
+    tool_event: dict[str, Any]
 
 
 @dataclass(frozen=True)
@@ -96,8 +107,8 @@ class PreparedChatTurn:
     request_id: str
     timestamp: str
     user_message: str
-    history_text: str
     documents: list[Document]
+    tool_event: dict[str, Any]
     citations: list[Citation]
     knowledge_used: bool
     scene_metadata: SceneMetadata
@@ -147,7 +158,35 @@ class RetrievalExecutor:
                 len(outcome.rounds),
                 len(outcome.documents),
             )
-            return RetrievalExecutionResult(documents=list(outcome.documents))
+            return RetrievalExecutionResult(
+                documents=list(outcome.documents),
+                tool_event={
+                    "stage": "retrieval",
+                    "mode": "agentic",
+                    "candidate_tools": list(candidate_tools),
+                    "documents": len(outcome.documents),
+                    "exit_reason": outcome.exit_reason,
+                    "success": outcome.success,
+                    "rounds": [
+                        {
+                            "round_index": round_trace.plan.round_index,
+                            "tool_name": round_trace.result.tool_name,
+                            "query": round_trace.result.query,
+                            "rewritten_query": (
+                                round_trace.rewrite.query if round_trace.rewrite is not None else None
+                            ),
+                            "decision": round_trace.decision.next_action,
+                            "is_sufficient": round_trace.decision.is_sufficient,
+                            "reason": round_trace.decision.reason,
+                            "result_count": len(round_trace.result.records),
+                            "document_count": len(round_trace.result.documents),
+                            "success": round_trace.result.success,
+                            "error": round_trace.result.error,
+                        }
+                        for round_trace in outcome.rounds
+                    ],
+                },
+            )
         if hasattr(self._retriever, "search"):
             documents = list(self._retriever.search(query=message))  # type: ignore[attr-defined]
             logger.info(
@@ -155,7 +194,30 @@ class RetrievalExecutor:
                 self._scene_definition.scene,
                 len(documents),
             )
-            return RetrievalExecutionResult(documents=documents)
+            return RetrievalExecutionResult(
+                documents=documents,
+                tool_event={
+                    "stage": "retrieval",
+                    "mode": "search",
+                    "candidate_tools": list(candidate_tools),
+                    "documents": len(documents),
+                    "rounds": [
+                        {
+                            "round_index": 1,
+                            "tool_name": "search",
+                            "query": message,
+                            "rewritten_query": None,
+                            "decision": "finish",
+                            "is_sufficient": len(documents) > 0,
+                            "reason": "search completed",
+                            "result_count": len(documents),
+                            "document_count": len(documents),
+                            "success": True,
+                            "error": None,
+                        }
+                    ],
+                },
+            )
         if isinstance(self._retriever, BaseRetriever):
             documents = list(self._retriever.invoke(message))
             logger.info(
@@ -163,7 +225,30 @@ class RetrievalExecutor:
                 self._scene_definition.scene,
                 len(documents),
             )
-            return RetrievalExecutionResult(documents=documents)
+            return RetrievalExecutionResult(
+                documents=documents,
+                tool_event={
+                    "stage": "retrieval",
+                    "mode": "base_retriever",
+                    "candidate_tools": list(candidate_tools),
+                    "documents": len(documents),
+                    "rounds": [
+                        {
+                            "round_index": 1,
+                            "tool_name": type(self._retriever).__name__,
+                            "query": message,
+                            "rewritten_query": None,
+                            "decision": "finish",
+                            "is_sufficient": len(documents) > 0,
+                            "reason": "retriever invoke completed",
+                            "result_count": len(documents),
+                            "document_count": len(documents),
+                            "success": True,
+                            "error": None,
+                        }
+                    ],
+                },
+            )
         raise TypeError("Retriever does not support document retrieval.")
 
 
@@ -453,10 +538,13 @@ class ChatService:
             retriever=self._retriever,
         )
         self._citation_mapper = CitationMapper()
+        self._answer_runnables: dict[TaskComplexity, RunnableWithMessageHistory] = {}
 
     def chat(self, payload: ChatRequest) -> ChatResponse:
         """执行一次完整对话流程，并返回统一结构。"""
         prepared = self._prepare_chat_turn(payload)
+        self._history_request_id = prepared.request_id
+        self._history_timestamp = prepared.timestamp
         answer, citations = self._generate_answer(prepared)
         self._persist_turn(prepared=prepared, answer=answer, citations=citations)
         return self._build_chat_response(
@@ -468,6 +556,8 @@ class ChatService:
     def chat_stream(self, payload: ChatRequest) -> Iterator[ChatStreamEvent]:
         """执行一次流式对话流程，并产出结构化事件。"""
         prepared = self._prepare_chat_turn(payload)
+        self._history_request_id = prepared.request_id
+        self._history_timestamp = prepared.timestamp
         yield ChatStreamEvent(
             event="start",
             data={
@@ -478,6 +568,8 @@ class ChatService:
                 "agent": prepared.scene_metadata.agent,
             },
         )
+        yield ChatStreamEvent(event="history", data=self._build_history_event(prepared))
+        yield ChatStreamEvent(event="tool", data=self._build_tool_event(prepared))
 
         if not prepared.knowledge_used:
             answer, citations = self._build_fallback_answer(prepared)
@@ -559,15 +651,11 @@ class ChatService:
             if session is not None
             else DEFAULT_MOUNTED_KNOWLEDGE_SOURCES
         )
-        history_turns = self.session_store.get_recent_turns(
-            session_id=session_id,
-            limit=self.settings.session.window_size,
-        )
-        history_text = self._format_history(history_turns)
-        documents = self._retrieval_executor.retrieve(
+        retrieval_result = self._retrieval_executor.retrieve(
             payload.message,
             mounted_knowledge_sources=mounted_knowledge_sources,
-        ).documents
+        )
+        documents = retrieval_result.documents
         citations = self._citation_mapper.citations_from_documents(documents)
         knowledge_used = len(citations) > 0
         return PreparedChatTurn(
@@ -575,8 +663,8 @@ class ChatService:
             request_id=request_id,
             timestamp=timestamp,
             user_message=payload.message,
-            history_text=history_text,
             documents=documents,
+            tool_event=retrieval_result.tool_event,
             citations=citations,
             knowledge_used=knowledge_used,
             scene_metadata=self._scene_metadata(),
@@ -599,11 +687,12 @@ class ChatService:
         prepared: PreparedChatTurn,
     ) -> tuple[str, list[Citation]]:
         """调用模型链生成答案，并返回答案与引用。"""
+        runnable = self._get_answer_runnable(prepared.complexity or "simple")
         try:
-            answer = self.model.invoke_template(
-                prompt_template=self._rag_answer_template,
-                variables=self._build_answer_variables(prepared),
-                complexity=prepared.complexity or "simple",
+            answer = self.model.invoke_runnable(
+                runnable,
+                self._build_answer_variables(prepared),
+                config=self._build_runnable_config(prepared.session_id),
             )
         except ValueError as exc:
             if str(exc) == "Model returned empty content":
@@ -631,12 +720,14 @@ class ChatService:
 
     def _stream_model_answer(self, prepared: PreparedChatTurn) -> Iterator[str]:
         """对最终答案生成阶段执行流式调用。"""
+        runnable = self._get_answer_runnable(prepared.complexity or "simple")
         try:
-            yield from self.model.stream_template(
-                prompt_template=self._rag_answer_template,
-                variables=self._build_answer_variables(prepared),
-                complexity=prepared.complexity or "simple",
-            )
+            for chunk in self.model.stream_runnable(
+                runnable,
+                self._build_answer_variables(prepared),
+                config=self._build_runnable_config(prepared.session_id),
+            ):
+                yield str(chunk)
         except ValueError as exc:
             message = str(exc)
             if message == "Model returned empty streaming content":
@@ -694,7 +785,61 @@ class ChatService:
         return {
             "context": self._citation_mapper.build_answer_documents(prepared.documents),
             "input": prepared.user_message,
-            "history": prepared.history_text,
+        }
+
+    def _get_answer_runnable(self, complexity: TaskComplexity) -> RunnableWithMessageHistory:
+        """为给定复杂度构建带消息历史的回答 runnable。"""
+        cached = self._answer_runnables.get(complexity)
+        if cached is not None:
+            return cached
+
+        base_runnable = self.model.get_runnable(
+            complexity=complexity,
+            prompt_template=self._rag_answer_template,
+        )
+        runnable = RunnableWithMessageHistory(
+            base_runnable,
+            self._get_session_history,
+            input_messages_key="input",
+            history_messages_key="history",
+        )
+        self._answer_runnables[complexity] = runnable
+        return runnable
+
+    def _get_session_history(self, session_id: str) -> SQLiteChatMessageHistory:
+        """解析指定会话的 LangChain message history。"""
+        return SQLiteChatMessageHistory(
+            session_id,
+            store=self.session_store,
+            request_id=self._active_request_id,
+            timestamp=self._active_timestamp,
+            message_limit=self.settings.session.window_size * 2,
+            message_transform=self.context_builder.trim_messages,
+        )
+
+    def _build_runnable_config(self, session_id: str) -> dict[str, Any]:
+        """构造 RunnableWithMessageHistory 所需的 configurable config。"""
+        return {"configurable": {"session_id": session_id}}
+
+    def _build_history_event(self, prepared: PreparedChatTurn) -> dict[str, Any]:
+        """构造本轮模型调用前的历史消息快照事件。"""
+        messages = self._get_session_history(prepared.session_id).messages
+        return {
+            "session_id": prepared.session_id,
+            "request_id": prepared.request_id,
+            "window_size": self.settings.session.window_size,
+            "message_count": len(messages),
+            "messages": [self._serialize_history_message(message) for message in messages],
+        }
+
+    def _build_tool_event(self, prepared: PreparedChatTurn) -> dict[str, Any]:
+        """构造 retrieval/tool 阶段的结构化事件。"""
+        return {
+            **prepared.tool_event,
+            "session_id": prepared.session_id,
+            "request_id": prepared.request_id,
+            "knowledge_used": prepared.knowledge_used,
+            "citations": [citation.model_dump() for citation in prepared.citations],
         }
 
     def _persist_turn(
@@ -712,6 +857,7 @@ class ChatService:
             assistant_answer=answer,
             retrieval_snippets=[citation.model_dump() for citation in citations],
             timestamp=prepared.timestamp,
+            persist_messages=not prepared.knowledge_used,
         )
 
     def _build_chat_response(
@@ -732,16 +878,28 @@ class ChatService:
             citations=citations,
         )
 
-    def _format_history(self, history_turns: list[SessionTurn]) -> str:
-        """将历史轮次格式化为模型可读文本。"""
-        if not history_turns:
-            return "(empty)"
+    def _serialize_history_message(self, message: BaseMessage) -> dict[str, Any]:
+        """将 LangChain message 归一化为稳定的 SSE payload。"""
+        return {
+            "type": message.type,
+            "content": message.content,
+        }
 
-        lines: list[str] = []
-        for turn in history_turns:
-            lines.append(f"User: {turn.user_message}")
-            lines.append(f"Assistant: {turn.assistant_answer}")
-        return "\n".join(lines)
+    @property
+    def _active_request_id(self) -> str:
+        """读取当前执行上下文中的 request_id。"""
+        request_id = getattr(self, "_history_request_id", None)
+        if not isinstance(request_id, str) or not request_id:
+            raise RuntimeError("Active request id is not set for message history persistence.")
+        return request_id
+
+    @property
+    def _active_timestamp(self) -> str:
+        """读取当前执行上下文中的 timestamp。"""
+        timestamp = getattr(self, "_history_timestamp", None)
+        if not isinstance(timestamp, str) or not timestamp:
+            raise RuntimeError("Active timestamp is not set for message history persistence.")
+        return timestamp
 
 class ActiveSceneChatService:
     """统一 `/chat` 入口，通过会话绑定场景分发请求。"""
