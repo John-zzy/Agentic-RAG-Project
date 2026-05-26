@@ -2,7 +2,7 @@
 
 ## 概览
 
-`Evaluation Harness 基础版` 是当前仓库的最小可重复评测入口，目标不是做大规模 benchmark，也不是引入 LLM-as-a-judge，而是给 `generic_assistant + documents` 主链补上一套固定样本、真实回放命令、可读日志、基本指标表格和样本级 pass/fail 断言。
+`Evaluation Harness 基础版` 是当前仓库的最小可重复评测入口，目标不是做大规模 benchmark，也不是引入 LLM-as-a-judge，而是给 `generic_assistant + documents` 主链补上一套固定样本、真实回放命令、SSE 流式回放、可读日志、基本指标表格和样本级 pass/fail 断言。
 
 当前入口位于 `backend/evals/`，通过独立 HTTP replay 脚本调用已经运行的本地后端，复用现有：
 
@@ -10,6 +10,7 @@
 - `POST /knowledge/documents`
 - `POST /sessions`
 - `POST /chat`
+- `POST /chat` with `stream=true`
 
 ## 为什么它是通用型评测集
 
@@ -47,9 +48,10 @@ backend\.venv\Scripts\python.exe backend\evals\run_http_eval.py --base-url http:
 4. 上传 3 份固定 fixture
 5. 重新走 `/knowledge/documents` 入库
 6. 每条样本创建独立 session
-7. 调 `/chat` 回放
-8. 输出 `latest.json` 和 `latest.md`
-9. 如果任一样本断言失败，以非 0 退出码结束
+7. 调 `/chat` 回放普通响应
+8. 对配置了 `eval_stream=true` 的样本调 `/chat stream=true` 回放 SSE
+9. 输出 `latest.json` 和 `latest.md`
+10. 如果任一样本断言失败，以非 0 退出码结束
 
 ## 样本与文体映射
 
@@ -59,6 +61,8 @@ backend\.venv\Scripts\python.exe backend\evals\run_http_eval.py --base-url http:
 | `it_policy_mfa_rule` | security policy | `远程访问公司系统时有什么安全要求？` | 观察是否命中文档、答案是否包含 `MFA` 或 `双重认证`、引用里是否出现目标来源 |
 | `faq_response_sla` | support FAQ | `普通支持请求通常多久会得到首次响应？` | 观察是否命中文档、答案是否包含 `1 个工作日`、引用里是否出现 support FAQ |
 | `no_hit_fallback` | 无 | `VOID-ALPHA-7788 secret handshake?` | 严格断言 no-hit fallback：`knowledge_used=false`、`citations=[]`、回答语义为缺乏可靠资料 |
+
+其中 `quickstart_setup_requirement` 和 `no_hit_fallback` 固定启用 `eval_stream=true`，用于覆盖一条 normal-hit 流式路径和一条 no-hit 流式路径。
 
 ## 输出 JSON 结构
 
@@ -83,6 +87,7 @@ JSON 字段目前固定包含：
 - `assertions`
 - `observed`
 - `metrics`
+- `stream`
 - `status`
 
 `observed` 至少保存：
@@ -105,6 +110,19 @@ JSON 字段目前固定包含：
 
 如果样本失败，`failure_reasons[]` 会把失败断言的预期值和实际值写出来。例如 no-hit fallback 如果回归成伪引用，报告会暴露实际的 `knowledge_used` 和 `citations`。
 
+配置了 `eval_stream=true` 的样本会额外记录 `stream` 字段：
+
+- `stream.passed`
+- `stream.failure_reasons`
+- `stream.assertions`
+- `stream.observed`
+- `stream.metrics`
+- `stream.event_types`
+- `stream.chunk_count`
+- `stream.chunk_text_preview`
+
+流式断言以 SSE `done` 事件作为最终权威结果；`chunk` 只用于验证流式链路确实有增量输出。
+
 ## 当前指标口径
 
 - `completion_rate = 成功完成调用的样本数 / 总样本数`
@@ -113,6 +131,7 @@ JSON 字段目前固定包含：
 - `citation_presence_rate = citations 非空的样本数 / 成功调用样本数`
 - `answer_keyword_hit_rate = 答案命中预设关键词的样本数 / 成功调用样本数`
 - `expected_source_hit_rate = citations 中出现目标来源的样本数 / 成功调用样本数`
+- `stream_pass_rate = stream=true 回放断言通过样本数 / 启用流式回放样本数`
 
 ## no-hit fallback 回归口径
 
@@ -132,6 +151,28 @@ JSON 字段目前固定包含：
 - `results[].assertions`
 - `results[].observed.knowledge_used`
 - `results[].observed.citations`
+
+## SSE stream=true 回归口径
+
+`minimal` 样本集当前固定对 `quickstart_setup_requirement` 和 `no_hit_fallback` 启用流式回放。
+
+流式回放验收口径是：
+
+- SSE 事件流必须包含 `done`
+- SSE 事件流必须包含至少 1 个 `chunk`
+- `done.answer` 满足样本答案断言
+- `done.knowledge_used` 满足样本预期
+- `done.citations` 满足样本引用断言
+- `done.knowledge_used` 与普通响应的 `knowledge_used` 保持一致
+- `done.citations` 数量与普通响应的 `citations` 数量保持一致
+- no-hit 流式样本仍必须满足 `knowledge_used=false`、`citations=[]`
+
+如果后续修改 SSE 编码、前端流式适配、主链响应组装或 fallback 逻辑，导致 `done` 缺失、`error` 事件出现，或最终引用语义和普通响应不一致，则该样本应失败。定位时优先看：
+
+- `results[].stream.failure_reasons`
+- `results[].stream.assertions`
+- `results[].stream.event_types`
+- `results[].stream.observed`
 
 ## 验证记录
 
@@ -156,19 +197,21 @@ JSON 字段目前固定包含：
 1. 启动 `backend/run.py`
 2. 运行 `backend/evals/run_http_eval.py`
 3. 打开 `backend/data/evals/latest.md`
-4. 先展示 Sample Table 里的 `pass`、`knowledge`、`citations` 和 `failure`
+4. 先展示 Sample Table 里的 `pass`、`stream`、`knowledge`、`citations` 和 `failure`
 5. 针对 `no_hit_fallback` 确认 `pass=yes`、`knowledge=no`、`citations=0`
-6. 再打开 `backend/data/evals/latest.json` 查看单条样本明细、`assertions`、`observed.knowledge_used` 和 `observed.citations`
+6. 查看 `SSE Stream Evidence`，确认关键样本 `stream_pass=yes` 且事件包含 `done`
+7. 再打开 `backend/data/evals/latest.json` 查看单条样本明细、`assertions`、`observed.knowledge_used`、`observed.citations` 和 `stream.observed`
 
 ## JD 证明点
 
 - 不是只会做 RAG 主链，还补了固定样本与验证入口
 - 有可重复 replay 命令，不靠临场手工提问演示
 - 能把“命中文档”“引用来源”“基础回退表现”落成结构化日志和表格
+- 能把 `stream=true` 的真实对话路径纳入回归，避免流式响应和普通响应语义漂移
 - 后续可以继续接入 rerank、更多样本、更多场景，而不需要重做入口
 
 ## 简历素材草稿
 
 可表述为：
 
-> 为 scene-based RAG 后端补齐基础版 Evaluation Harness：设计固定样本集、实现 HTTP replay 脚本、复用 `/files` `/knowledge/documents` `/sessions` `/chat` 主链，输出回放日志、结构化结果和基础指标表格，用于展示文档命中、引用来源和回答稳定性。
+> 为 scene-based RAG 后端补齐基础版 Evaluation Harness：设计固定样本集、实现 HTTP replay 与 SSE stream replay，复用 `/files` `/knowledge/documents` `/sessions` `/chat` 主链，输出回放日志、结构化结果和基础指标表格，用于展示文档命中、引用来源、no-hit fallback 和流式回答稳定性。

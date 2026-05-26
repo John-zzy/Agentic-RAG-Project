@@ -76,6 +76,73 @@ def _request_json(
     raise EvalRuntimeError(f"{method} {url} failed unexpectedly.")
 
 
+def _request_sse_chat(*, base_url: str, json_body: dict[str, Any]) -> dict[str, Any]:
+    payload = json.dumps(json_body, ensure_ascii=False).encode("utf-8")
+    req = request.Request(
+        url=f"{base_url}/chat",
+        data=payload,
+        method="POST",
+        headers={
+            "Content-Type": "application/json; charset=utf-8",
+            "Accept": "text/event-stream",
+        },
+    )
+    try:
+        with request.urlopen(req, timeout=120) as response:
+            raw = response.read().decode("utf-8")
+    except error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise EvalRuntimeError(f"POST {base_url}/chat stream failed with HTTP {exc.code}: {detail}") from exc
+    except error.URLError as exc:
+        raise EvalRuntimeError(f"POST {base_url}/chat stream failed: {exc.reason}") from exc
+
+    events = _parse_sse_events(raw)
+    error_events = [event for event in events if event["event"] == "error"]
+    if error_events:
+        raise EvalRuntimeError(f"SSE returned error event: {error_events[-1]['data']!r}")
+    done_events = [event for event in events if event["event"] == "done"]
+    if not done_events:
+        raise EvalRuntimeError(f"SSE stream did not include a done event. events={[event['event'] for event in events]!r}")
+
+    chunk_text = "".join(
+        str(event["data"].get("delta", ""))
+        for event in events
+        if event["event"] == "chunk" and isinstance(event.get("data"), dict)
+    )
+    return {
+        "events": events,
+        "event_types": [event["event"] for event in events],
+        "chunk_count": sum(1 for event in events if event["event"] == "chunk"),
+        "chunk_text_preview": _answer_preview(chunk_text),
+        "done": done_events[-1]["data"],
+    }
+
+
+def _parse_sse_events(raw: str) -> list[dict[str, Any]]:
+    events: list[dict[str, Any]] = []
+    normalized = raw.replace("\r\n", "\n")
+    for block in normalized.split("\n\n"):
+        if not block.strip():
+            continue
+        event_name = "message"
+        data_lines: list[str] = []
+        for line in block.split("\n"):
+            if line.startswith("event:"):
+                event_name = line.removeprefix("event:").strip()
+            elif line.startswith("data:"):
+                data_lines.append(line.removeprefix("data:").strip())
+        data_text = "\n".join(data_lines)
+        if not data_text:
+            data: Any = {}
+        else:
+            try:
+                data = json.loads(data_text)
+            except json.JSONDecodeError as exc:
+                raise EvalRuntimeError(f"Invalid SSE JSON payload for event {event_name!r}: {data_text}") from exc
+        events.append({"event": event_name, "data": data})
+    return events
+
+
 def _build_multipart_body(
     file_path: Path,
     field_name: str = "file",
@@ -272,11 +339,46 @@ def _build_assertions(
     return assertions
 
 
+def _build_observed_from_chat_response(chat_response: dict[str, Any]) -> dict[str, Any]:
+    citations = chat_response.get("citations", [])
+    answer = str(chat_response.get("answer", ""))
+    return {
+        "answer": answer,
+        "answer_preview": _answer_preview(answer),
+        "knowledge_used": chat_response.get("knowledge_used"),
+        "citation_count": len(citations),
+        "citation_sources": [citation.get("source_name") for citation in citations],
+        "citations": citations,
+        "session_id": chat_response.get("session_id"),
+        "request_id": chat_response.get("request_id"),
+    }
+
+
+def _build_metrics_from_observed(
+    *,
+    expected: dict[str, Any],
+    observed: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "knowledge_used": bool(observed.get("knowledge_used")),
+        "citation_count": int(observed.get("citation_count", 0)),
+        "answer_keyword_hit": _contains_required_text(str(observed.get("answer", "")), expected),
+        "expected_source_seen": _has_expected_source(observed.get("citations", []), expected.get("citation_source_name")),
+        "expected_source_kind_seen": _has_expected_source_kind(observed.get("citations", []), expected.get("citation_source_kind")),
+        "visible_marker_seen": _has_visible_marker(str(observed.get("answer", ""))),
+        "fallback_like": _fallback_like(str(observed.get("answer", ""))),
+    }
+
+
 def _format_failure_reason(assertion: dict[str, Any]) -> str:
     return (
         f"{assertion['name']} expected={assertion['expected']!r} "
         f"actual={assertion['actual']!r}"
     )
+
+
+def _format_stream_failure_reason(assertion: dict[str, Any]) -> str:
+    return f"stream.{_format_failure_reason(assertion)}"
 
 
 def _validate_manifest(sample_set: dict[str, Any]) -> None:
@@ -385,44 +487,120 @@ def _run_sample(
         retryable_http_codes=(502,),
     )
     expected = sample["expected"]
-    citations = chat_response.get("citations", [])
-    answer = str(chat_response.get("answer", ""))
-    metrics = {
-        "knowledge_used": bool(chat_response.get("knowledge_used")),
-        "citation_count": len(citations),
-        "answer_keyword_hit": _contains_required_text(answer, expected),
-        "expected_source_seen": _has_expected_source(citations, expected.get("citation_source_name")),
-        "expected_source_kind_seen": _has_expected_source_kind(citations, expected.get("citation_source_kind")),
-        "visible_marker_seen": _has_visible_marker(answer),
-        "fallback_like": _fallback_like(answer),
-    }
-    observed = {
-        "answer": answer,
-        "answer_preview": _answer_preview(answer),
-        "knowledge_used": chat_response.get("knowledge_used"),
-        "citation_count": len(citations),
-        "citation_sources": [citation.get("source_name") for citation in citations],
-        "citations": citations,
-        "session_id": chat_response.get("session_id"),
-        "request_id": chat_response.get("request_id"),
-    }
+    observed = _build_observed_from_chat_response(chat_response)
+    metrics = _build_metrics_from_observed(expected=expected, observed=observed)
     assertions = _build_assertions(expected=expected, observed=observed, metrics=metrics)
     failure_reasons = [
         _format_failure_reason(assertion)
         for assertion in assertions
         if not assertion["passed"]
     ]
+    stream_result = None
+    if sample.get("eval_stream"):
+        try:
+            stream_result = _run_stream_sample(
+                base_url=base_url,
+                sample=sample,
+                expected=expected,
+                baseline_observed=observed,
+            )
+        except EvalRuntimeError as exc:
+            stream_result = {
+                "status": "error",
+                "passed": False,
+                "failure_reasons": [f"stream.{exc}"],
+                "assertions": [],
+                "error": str(exc),
+            }
+    if stream_result is not None and not stream_result["passed"]:
+        failure_reasons.extend(stream_result["failure_reasons"])
     return {
         "sample_id": sample["sample_id"],
         "query": sample["query"],
         "source_doc": sample.get("source_doc"),
+        "eval_stream": bool(sample.get("eval_stream")),
         "target": expected,
         "status": "ok",
         "passed": not failure_reasons,
         "failure_reasons": failure_reasons,
         "assertions": assertions,
         "observed": observed,
+        "stream": stream_result,
         "metrics": metrics,
+    }
+
+
+def _run_stream_sample(
+    *,
+    base_url: str,
+    sample: dict[str, Any],
+    expected: dict[str, Any],
+    baseline_observed: dict[str, Any],
+) -> dict[str, Any]:
+    session_response = _request_json(
+        method="POST",
+        url=f"{base_url}/sessions",
+        json_body={
+            "scene": "generic_assistant",
+            "mounted_knowledge_sources": ["documents"],
+        },
+    )
+    session_id = session_response["session_id"]
+    stream_payload = _request_sse_chat(
+        base_url=base_url,
+        json_body={
+            "message": sample["query"],
+            "session_id": session_id,
+            "stream": True,
+        },
+    )
+    done_response = stream_payload["done"]
+    observed = _build_observed_from_chat_response(done_response)
+    metrics = _build_metrics_from_observed(expected=expected, observed=observed)
+    assertions = _build_assertions(expected=expected, observed=observed, metrics=metrics)
+    assertions.extend(
+        [
+            _make_assertion(
+                "stream_sync_knowledge_used",
+                baseline_observed.get("knowledge_used"),
+                observed.get("knowledge_used"),
+                observed.get("knowledge_used") == baseline_observed.get("knowledge_used"),
+            ),
+            _make_assertion(
+                "stream_sync_citation_count",
+                baseline_observed.get("citation_count"),
+                observed.get("citation_count"),
+                observed.get("citation_count") == baseline_observed.get("citation_count"),
+            ),
+            _make_assertion(
+                "sse_done_seen",
+                True,
+                "done" in stream_payload["event_types"],
+                "done" in stream_payload["event_types"],
+            ),
+            _make_assertion(
+                "sse_chunk_seen",
+                True,
+                stream_payload["chunk_count"] > 0,
+                stream_payload["chunk_count"] > 0,
+            ),
+        ]
+    )
+    failure_reasons = [
+        _format_stream_failure_reason(assertion)
+        for assertion in assertions
+        if not assertion["passed"]
+    ]
+    return {
+        "status": "ok",
+        "passed": not failure_reasons,
+        "failure_reasons": failure_reasons,
+        "assertions": assertions,
+        "observed": observed,
+        "metrics": metrics,
+        "event_types": stream_payload["event_types"],
+        "chunk_count": stream_payload["chunk_count"],
+        "chunk_text_preview": stream_payload["chunk_text_preview"],
     }
 
 
@@ -443,6 +621,12 @@ def _build_summary(results: list[dict[str, Any]]) -> dict[str, Any]:
     expected_source_hits = sum(1 for item in source_required if item["metrics"]["expected_source_seen"])
     visible_marker_hits = sum(1 for item in succeeded if item["metrics"]["visible_marker_seen"])
     fallback_like_hits = sum(1 for item in succeeded if item["metrics"]["fallback_like"])
+    stream_required = [
+        item
+        for item in succeeded
+        if item.get("eval_stream")
+    ]
+    stream_passed = sum(1 for item in stream_required if item.get("stream", {}).get("passed") is True)
 
     def _rate(numerator: int, denominator: int) -> float:
         if denominator == 0:
@@ -461,12 +645,16 @@ def _build_summary(results: list[dict[str, Any]]) -> dict[str, Any]:
         "expected_source_hits": expected_source_hits,
         "visible_marker_hits": visible_marker_hits,
         "fallback_like_hits": fallback_like_hits,
+        "stream_samples": len(stream_required),
+        "stream_passed_samples": stream_passed,
+        "stream_failed_samples": len(stream_required) - stream_passed,
         "sample_pass_rate": _rate(passed_samples, total),
         "completion_rate": _rate(len(succeeded), total),
         "knowledge_hit_rate": _rate(knowledge_hits, len(succeeded)),
         "citation_presence_rate": _rate(citations_present, len(succeeded)),
         "answer_keyword_hit_rate": _rate(answer_keyword_hits, len(succeeded)),
         "expected_source_hit_rate": _rate(expected_source_hits, len(source_required)),
+        "stream_pass_rate": _rate(stream_passed, len(stream_required)),
     }
 
 
@@ -486,7 +674,7 @@ def _render_console_table(headers: list[str], rows: list[list[str]]) -> str:
 
 
 def _build_sample_table(results: list[dict[str, Any]]) -> str:
-    headers = ["sample_id", "pass", "query", "knowledge", "citations", "source_hit", "marker", "failure", "preview"]
+    headers = ["sample_id", "pass", "stream", "query", "knowledge", "citations", "source_hit", "marker", "failure", "preview"]
     rows: list[list[str]] = []
     for item in results:
         if item["status"] != "ok":
@@ -494,6 +682,7 @@ def _build_sample_table(results: list[dict[str, Any]]) -> str:
                 [
                     item["sample_id"],
                     "no",
+                    "-",
                     _answer_preview(str(item.get("query", "")), limit=40),
                     "error",
                     "-",
@@ -510,6 +699,7 @@ def _build_sample_table(results: list[dict[str, Any]]) -> str:
             [
                 item["sample_id"],
                 "yes" if item.get("passed") else "no",
+                _stream_status_label(item),
                 _answer_preview(str(item["query"]), limit=40),
                 "yes" if metrics["knowledge_used"] else "no",
                 str(observed["citation_count"]),
@@ -522,6 +712,15 @@ def _build_sample_table(results: list[dict[str, Any]]) -> str:
             ]
         )
     return _render_console_table(headers, rows)
+
+
+def _stream_status_label(item: dict[str, Any]) -> str:
+    if not item.get("eval_stream"):
+        return "n/a"
+    stream = item.get("stream") or {}
+    if stream.get("status") == "error":
+        return "error"
+    return "yes" if stream.get("passed") else "no"
 
 
 def _build_metrics_table(summary: dict[str, Any]) -> str:
@@ -575,6 +774,17 @@ def _metric_specs() -> list[dict[str, Any]]:
         },
         {"metric": "visible_marker_hits", "meaning": "答案正文包含 [1] 这类引用标记的数量", "reading": "用于确认结构化 citation 与正文引用展示一致。"},
         {"metric": "fallback_like_hits", "meaning": "答案文本像 no-hit fallback 的数量", "reading": "当前 minimal 中应主要对应 no_hit_fallback。"},
+        {"metric": "stream_samples", "meaning": "启用 stream=true 回放的样本数", "reading": "用于确认 SSE 质量门禁覆盖范围。"},
+        {
+            "metric": "stream_passed_samples",
+            "meaning": "stream=true 回放断言通过的样本数",
+            "reading": lambda summary: f"{summary['stream_passed_samples']}/{summary['stream_samples']} 条流式样本满足预期。",
+        },
+        {
+            "metric": "stream_failed_samples",
+            "meaning": "stream=true 回放断言失败的样本数",
+            "reading": lambda summary: "没有流式失败样本。" if summary["stream_failed_samples"] == 0 else "需要查看 SSE Stream Evidence 和 failure。",
+        },
         {
             "metric": "sample_pass_rate",
             "meaning": "passed_samples / total_samples",
@@ -589,6 +799,7 @@ def _metric_specs() -> list[dict[str, Any]]:
         {"metric": "citation_presence_rate", "meaning": "samples_with_citations / successful_calls", "reading": "用于观察回答携带引用的比例，不应覆盖 no-hit 样本。"},
         {"metric": "answer_keyword_hit_rate", "meaning": "answer_keyword_hits / successful_calls", "reading": "衡量答案是否满足样本最小内容约束。"},
         {"metric": "expected_source_hit_rate", "meaning": "expected_source_hits / 需要来源命中的样本数", "reading": "衡量引用是否指向预期文档。"},
+        {"metric": "stream_pass_rate", "meaning": "stream_passed_samples / stream_samples", "reading": "衡量 SSE done 事件最终语义是否通过断言。"},
     ]
 
 
@@ -613,6 +824,7 @@ def _build_kpi_table(summary: dict[str, Any]) -> str:
         ["预期来源命中率", _format_rate(summary["expected_source_hit_rate"]), _bar(summary["expected_source_hit_rate"]), "知识命中样本的 citation 应指向目标 fixture。"],
         ["答案关键词命中率", _format_rate(summary["answer_keyword_hit_rate"]), _bar(summary["answer_keyword_hit_rate"]), "答案需满足样本定义的最小语义约束。"],
         ["引用出现率", _format_rate(summary["citation_presence_rate"]), _bar(summary["citation_presence_rate"]), "当前 minimal 中应为知识命中样本占比，而不是 100%。"],
+        ["SSE 回放通过率", _format_rate(summary["stream_pass_rate"]), _bar(summary["stream_pass_rate"]), "stream=true 样本应拿到 done 事件并满足最终语义断言。"],
     ]
     return _render_console_table(["KPI", "value", "bar", "evidence"], rows)
 
@@ -627,6 +839,7 @@ def _build_count_comparison_table(summary: dict[str, Any]) -> str:
         ["接口错误", str(summary["errored_calls"]), str(total), _bar(summary["errored_calls"] / total if total else 0.0), "errored_calls / total_samples"],
         ["使用知识", str(summary["samples_with_knowledge"]), str(successful), _bar(summary["knowledge_hit_rate"]), "knowledge_used=true / successful_calls"],
         ["携带引用", str(summary["samples_with_citations"]), str(successful), _bar(summary["citation_presence_rate"]), "citations 非空 / successful_calls"],
+        ["SSE 通过", str(summary["stream_passed_samples"]), str(summary["stream_samples"]), _bar(summary["stream_pass_rate"]), "stream_passed_samples / stream_samples"],
     ]
     return _render_console_table(["dimension", "count", "base", "bar", "formula"], rows)
 
@@ -697,6 +910,31 @@ def _build_no_hit_boundary_table(results: list[dict[str, Any]]) -> str:
     return _render_console_table(["boundary", "expected", "actual", "pass", "why_it_matters"], rows)
 
 
+def _build_stream_evidence_table(results: list[dict[str, Any]]) -> str:
+    stream_results = [item for item in results if item.get("eval_stream")]
+    if not stream_results:
+        return "_No stream=true samples configured_"
+    rows: list[list[str]] = []
+    for item in stream_results:
+        stream = item.get("stream") or {}
+        observed = stream.get("observed", {})
+        metrics = stream.get("metrics", {})
+        rows.append([
+            item["sample_id"],
+            _stream_status_label(item),
+            ",".join(str(event) for event in stream.get("event_types", [])),
+            str(stream.get("chunk_count", "-")),
+            str(observed.get("knowledge_used", "-")),
+            str(observed.get("citation_count", "-")),
+            _yes_no(bool(metrics.get("fallback_like"))) if metrics else "-",
+            _answer_preview("; ".join(stream.get("failure_reasons", [])), limit=80),
+        ])
+    return _render_console_table(
+        ["sample_id", "stream_pass", "events", "chunks", "knowledge", "citations", "fallback_like", "failure"],
+        rows,
+    )
+
+
 def _write_markdown_report(*, payload: dict[str, Any], output_path: Path) -> Path:
     report_path = output_path.with_suffix(".md")
     summary = payload["summary"]
@@ -731,6 +969,10 @@ def _write_markdown_report(*, payload: dict[str, Any], output_path: Path) -> Pat
         "",
         _build_no_hit_boundary_table(results),
         "",
+        "## SSE Stream Evidence",
+        "",
+        _build_stream_evidence_table(results),
+        "",
         "## Assertion Matrix",
         "",
         _build_assertion_matrix(results),
@@ -745,16 +987,18 @@ def _write_markdown_report(*, payload: dict[str, Any], output_path: Path) -> Pat
         "",
         "## How To Read",
         "",
-        "1. 先看 `KPI Overview`，确认样本断言通过率、来源命中率和 no-hit 边界是否正常。",
+        "1. 先看 `KPI Overview`，确认样本断言通过率、来源命中率、SSE 回放通过率和 no-hit 边界是否正常。",
         "2. 再看 `no-hit Fallback Boundary`，确认 `knowledge_used=false`、`citations=[]` 和 fallback 语义同时成立。",
-        "3. 如果失败，直接看 `Assertion Matrix` 的 `expected`、`actual` 和 `pass` 列定位异常字段。",
-        "4. `Raw Sample Table` 保留原始逐样本视图，方便和 `latest.json` 交叉核对。",
+        "3. 查看 `SSE Stream Evidence`，确认 stream=true 样本拿到 `done` 事件、`chunk` 事件和最终结构化字段。",
+        "4. 如果失败，直接看 `Assertion Matrix` 的 `expected`、`actual` 和 `pass` 列定位普通响应异常；看 `SSE Stream Evidence` 定位流式异常。",
+        "5. `Raw Sample Table` 保留原始逐样本视图，方便和 `latest.json` 交叉核对。",
         "",
         "## Demo Narrative",
         "",
         "这套 Evaluation Harness 不是做大而全 benchmark，而是先把通用文档 RAG 的最小可验证闭环固定下来。",
-        "本次回放覆盖 3 条文档命中样本和 1 条 no-hit fallback 边界样本。",
+        "本次回放覆盖 3 条文档命中样本和 1 条 no-hit fallback 边界样本，并对关键样本执行 stream=true SSE 回放。",
         "文档命中样本证明引用来源、正文引用标记和答案关键词约束同时成立；no-hit 样本证明系统在没有可靠资料时不会返回伪引用。",
+        "SSE 回放以 `done` 事件作为最终权威结果，验证流式路径与普通响应路径在 `knowledge_used`、`citations` 和答案基础断言上的一致性。",
         "后续如果调整 ReRank、query rewrite、检索阈值或 citation 组装逻辑，只要 no-hit 又返回 citations，`Assertion Matrix` 会直接暴露实际异常值，脚本也会失败退出。",
         "",
     ]

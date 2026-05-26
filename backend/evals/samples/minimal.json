@@ -21,6 +21,7 @@
       "sample_id": "quickstart_setup_requirement",
       "query": "开始使用前需要先安装什么版本的 Python？",
       "source_doc": "eval-harness-quickstart.md",
+      "eval_stream": true,
       "expected": {
         "knowledge_used": true,
         "answer_contains_all": [
@@ -65,6 +66,7 @@
       "sample_id": "no_hit_fallback",
       "query": "VOID-ALPHA-7788 secret handshake?",
       "source_doc": null,
+      "eval_stream": true,
       "expected": {
         "knowledge_used": false,
         "answer_contains_any": [

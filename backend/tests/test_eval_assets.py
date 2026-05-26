@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 import re
 
-from backend.evals.run_http_eval import _build_assertions
+from backend.evals.run_http_eval import _build_assertions, _parse_sse_events
 
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
@@ -67,6 +67,34 @@ def test_minimal_eval_includes_strict_no_hit_fallback_boundary() -> None:
     assert no_hit["expected"]["citations_empty"] is True
     assert no_hit["expected"]["requires_visible_marker"] is False
     assert no_hit["expected"]["answer_contains_any"]
+
+
+def test_minimal_eval_includes_stream_replay_boundaries() -> None:
+    manifest = json.loads((SAMPLES_DIR / "minimal.json").read_text(encoding="utf-8"))
+    stream_samples = {
+        sample["sample_id"]: sample
+        for sample in manifest["samples"]
+        if sample.get("eval_stream") is True
+    }
+
+    assert "quickstart_setup_requirement" in stream_samples
+    assert "no_hit_fallback" in stream_samples
+    assert stream_samples["quickstart_setup_requirement"]["expected"]["knowledge_used"] is True
+    assert stream_samples["no_hit_fallback"]["expected"]["knowledge_used"] is False
+
+
+def test_sse_parser_extracts_event_types_and_json_data() -> None:
+    raw = (
+        'event: start\ndata: {"request_id": "req-1"}\n\n'
+        'event: chunk\ndata: {"delta": "hello"}\n\n'
+        'event: done\ndata: {"answer": "hello", "knowledge_used": false, "citations": []}\n\n'
+    )
+
+    events = _parse_sse_events(raw)
+
+    assert [event["event"] for event in events] == ["start", "chunk", "done"]
+    assert events[1]["data"]["delta"] == "hello"
+    assert events[2]["data"]["citations"] == []
 
 
 def test_no_hit_assertions_fail_when_pseudo_citations_are_returned() -> None:

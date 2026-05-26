@@ -327,6 +327,7 @@ backend\.venv\Scripts\python.exe backend\evals\run_http_eval.py --base-url http:
 - 评测结果会写入 `backend\data\evals\latest.json`
 - 同时会生成可直接展示的表格报告 `backend\data\evals\latest.md`
 - `minimal` 样本集固定包含 `no_hit_fallback`，用于回归验证 no-hit 时必须返回 `knowledge_used=false` 且 `citations=[]`
+- `minimal` 样本集会对关键样本执行 `stream=true` SSE 回放，报告中的 `SSE Stream Evidence` 用于确认 `done` 事件、`chunk` 事件和最终引用语义
 - 报告中的 `pass` 表示样本断言结果；如果 no-hit 又返回伪引用，`failure` 和 `latest.json` 中的 `assertions` 会暴露实际 `knowledge_used` 与 `citations`
 - 详细样本说明、日志/指标口径和验证记录见 [backend/evals/evaluation-harness.md](./backend/evals/evaluation-harness.md)
 
