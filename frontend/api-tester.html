@@ -509,6 +509,9 @@
       display: flex;
       gap: 12px;
       max-width: 92%;
+    }
+
+    .message.is-new {
       animation: fade-up 180ms ease both;
     }
 
@@ -1407,7 +1410,8 @@
         knowledgeUsed: meta.knowledgeUsed,
         scene: meta.scene || state.activeScene,
         sourcePrompt: meta.sourcePrompt || "",
-        streaming: !!meta.streaming
+        streaming: !!meta.streaming,
+        rendered: false
       });
       renderMessages();
       return messageId;
@@ -1427,6 +1431,10 @@
       renderMessages();
     }
 
+    function getMessageTextNode(messageId) {
+      return refs.chatFeed.querySelector('[data-message-text="' + messageId + '"]');
+    }
+
     function appendMessageText(messageId, delta) {
       if (!delta) {
         return;
@@ -1438,6 +1446,12 @@
         return;
       }
       target.text = String(target.text || "") + String(delta);
+      const textNode = getMessageTextNode(messageId);
+      if (textNode) {
+        textNode.textContent = target.text;
+        scrollToBottom();
+        return;
+      }
       renderMessages();
     }
 
@@ -1711,6 +1725,7 @@
 
       refs.chatFeed.innerHTML = state.messages.map(function (message) {
         const isUser = message.role === "user";
+        const isNew = !message.rendered;
         const metaChips = [];
         metaChips.push('<span class="meta-chip">' + escapeHtml(isUser ? "Customer Prompt" : (message.scene || state.activeScene || "assistant")) + '</span>');
         if (!isUser && typeof message.knowledgeUsed === "boolean") {
@@ -1744,11 +1759,11 @@
 
         return (
           '<div class="message-wrap">' +
-            '<article class="message ' + (isUser ? "user" : "assistant") + '">' +
+            '<article class="message ' + (isUser ? "user" : "assistant") + (isNew ? " is-new" : "") + '" data-message-id="' + escapeHtml(message.id) + '">' +
               '<div class="message-avatar">' + (isUser ? "客" : "AI") + '</div>' +
               '<div class="bubble">' +
                 '<div class="message-meta">' + metaChips.join("") + '</div>' +
-                '<p>' + escapeHtml(message.text || (message.streaming ? "正在生成回答..." : "")) + '</p>' +
+                '<p data-message-text="' + escapeHtml(message.id) + '">' + escapeHtml(message.text || (message.streaming ? "正在生成回答..." : "")) + '</p>' +
                 renderKnowledgeSummary(message) +
               '</div>' +
             '</article>' +
@@ -1757,6 +1772,9 @@
           '</div>'
         );
       }).join("");
+      state.messages.forEach(function (message) {
+        message.rendered = true;
+      });
       bindKnowledgeToggles();
       scrollToBottom();
     }

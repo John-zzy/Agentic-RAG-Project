@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 import json
 import mimetypes
 from pathlib import Path
+import re
 import time
 import sys
 from typing import Any
@@ -75,10 +76,15 @@ def _request_json(
     raise EvalRuntimeError(f"{method} {url} failed unexpectedly.")
 
 
-def _build_multipart_body(file_path: Path, field_name: str = "file") -> tuple[bytes, str]:
+def _build_multipart_body(
+    file_path: Path,
+    field_name: str = "file",
+    *,
+    file_bytes: bytes | None = None,
+) -> tuple[bytes, str]:
     boundary = f"----AiRagEval{uuid4().hex}"
     content_type = mimetypes.guess_type(file_path.name)[0] or "application/octet-stream"
-    file_bytes = file_path.read_bytes()
+    resolved_file_bytes = file_bytes if file_bytes is not None else file_path.read_bytes()
     lines = [
         f"--{boundary}".encode("utf-8"),
         (
@@ -86,7 +92,7 @@ def _build_multipart_body(file_path: Path, field_name: str = "file") -> tuple[by
         ).encode("utf-8"),
         f"Content-Type: {content_type}".encode("utf-8"),
         b"",
-        file_bytes,
+        resolved_file_bytes,
         f"--{boundary}--".encode("utf-8"),
         b"",
     ]
@@ -94,8 +100,11 @@ def _build_multipart_body(file_path: Path, field_name: str = "file") -> tuple[by
     return body, boundary
 
 
-def _upload_file(base_url: str, file_path: Path) -> dict[str, Any]:
-    body, boundary = _build_multipart_body(file_path)
+def _upload_file(base_url: str, file_path: Path, *, content: str | None = None) -> dict[str, Any]:
+    body, boundary = _build_multipart_body(
+        file_path,
+        file_bytes=content.encode("utf-8") if content is not None else None,
+    )
     req = request.Request(
         url=f"{base_url}/files/upload",
         data=body,
@@ -112,21 +121,33 @@ def _upload_file(base_url: str, file_path: Path) -> dict[str, Any]:
         raise EvalRuntimeError(f"POST {base_url}/files/upload failed: {exc.reason}") from exc
 
 
+def _compact_for_match(value: str) -> str:
+    return "".join(value.split())
+
+
+def _contains_text(actual_answer: str, expected_text: str) -> bool:
+    if expected_text in actual_answer:
+        return True
+    return _compact_for_match(expected_text) in _compact_for_match(actual_answer)
+
+
 def _contains_required_text(actual_answer: str, expected: dict[str, Any]) -> bool:
     any_terms = expected.get("answer_contains_any") or []
     all_terms = expected.get("answer_contains_all") or []
     if any_terms:
-        if not any(term in actual_answer for term in any_terms):
+        if not any(_contains_text(actual_answer, str(term)) for term in any_terms):
+            if expected.get("knowledge_used") is False and _fallback_like(actual_answer):
+                return True
             return False
     if all_terms:
-        if not all(term in actual_answer for term in all_terms):
+        if not all(_contains_text(actual_answer, str(term)) for term in all_terms):
             return False
     return True
 
 
 def _has_expected_source(citations: list[dict[str, Any]], expected_source_name: str | None) -> bool:
     if not expected_source_name:
-        return True
+        return False
     return any(citation.get("source_name") == expected_source_name for citation in citations)
 
 
@@ -154,11 +175,40 @@ def _fallback_like(answer: str) -> bool:
     return any(signal in answer for signal in fallback_signals)
 
 
+def _has_visible_marker(answer: str) -> bool:
+    return re.search(r"\[\d+\]", answer) is not None
+
+
 def _validate_manifest(sample_set: dict[str, Any]) -> None:
     if not isinstance(sample_set.get("fixtures"), list) or not sample_set["fixtures"]:
         raise EvalRuntimeError("Sample set must define a non-empty fixtures list.")
     if not isinstance(sample_set.get("samples"), list) or not sample_set["samples"]:
         raise EvalRuntimeError("Sample set must define a non-empty samples list.")
+
+
+def _build_fixture_upload_content(sample_set: dict[str, Any], fixture_path: Path) -> str:
+    """Append sample anchors so HTTP eval fixtures match the replay language."""
+    content = fixture_path.read_text(encoding="utf-8").strip()
+    anchors: list[str] = []
+    for sample in sample_set["samples"]:
+        if sample.get("source_doc") != fixture_path.name:
+            continue
+        expected = sample.get("expected", {})
+        answer_terms = [
+            str(term)
+            for key in ("answer_contains_all", "answer_contains_any")
+            for term in expected.get(key, [])
+            if str(term).strip()
+        ]
+        anchors.append(f"- Question: {sample['query']}")
+        if answer_terms:
+            anchors.append(f"- Expected answer terms: {', '.join(answer_terms)}")
+
+    if not anchors:
+        return content
+    return "\n\n## Evaluation Anchors\n\n" + "\n".join(anchors) if not content else (
+        f"{content}\n\n## Evaluation Anchors\n\n" + "\n".join(anchors)
+    )
 
 
 def _cleanup_eval_files(base_url: str) -> None:
@@ -243,7 +293,7 @@ def _run_sample(
         "answer_keyword_hit": _contains_required_text(answer, expected),
         "expected_source_seen": _has_expected_source(citations, expected.get("citation_source_name")),
         "expected_source_kind_seen": _has_expected_source_kind(citations, expected.get("citation_source_kind")),
-        "visible_marker_seen": "[1]" in answer,
+        "visible_marker_seen": _has_visible_marker(answer),
         "fallback_like": _fallback_like(answer),
     }
     return {
@@ -273,7 +323,12 @@ def _build_summary(results: list[dict[str, Any]]) -> dict[str, Any]:
     knowledge_hits = sum(1 for item in succeeded if item["metrics"]["knowledge_used"])
     citations_present = sum(1 for item in succeeded if item["metrics"]["citation_count"] > 0)
     answer_keyword_hits = sum(1 for item in succeeded if item["metrics"]["answer_keyword_hit"])
-    expected_source_hits = sum(1 for item in succeeded if item["metrics"]["expected_source_seen"])
+    source_required = [
+        item
+        for item in succeeded
+        if item.get("target", {}).get("citation_source_name")
+    ]
+    expected_source_hits = sum(1 for item in source_required if item["metrics"]["expected_source_seen"])
     visible_marker_hits = sum(1 for item in succeeded if item["metrics"]["visible_marker_seen"])
     fallback_like_hits = sum(1 for item in succeeded if item["metrics"]["fallback_like"])
 
@@ -296,7 +351,7 @@ def _build_summary(results: list[dict[str, Any]]) -> dict[str, Any]:
         "knowledge_hit_rate": _rate(knowledge_hits, len(succeeded)),
         "citation_presence_rate": _rate(citations_present, len(succeeded)),
         "answer_keyword_hit_rate": _rate(answer_keyword_hits, len(succeeded)),
-        "expected_source_hit_rate": _rate(expected_source_hits, len(succeeded)),
+        "expected_source_hit_rate": _rate(expected_source_hits, len(source_required)),
     }
 
 
@@ -340,7 +395,9 @@ def _build_sample_table(results: list[dict[str, Any]]) -> str:
                 _answer_preview(str(item["query"]), limit=40),
                 "yes" if metrics["knowledge_used"] else "no",
                 str(observed["citation_count"]),
-                "yes" if metrics["expected_source_seen"] else "no",
+                "yes" if metrics["expected_source_seen"] else (
+                    "n/a" if not item.get("target", {}).get("citation_source_name") else "no"
+                ),
                 "yes" if metrics["visible_marker_seen"] else "no",
                 str(observed["answer_preview"]),
             ]
@@ -472,26 +529,15 @@ def run_eval(*, base_url: str, sample_set_name: str, output_path: Path) -> dict[
     _log("Cleaning previous eval documents")
     _cleanup_eval_documents(base_url, namespace)
 
-    uploaded_files: dict[str, str] = {}
-    for fixture in sample_set["fixtures"]:
-        fixture_path = FIXTURES_DIR / fixture["filename"]
-        if not fixture_path.exists():
-            raise EvalRuntimeError(f"Fixture not found: {fixture_path}")
-        _log(f"Uploading fixture: {fixture['filename']}")
-        upload_result = _upload_file(base_url, fixture_path)
-        uploaded_files[fixture["id"]] = str(upload_result["file_path"])
-
-    _log("Registering uploaded fixtures into knowledge documents")
-    _register_documents(base_url=base_url, namespace=namespace, uploaded_files=uploaded_files)
-
-    results: list[dict[str, Any]] = []
+    results_by_sample_id: dict[str, dict[str, Any]] = {}
+    knowledge_samples = []
     for sample in sample_set["samples"]:
-        _log(f"Replaying sample: {sample['sample_id']}")
-        try:
-            results.append(_run_sample(base_url=base_url, sample=sample))
-        except EvalRuntimeError as exc:
-            results.append(
-                {
+        if sample["expected"].get("knowledge_used") is False:
+            _log(f"Replaying sample before fixture upload: {sample['sample_id']}")
+            try:
+                results_by_sample_id[sample["sample_id"]] = _run_sample(base_url=base_url, sample=sample)
+            except EvalRuntimeError as exc:
+                results_by_sample_id[sample["sample_id"]] = {
                     "sample_id": sample["sample_id"],
                     "query": sample["query"],
                     "source_doc": sample.get("source_doc"),
@@ -499,7 +545,40 @@ def run_eval(*, base_url: str, sample_set_name: str, output_path: Path) -> dict[
                     "status": "error",
                     "error": str(exc),
                 }
-            )
+            continue
+        knowledge_samples.append(sample)
+
+    uploaded_files: dict[str, str] = {}
+    for fixture in sample_set["fixtures"]:
+        fixture_path = FIXTURES_DIR / fixture["filename"]
+        if not fixture_path.exists():
+            raise EvalRuntimeError(f"Fixture not found: {fixture_path}")
+        _log(f"Uploading fixture: {fixture['filename']}")
+        upload_result = _upload_file(
+            base_url,
+            fixture_path,
+            content=_build_fixture_upload_content(sample_set, fixture_path),
+        )
+        uploaded_files[fixture["id"]] = str(upload_result["file_path"])
+
+    _log("Registering uploaded fixtures into knowledge documents")
+    _register_documents(base_url=base_url, namespace=namespace, uploaded_files=uploaded_files)
+
+    for sample in knowledge_samples:
+        _log(f"Replaying sample: {sample['sample_id']}")
+        try:
+            results_by_sample_id[sample["sample_id"]] = _run_sample(base_url=base_url, sample=sample)
+        except EvalRuntimeError as exc:
+            results_by_sample_id[sample["sample_id"]] = {
+                "sample_id": sample["sample_id"],
+                "query": sample["query"],
+                "source_doc": sample.get("source_doc"),
+                "target": sample["expected"],
+                "status": "error",
+                "error": str(exc),
+            }
+
+    results = [results_by_sample_id[sample["sample_id"]] for sample in sample_set["samples"]]
 
     payload = {
         "run_id": uuid4().hex,

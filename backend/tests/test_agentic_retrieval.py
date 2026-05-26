@@ -443,6 +443,24 @@ def test_generic_docs_only_empty_result_falls_back_without_business_switch() -> 
     assert outcome.exit_reason in {"ask_user", "max_rounds_reached"}
 
 
+def test_generic_docs_only_greeting_does_not_rewrite_to_document_terms() -> None:
+    app_settings = _build_settings("agentic-docs-only-greeting-no-rewrite")
+    definition = build_generic_assistant_scene_definition(app_settings=app_settings)
+    retriever = definition.build_retriever()
+
+    outcome = retriever.retrieve_with_trace(
+        "你好",
+        candidate_tools=("knowledge_document_search",),
+    )
+
+    assert outcome.documents == []
+    assert outcome.exit_reason == "ask_user"
+    assert len(outcome.decision_log) == 1
+    assert outcome.decision_log[0].query == "你好"
+    assert outcome.decision_log[0].rewritten_query is None
+    assert outcome.decision_log[0].decision == "ask_user"
+
+
 def test_agentic_retriever_restricts_to_documents_only_candidate_tools() -> None:
     app_settings, knowledge_service = _build_knowledge_service("agentic-documents-only")
     retriever = _build_ecommerce_retriever(app_settings, knowledge_service)

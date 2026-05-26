@@ -1380,6 +1380,83 @@ def test_chat_api_real_runtime_filters_low_relevance_document_hits_for_greeting(
     assert model.get_runnable_calls == []
 
 
+def test_chat_api_real_runtime_greeting_does_not_rewrite_into_faq_hit() -> None:
+    runtime_dir = make_test_runtime_dir("chat-api-real-runtime-greeting-faq-no-rewrite")
+    sqlite_path = runtime_dir / "chat-sessions.db"
+    app_settings = AppSettings(
+        data_dir=runtime_dir,
+        app={
+            "active_scene": "generic_assistant",
+        },
+        session={
+            "sqlite_path": sqlite_path,
+            "window_size": 3,
+        },
+        vector_store={
+            "provider": "chroma",
+            "chroma": {"persist_directory": runtime_dir / ".chroma"},
+        },
+    )
+    store = VectorStoreFactory.create(app_settings)
+    store.ensure_document_indexes()
+    store.upsert_document_chunks(
+        [
+            VectorStoreDocument(
+                id="chunk-faq-1",
+                content="Support FAQ：如需查询已上传知识库，请提供具体文档主题、术语或章节名称。",
+                metadata={
+                    "document_id": "doc-faq-1",
+                    "source_path": "support-faq.md",
+                    "namespace": "documents",
+                    "chunk_id": "chunk-faq-1",
+                    "chunk_index": 0,
+                    "is_active": True,
+                    "is_managed_document": True,
+                },
+            )
+        ]
+    )
+    knowledge_service = create_knowledge_service(app_settings=app_settings, store=store)
+    model = FakeModel(answer="unused")
+    service = SceneChatService(
+        scene_registry=build_default_scene_registry(
+            app_settings=app_settings,
+            knowledge_service=knowledge_service,
+            document_retrieval_service=_build_document_retrieval_service(app_settings),
+        ),
+        app_settings=app_settings,
+        knowledge_service=knowledge_service,
+        session_store=SQLiteSessionStore(sqlite_path=sqlite_path),
+        context_builder=PromptContextBuilder(window_size=3),
+        model=model,
+    )
+    app = create_app(chat_service=service)
+
+    with TestClient(app) as client:
+        create_response = client.post(
+            "/sessions",
+            json={
+                "scene": "generic_assistant",
+                "mounted_knowledge_sources": ["documents"],
+            },
+        )
+        assert create_response.status_code == 200
+        response = client.post(
+            "/chat",
+            json={
+                "message": "你好",
+                "session_id": create_response.json()["session_id"],
+            },
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["knowledge_used"] is False
+    assert payload["citations"] == []
+    assert "暂时没有检索到足够相关的文档知识" in payload["answer"]
+    assert model.get_runnable_calls == []
+
+
 def test_chat_api_ignores_builtin_orders_json_in_documents_only_session() -> None:
     runtime_dir = make_test_runtime_dir("chat-api-ignore-builtin-orders")
     sqlite_path = runtime_dir / "chat-sessions.db"

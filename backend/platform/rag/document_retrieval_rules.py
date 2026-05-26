@@ -5,7 +5,7 @@ from pathlib import Path
 from backend.platform.retrieval import VectorSearchResult
 
 
-DOCUMENT_MINIMUM_RELEVANCE = 0.18
+DOCUMENT_MINIMUM_RELEVANCE = 0.8
 
 
 def filter_low_relevance_document_results(

@@ -22,7 +22,9 @@
 - 会话创建、查询、删除与 `mounted_knowledge_sources` 知识源挂载
 - 本地知识文件上传、预处理预览、正式入库、重处理与重切块
 - 文档切块、索引、语义检索与 `documents/chunks` 的 `Hybrid Search`
+- 文档召回默认过滤低相关片段，融合分数低于 `0.8` 的结果不会进入回答上下文
 - Agentic Retrieval 编排，支持“文档优先 + 按需切换场景工具”
+- `generic_assistant` 对寒暄、无明确文档意图的问题直接走 no-hit fallback，避免被改写成宽泛 FAQ/手册查询
 - 结构化 `citations`、回答正文引用编号与 session `retrieval_snippets` 落库
 - `Chroma` / `Elasticsearch` 可切换向量存储，以及基于 `SQLite` 的会话记忆
 - 内置 `generic_assistant` 与 `ecommerce` 两个场景，用于验证平台能力与场景扩展方式
@@ -46,19 +48,46 @@
 - [x] 会话级 `mounted_knowledge_sources` 挂载与 scene definition 候选工具解析
 - [x] `ecommerce` 以 business extension 方式接入 generic 主链，而不是反向成为默认依赖
 - [x] 文档 `Hybrid Search`：语义召回 + 关键词召回 + 融合排序
+- [x] 文档低相关召回过滤与无文档意图 no-hit fallback
 - [x] 知识文档预处理预览、注册、重处理、重分块、软删除与文件维度索引视图
 - [x] 结构化 `citations`、回答正文引用编号与 session `retrieval_snippets` 持久化
 - [x] `Chroma` / `Elasticsearch` 可切换向量存储，`SQLite` 会话持久化
 
-## 后续重点
+## 整体功能规划
 
-当前 README 已同步到最近一轮 generic/ecommerce 解耦后的状态。后续优先事项聚焦在“补能力”而不是“继续拆边界”：
+当前 README 已同步到最近一轮 generic/ecommerce 解耦后的状态。后续规划不再以“大拆架构”为主，而是围绕“RAG 效果可控、Agent 能力可扩展、系统可产品化”逐步补齐能力。
 
-- `Tool Registry`、函数调用协议、多步执行与任务状态管理
-- `WebSocket` 双向流式协议
-- RAG 评测脚手架、ReRank 与更系统的效果验证
-- 鉴权、观测、部署与长期任务框架
-- 正式产品界面替代当前调试页
+下面的清单就是后续功能规划。每一项都应有对应实现、文档说明和必要测试；全部勾选后，可视为当前规划阶段完成。
+
+### 近期：把现有 RAG 主链做稳
+
+- [ ] 检索效果：补充 ReRank，并支持按 scene 配置召回阈值、`top_k`、召回策略和 no-hit 策略
+- [ ] 评测体系：扩展 Evaluation Harness 样本集，覆盖多轮问答、低相关误召回、知识源切换和 SSE 输出稳定性
+- [ ] 可观测性：在日志、接口或调试页中暴露每轮 retrieval trace、query rewrite、tool decision 和 citation score
+- [ ] 知识管理：支持批量重建索引、失败重试、文档版本对比、索引状态诊断和上传文件清理
+- [ ] 前端调试页：完善 SSE 流式展示、引用展开、检索过程查看和错误态展示，保持轻量定位能力
+
+### 中期：形成可扩展的 Agent Runtime
+
+- [ ] Tool Registry：统一工具注册、工具元数据、参数 schema、权限声明和运行结果协议
+- [ ] 多步任务：支持计划生成、工具调用链、任务状态、失败补偿和可恢复执行
+- [ ] 场景扩展：沉淀新增 scene / business extension 的模板，降低新增行业助手成本
+- [ ] 结构化工具：将订单、库存、商品详情等能力保持为 structured tools，并与文档 RAG 统一编排
+- [ ] 记忆能力：从短窗口会话历史扩展到用户偏好、长期摘要和跨会话上下文，并保持业务数据权限隔离
+
+### 后期：补齐产品化与部署能力
+
+- [ ] 鉴权与权限：接入用户、角色、知识库权限、会话访问控制和工具调用权限
+- [ ] 运维部署：提供 Docker Compose / 生产环境配置样例，补齐迁移脚本、健康检查、备份恢复和日志采集
+- [ ] 模型治理：支持多模型路由策略、降级策略、成本统计、超时重试和敏感信息过滤
+- [ ] 产品界面：用正式工作台替代当前调试页，提供会话管理、知识库管理、检索诊断和评测报告入口
+- [ ] 企业集成：预留接入 SSO、对象存储、外部知识源、工单系统、CRM 或内部搜索系统的扩展点
+
+### 当前不优先做
+
+- 不急于引入复杂多 Agent 协作，先把单 Agent + 多工具编排做稳定
+- 不把所有业务数据都塞进文档 RAG，结构化业务能力优先走 structured tools
+- 不在效果评测不充分前大规模调 prompt，先用固定样本和 trace 定位问题来源
 
 ## 设计文档
 
@@ -225,6 +254,19 @@ backend\.venv\Scripts\python.exe backend\run.py
 - 未入库但可处理的文件状态为 `awaiting_processing`
 - `pdf`、`docx`、`xlsx` 当前允许上传，但仅显示 `unsupported`，不会进入预处理与索引链路
 
+文档召回当前行为：
+
+- `DocumentRetrievalService` 会先执行语义召回与关键词召回，再通过融合排序生成候选结果
+- 融合分数低于 `0.8` 的文档片段会被丢弃，不会进入 prompt、citations 或最终回答
+- 如果过滤后没有可用文档，`/chat` 会返回 scene fallback，`knowledge_used=false` 且 `citations=[]`
+- 对 `你好` 这类没有明确文档查询意图的问题，`generic_assistant` 不再进入“相关文档 / FAQ / 手册”式查询改写，避免误召回不相关知识
+
+API 调试页当前交互：
+
+- `frontend/api-tester.html` 会按 SSE `chunk` 增量更新当前 assistant 气泡文本
+- 流式输出期间不会整段重建消息列表，避免旧消息动画重复播放导致闪屏
+- `done.answer` 仍是最终权威文本；页面会在完成事件后同步 citations、knowledge 状态和最终回答
+
 ## 向量存储
 
 默认使用 `chroma`：
@@ -259,6 +301,12 @@ backend\.venv\Scripts\python.exe -m pytest backend\tests -q -c backend\tests\pyt
 
 ```powershell
 backend\.venv\Scripts\python.exe -m pytest backend\tests\test_chat_api.py -q -c backend\tests\pytest.ini
+```
+
+文档召回、Agentic no-hit 与 `/chat` 回归测试：
+
+```powershell
+backend\.venv\Scripts\python.exe -m pytest backend\tests\test_agentic_retrieval.py backend\tests\test_chat_api.py backend\tests\test_document_hybrid_retrieval.py -q -c backend\tests\pytest.ini
 ```
 
 评测资产静态校验：

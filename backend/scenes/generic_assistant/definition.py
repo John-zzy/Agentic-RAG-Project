@@ -214,7 +214,11 @@ class GenericAssistantSufficiencyJudge(SufficiencyJudge):
                     reason="文档证据已足够支持当前回答。",
                     confidence=result.confidence,
                 )
-            return self._build_no_hit_decision(plan.round_index, plan.max_rounds)
+            return self._build_no_hit_decision(
+                query=plan.user_query,
+                round_index=plan.round_index,
+                max_rounds=plan.max_rounds,
+            )
 
         followup_decision = self._resolve_extension_followup(input)
         if followup_decision is not None:
@@ -226,7 +230,11 @@ class GenericAssistantSufficiencyJudge(SufficiencyJudge):
                 reason="当前证据已足够支持回答。",
                 confidence=result.confidence,
             )
-        return self._build_no_hit_decision(plan.round_index, plan.max_rounds)
+        return self._build_no_hit_decision(
+            query=plan.user_query,
+            round_index=plan.round_index,
+            max_rounds=plan.max_rounds,
+        )
 
     def _resolve_handoff(self, context: RetrievalContext) -> SufficiencyDecision | None:
         for extension in self.business_extensions:
@@ -247,9 +255,18 @@ class GenericAssistantSufficiencyJudge(SufficiencyJudge):
 
     def _build_no_hit_decision(
         self,
+        *,
+        query: str,
         round_index: int,
         max_rounds: int,
     ) -> SufficiencyDecision:
+        if not self._has_document_intent(query):
+            return SufficiencyDecision(
+                is_sufficient=False,
+                next_action="ask_user",
+                reason="当前问题缺少明确的文档查询意图，不进行文档查询改写。",
+                follow_up_question="请补充更具体的文档主题、术语，或说明你希望查询的业务知识范围。",
+            )
         if round_index >= max_rounds:
             return SufficiencyDecision(
                 is_sufficient=False,
@@ -262,6 +279,12 @@ class GenericAssistantSufficiencyJudge(SufficiencyJudge):
             next_action="rewrite",
             reason="当前证据不足，先改写查询继续检索。",
         )
+
+    def _has_document_intent(self, query: str) -> bool:
+        normalized = query.strip().lower()
+        if not normalized:
+            return False
+        return any(keyword in normalized for keyword in self.document_intent_keywords)
 
 
 class GenericAssistantQueryRewriter(QueryRewriter):
