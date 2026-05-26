@@ -1,0 +1,81 @@
+{
+  "sample_set": "minimal",
+  "description": "Generic document RAG evals for generic_assistant + documents.",
+  "namespace": "documents",
+  "fixtures": [
+    {
+      "id": "quickstart",
+      "filename": "eval-harness-quickstart.md"
+    },
+    {
+      "id": "it_policy",
+      "filename": "eval-harness-it-policy.md"
+    },
+    {
+      "id": "support_faq",
+      "filename": "eval-harness-support-faq.md"
+    }
+  ],
+  "samples": [
+    {
+      "sample_id": "quickstart_setup_requirement",
+      "query": "开始使用前需要先安装什么版本的 Python？",
+      "source_doc": "eval-harness-quickstart.md",
+      "expected": {
+        "knowledge_used": true,
+        "answer_contains_all": [
+          "Python 3.11"
+        ],
+        "min_citations": 1,
+        "citation_source_name": "eval-harness-quickstart.md",
+        "requires_visible_marker": true
+      }
+    },
+    {
+      "sample_id": "it_policy_mfa_rule",
+      "query": "远程访问公司系统时有什么安全要求？",
+      "source_doc": "eval-harness-it-policy.md",
+      "expected": {
+        "knowledge_used": true,
+        "answer_contains_any": [
+          "MFA",
+          "双重认证"
+        ],
+        "min_citations": 1,
+        "citation_source_name": "eval-harness-it-policy.md",
+        "requires_visible_marker": true
+      }
+    },
+    {
+      "sample_id": "faq_response_sla",
+      "query": "普通支持请求通常多久会得到首次响应？",
+      "source_doc": "eval-harness-support-faq.md",
+      "expected": {
+        "knowledge_used": true,
+        "answer_contains_all": [
+          "1 个工作日"
+        ],
+        "min_citations": 1,
+        "citation_source_name": "eval-harness-support-faq.md",
+        "citation_source_kind": "document_chunk",
+        "requires_visible_marker": true
+      }
+    },
+    {
+      "sample_id": "no_hit_fallback",
+      "query": "VOID-ALPHA-7788 secret handshake?",
+      "source_doc": null,
+      "expected": {
+        "knowledge_used": false,
+        "answer_contains_any": [
+          "无法找到",
+          "未找到",
+          "缺乏相关",
+          "证据不足"
+        ],
+        "min_citations": 0,
+        "requires_visible_marker": false
+      }
+    }
+  ]
+}

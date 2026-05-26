@@ -261,6 +261,25 @@ backend\.venv\Scripts\python.exe -m pytest backend\tests -q -c backend\tests\pyt
 backend\.venv\Scripts\python.exe -m pytest backend\tests\test_chat_api.py -q -c backend\tests\pytest.ini
 ```
 
+评测资产静态校验：
+
+```powershell
+backend\.venv\Scripts\python.exe -m pytest backend\tests\test_eval_assets.py -q -c backend\tests\pytest.ini
+```
+
+Evaluation Harness 基础版：
+
+```powershell
+backend\.venv\Scripts\python.exe backend\evals\run_http_eval.py --base-url http://127.0.0.1:8000 --sample-set minimal --output backend\data\evals\latest.json
+```
+
+说明：
+
+- 该命令要求本地后端已启动，并且 `backend\.env` 中已配置真实模型 API Key
+- 评测结果会写入 `backend\data\evals\latest.json`
+- 同时会生成可直接展示的表格报告 `backend\data\evals\latest.md`
+- 详细样本说明、日志/指标口径和验证记录见 [docs/evaluation-harness.md](./docs/evaluation-harness.md)
+
 最小 SSE 验证：
 
 ```powershell
