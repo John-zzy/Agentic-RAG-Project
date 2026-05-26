@@ -73,7 +73,8 @@
           "缺乏相关",
           "证据不足"
         ],
-        "min_citations": 0,
+        "max_citations": 0,
+        "citations_empty": true,
         "requires_visible_marker": false
       }
     }

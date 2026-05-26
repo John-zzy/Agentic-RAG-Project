@@ -2,7 +2,7 @@
 
 ## 概览
 
-`Evaluation Harness 基础版` 是当前仓库的最小可重复评测入口，目标不是做大规模 benchmark，也不是今天就做完整自动评分，而是给 `generic_assistant + documents` 主链补上一套固定样本、真实回放命令、可读日志和基本指标表格。
+`Evaluation Harness 基础版` 是当前仓库的最小可重复评测入口，目标不是做大规模 benchmark，也不是引入 LLM-as-a-judge，而是给 `generic_assistant + documents` 主链补上一套固定样本、真实回放命令、可读日志、基本指标表格和样本级 pass/fail 断言。
 
 当前入口位于 `backend/evals/`，通过独立 HTTP replay 脚本调用已经运行的本地后端，复用现有：
 
@@ -49,6 +49,7 @@ backend\.venv\Scripts\python.exe backend\evals\run_http_eval.py --base-url http:
 6. 每条样本创建独立 session
 7. 调 `/chat` 回放
 8. 输出 `latest.json` 和 `latest.md`
+9. 如果任一样本断言失败，以非 0 退出码结束
 
 ## 样本与文体映射
 
@@ -57,7 +58,7 @@ backend\.venv\Scripts\python.exe backend\evals\run_http_eval.py --base-url http:
 | `quickstart_setup_requirement` | quickstart guide | `开始使用前需要先安装什么版本的 Python？` | 观察是否命中文档、答案是否包含 `Python 3.11`、引用里是否出现目标来源 |
 | `it_policy_mfa_rule` | security policy | `远程访问公司系统时有什么安全要求？` | 观察是否命中文档、答案是否包含 `MFA` 或 `双重认证`、引用里是否出现目标来源 |
 | `faq_response_sla` | support FAQ | `普通支持请求通常多久会得到首次响应？` | 观察是否命中文档、答案是否包含 `1 个工作日`、引用里是否出现 support FAQ |
-| `no_hit_fallback` | 无 | `VOID-ALPHA-7788 secret handshake?` | 观察模型在陌生 query 下的回退表达、知识使用情况和引用情况 |
+| `no_hit_fallback` | 无 | `VOID-ALPHA-7788 secret handshake?` | 严格断言 no-hit fallback：`knowledge_used=false`、`citations=[]`、回答语义为缺乏可靠资料 |
 
 ## 输出 JSON 结构
 
@@ -77,6 +78,9 @@ JSON 字段目前固定包含：
 - `sample_id`
 - `query`
 - `target`
+- `passed`
+- `failure_reasons`
+- `assertions`
 - `observed`
 - `metrics`
 - `status`
@@ -92,13 +96,42 @@ JSON 字段目前固定包含：
 - `session_id`
 - `request_id`
 
+其中 `assertions[]` 会逐项记录：
+
+- `name`
+- `expected`
+- `actual`
+- `passed`
+
+如果样本失败，`failure_reasons[]` 会把失败断言的预期值和实际值写出来。例如 no-hit fallback 如果回归成伪引用，报告会暴露实际的 `knowledge_used` 和 `citations`。
+
 ## 当前指标口径
 
 - `completion_rate = 成功完成调用的样本数 / 总样本数`
+- `sample_pass_rate = 断言通过样本数 / 总样本数`
 - `knowledge_hit_rate = knowledge_used=true 的样本数 / 成功调用样本数`
 - `citation_presence_rate = citations 非空的样本数 / 成功调用样本数`
 - `answer_keyword_hit_rate = 答案命中预设关键词的样本数 / 成功调用样本数`
 - `expected_source_hit_rate = citations 中出现目标来源的样本数 / 成功调用样本数`
+
+## no-hit fallback 回归口径
+
+`minimal` 样本集固定包含 `no_hit_fallback`。该样本在上传 fixture 之前回放，避免固定评测文档对陌生 query 产生干扰。
+
+该样本的验收口径是：
+
+- `passed=true`
+- `observed.knowledge_used=false`
+- `observed.citation_count=0`
+- `observed.citations=[]`
+- `metrics.fallback_like=true`
+
+如果后续修改 ReRank、query rewrite、检索阈值或 citation 组装逻辑，导致 no-hit 又返回 citations，则该样本应失败。定位时优先看：
+
+- `results[].failure_reasons`
+- `results[].assertions`
+- `results[].observed.knowledge_used`
+- `results[].observed.citations`
 
 ## 验证记录
 
@@ -123,8 +156,9 @@ JSON 字段目前固定包含：
 1. 启动 `backend/run.py`
 2. 运行 `backend/evals/run_http_eval.py`
 3. 打开 `backend/data/evals/latest.md`
-4. 先展示 Sample Table 和 Metrics Table
-5. 再打开 `backend/data/evals/latest.json` 查看单条样本明细和 `citations`
+4. 先展示 Sample Table 里的 `pass`、`knowledge`、`citations` 和 `failure`
+5. 针对 `no_hit_fallback` 确认 `pass=yes`、`knowledge=no`、`citations=0`
+6. 再打开 `backend/data/evals/latest.json` 查看单条样本明细、`assertions`、`observed.knowledge_used` 和 `observed.citations`
 
 ## JD 证明点
 

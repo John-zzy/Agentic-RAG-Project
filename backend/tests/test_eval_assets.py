@@ -4,6 +4,8 @@ import json
 from pathlib import Path
 import re
 
+from backend.evals.run_http_eval import _build_assertions
+
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
 EVALS_DIR = ROOT_DIR / "backend" / "evals"
@@ -47,9 +49,53 @@ def test_minimal_eval_sample_manifest_is_well_formed() -> None:
             assert sample["source_doc"] in fixture_filenames
         assert isinstance(sample["expected"], dict)
         assert "knowledge_used" in sample["expected"]
-        assert "min_citations" in sample["expected"]
+        assert "min_citations" in sample["expected"] or "max_citations" in sample["expected"]
         for pattern in FORBIDDEN_ID_PATTERNS:
             assert not pattern.search(sample["query"])
+
+
+def test_minimal_eval_includes_strict_no_hit_fallback_boundary() -> None:
+    manifest = json.loads((SAMPLES_DIR / "minimal.json").read_text(encoding="utf-8"))
+    samples = {sample["sample_id"]: sample for sample in manifest["samples"]}
+
+    assert "no_hit_fallback" in samples
+    no_hit = samples["no_hit_fallback"]
+
+    assert no_hit["source_doc"] is None
+    assert no_hit["expected"]["knowledge_used"] is False
+    assert no_hit["expected"]["max_citations"] == 0
+    assert no_hit["expected"]["citations_empty"] is True
+    assert no_hit["expected"]["requires_visible_marker"] is False
+    assert no_hit["expected"]["answer_contains_any"]
+
+
+def test_no_hit_assertions_fail_when_pseudo_citations_are_returned() -> None:
+    expected = {
+        "knowledge_used": False,
+        "max_citations": 0,
+        "citations_empty": True,
+        "requires_visible_marker": False,
+    }
+    observed = {
+        "knowledge_used": True,
+        "citation_count": 1,
+        "citations": [{"source_name": "eval-harness-quickstart.md"}],
+        "citation_sources": ["eval-harness-quickstart.md"],
+    }
+    metrics = {
+        "answer_keyword_hit": True,
+        "expected_source_seen": False,
+        "expected_source_kind_seen": True,
+        "visible_marker_seen": True,
+        "fallback_like": False,
+    }
+
+    assertions = _build_assertions(expected=expected, observed=observed, metrics=metrics)
+    failures = {assertion["name"]: assertion for assertion in assertions if not assertion["passed"]}
+
+    assert failures["knowledge_used"]["actual"] is True
+    assert failures["max_citations"]["actual"] == 1
+    assert failures["citations_empty"]["actual"] == [{"source_name": "eval-harness-quickstart.md"}]
 
 
 def test_eval_fixtures_remain_generic_document_assets() -> None:

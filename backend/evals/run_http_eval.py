@@ -179,6 +179,106 @@ def _has_visible_marker(answer: str) -> bool:
     return re.search(r"\[\d+\]", answer) is not None
 
 
+def _make_assertion(name: str, expected: Any, actual: Any, passed: bool) -> dict[str, Any]:
+    return {
+        "name": name,
+        "expected": expected,
+        "actual": actual,
+        "passed": passed,
+    }
+
+
+def _build_assertions(
+    *,
+    expected: dict[str, Any],
+    observed: dict[str, Any],
+    metrics: dict[str, Any],
+) -> list[dict[str, Any]]:
+    assertions = [
+        _make_assertion(
+            "knowledge_used",
+            expected.get("knowledge_used"),
+            observed.get("knowledge_used"),
+            observed.get("knowledge_used") == expected.get("knowledge_used"),
+        ),
+        _make_assertion(
+            "answer_keyword_hit",
+            True,
+            metrics["answer_keyword_hit"],
+            metrics["answer_keyword_hit"],
+        ),
+    ]
+
+    if "min_citations" in expected:
+        citation_count = int(observed["citation_count"])
+        min_citations = int(expected["min_citations"])
+        assertions.append(
+            _make_assertion("min_citations", f">= {min_citations}", citation_count, citation_count >= min_citations)
+        )
+
+    if "max_citations" in expected:
+        citation_count = int(observed["citation_count"])
+        max_citations = int(expected["max_citations"])
+        assertions.append(
+            _make_assertion("max_citations", f"<= {max_citations}", citation_count, citation_count <= max_citations)
+        )
+
+    if expected.get("citations_empty") is True:
+        assertions.append(
+            _make_assertion("citations_empty", [], observed["citations"], observed["citations"] == [])
+        )
+
+    if expected.get("citation_source_name"):
+        assertions.append(
+            _make_assertion(
+                "citation_source_name",
+                expected["citation_source_name"],
+                observed["citation_sources"],
+                metrics["expected_source_seen"],
+            )
+        )
+
+    if expected.get("citation_source_kind"):
+        actual_source_kinds = [
+            citation.get("source_kind")
+            for citation in observed["citations"]
+            if isinstance(citation, dict)
+        ]
+        assertions.append(
+            _make_assertion(
+                "citation_source_kind",
+                expected["citation_source_kind"],
+                actual_source_kinds,
+                metrics["expected_source_kind_seen"],
+            )
+        )
+
+    if "requires_visible_marker" in expected:
+        requires_visible_marker = bool(expected["requires_visible_marker"])
+        assertions.append(
+            _make_assertion(
+                "visible_marker",
+                requires_visible_marker,
+                metrics["visible_marker_seen"],
+                metrics["visible_marker_seen"] == requires_visible_marker,
+            )
+        )
+
+    if expected.get("knowledge_used") is False:
+        assertions.append(
+            _make_assertion("fallback_like", True, metrics["fallback_like"], metrics["fallback_like"])
+        )
+
+    return assertions
+
+
+def _format_failure_reason(assertion: dict[str, Any]) -> str:
+    return (
+        f"{assertion['name']} expected={assertion['expected']!r} "
+        f"actual={assertion['actual']!r}"
+    )
+
+
 def _validate_manifest(sample_set: dict[str, Any]) -> None:
     if not isinstance(sample_set.get("fixtures"), list) or not sample_set["fixtures"]:
         raise EvalRuntimeError("Sample set must define a non-empty fixtures list.")
@@ -296,22 +396,32 @@ def _run_sample(
         "visible_marker_seen": _has_visible_marker(answer),
         "fallback_like": _fallback_like(answer),
     }
+    observed = {
+        "answer": answer,
+        "answer_preview": _answer_preview(answer),
+        "knowledge_used": chat_response.get("knowledge_used"),
+        "citation_count": len(citations),
+        "citation_sources": [citation.get("source_name") for citation in citations],
+        "citations": citations,
+        "session_id": chat_response.get("session_id"),
+        "request_id": chat_response.get("request_id"),
+    }
+    assertions = _build_assertions(expected=expected, observed=observed, metrics=metrics)
+    failure_reasons = [
+        _format_failure_reason(assertion)
+        for assertion in assertions
+        if not assertion["passed"]
+    ]
     return {
         "sample_id": sample["sample_id"],
         "query": sample["query"],
         "source_doc": sample.get("source_doc"),
         "target": expected,
         "status": "ok",
-        "observed": {
-            "answer": answer,
-            "answer_preview": _answer_preview(answer),
-            "knowledge_used": chat_response.get("knowledge_used"),
-            "citation_count": len(citations),
-            "citation_sources": [citation.get("source_name") for citation in citations],
-            "citations": citations,
-            "session_id": chat_response.get("session_id"),
-            "request_id": chat_response.get("request_id"),
-        },
+        "passed": not failure_reasons,
+        "failure_reasons": failure_reasons,
+        "assertions": assertions,
+        "observed": observed,
         "metrics": metrics,
     }
 
@@ -320,6 +430,8 @@ def _build_summary(results: list[dict[str, Any]]) -> dict[str, Any]:
     total = len(results)
     succeeded = [item for item in results if item["status"] == "ok"]
     errors = [item for item in results if item["status"] != "ok"]
+    passed_samples = sum(1 for item in results if item.get("passed") is True)
+    failed_samples = total - passed_samples
     knowledge_hits = sum(1 for item in succeeded if item["metrics"]["knowledge_used"])
     citations_present = sum(1 for item in succeeded if item["metrics"]["citation_count"] > 0)
     answer_keyword_hits = sum(1 for item in succeeded if item["metrics"]["answer_keyword_hit"])
@@ -339,6 +451,8 @@ def _build_summary(results: list[dict[str, Any]]) -> dict[str, Any]:
 
     return {
         "total_samples": total,
+        "passed_samples": passed_samples,
+        "failed_samples": failed_samples,
         "successful_calls": len(succeeded),
         "errored_calls": len(errors),
         "samples_with_knowledge": knowledge_hits,
@@ -347,6 +461,7 @@ def _build_summary(results: list[dict[str, Any]]) -> dict[str, Any]:
         "expected_source_hits": expected_source_hits,
         "visible_marker_hits": visible_marker_hits,
         "fallback_like_hits": fallback_like_hits,
+        "sample_pass_rate": _rate(passed_samples, total),
         "completion_rate": _rate(len(succeeded), total),
         "knowledge_hit_rate": _rate(knowledge_hits, len(succeeded)),
         "citation_presence_rate": _rate(citations_present, len(succeeded)),
@@ -371,18 +486,20 @@ def _render_console_table(headers: list[str], rows: list[list[str]]) -> str:
 
 
 def _build_sample_table(results: list[dict[str, Any]]) -> str:
-    headers = ["sample_id", "query", "knowledge", "citations", "source_hit", "marker", "preview"]
+    headers = ["sample_id", "pass", "query", "knowledge", "citations", "source_hit", "marker", "failure", "preview"]
     rows: list[list[str]] = []
     for item in results:
         if item["status"] != "ok":
             rows.append(
                 [
                     item["sample_id"],
+                    "no",
                     _answer_preview(str(item.get("query", "")), limit=40),
                     "error",
                     "-",
                     "-",
                     "-",
+                    _answer_preview("; ".join(item.get("failure_reasons", [])), limit=60),
                     _answer_preview(str(item.get("error", ""))),
                 ]
             )
@@ -392,6 +509,7 @@ def _build_sample_table(results: list[dict[str, Any]]) -> str:
         rows.append(
             [
                 item["sample_id"],
+                "yes" if item.get("passed") else "no",
                 _answer_preview(str(item["query"]), limit=40),
                 "yes" if metrics["knowledge_used"] else "no",
                 str(observed["citation_count"]),
@@ -399,6 +517,7 @@ def _build_sample_table(results: list[dict[str, Any]]) -> str:
                     "n/a" if not item.get("target", {}).get("citation_source_name") else "no"
                 ),
                 "yes" if metrics["visible_marker_seen"] else "no",
+                _answer_preview("; ".join(item.get("failure_reasons", [])), limit=60),
                 str(observed["answer_preview"]),
             ]
         )
@@ -406,105 +525,237 @@ def _build_sample_table(results: list[dict[str, Any]]) -> str:
 
 
 def _build_metrics_table(summary: dict[str, Any]) -> str:
-    headers = ["metric", "value"]
-    ordered_keys = [
-        "total_samples",
-        "successful_calls",
-        "errored_calls",
-        "samples_with_knowledge",
-        "samples_with_citations",
-        "answer_keyword_hits",
-        "expected_source_hits",
-        "visible_marker_hits",
-        "fallback_like_hits",
-        "completion_rate",
-        "knowledge_hit_rate",
-        "citation_presence_rate",
-        "answer_keyword_hit_rate",
-        "expected_source_hit_rate",
+    headers = ["metric", "value", "meaning", "reading"]
+    rows = [
+        [
+            item["metric"],
+            str(summary[item["metric"]]),
+            item["meaning"],
+            item["reading"](summary) if callable(item["reading"]) else item["reading"],
+        ]
+        for item in _metric_specs()
     ]
-    rows = [[key, str(summary[key])] for key in ordered_keys]
     return _render_console_table(headers, rows)
+
+
+def _metric_specs() -> list[dict[str, Any]]:
+    return [
+        {"metric": "total_samples", "meaning": "本次回放样本总数", "reading": "用于判断样本集规模，当前 minimal 固定为小样本回归集。"},
+        {
+            "metric": "passed_samples",
+            "meaning": "通过全部断言的样本数",
+            "reading": lambda summary: f"{summary['passed_samples']}/{summary['total_samples']} 条样本满足预期。",
+        },
+        {
+            "metric": "failed_samples",
+            "meaning": "HTTP 错误或断言失败的样本数",
+            "reading": lambda summary: "没有失败样本。" if summary["failed_samples"] == 0 else "需要查看 failure 和 assertions 定位。",
+        },
+        {
+            "metric": "successful_calls",
+            "meaning": "完整拿到 /chat 响应的样本数",
+            "reading": lambda summary: f"接口链路完成率为 {summary['completion_rate']:.0%}。",
+        },
+        {
+            "metric": "errored_calls",
+            "meaning": "HTTP 或运行时异常样本数",
+            "reading": lambda summary: "回放链路无接口错误。" if summary["errored_calls"] == 0 else "先排查服务或依赖稳定性。",
+        },
+        {"metric": "samples_with_knowledge", "meaning": "返回 knowledge_used=true 的样本数", "reading": "应主要来自知识命中类样本，no-hit 不应计入。"},
+        {"metric": "samples_with_citations", "meaning": "返回 citations 非空的样本数", "reading": "应与知识命中类样本数量接近，no-hit 应保持 0 引用。"},
+        {
+            "metric": "answer_keyword_hits",
+            "meaning": "答案命中样本关键词约束的数量",
+            "reading": lambda summary: f"关键词约束命中率为 {summary['answer_keyword_hit_rate']:.0%}。",
+        },
+        {
+            "metric": "expected_source_hits",
+            "meaning": "引用命中预期来源文档的数量",
+            "reading": lambda summary: f"来源命中率为 {summary['expected_source_hit_rate']:.0%}。",
+        },
+        {"metric": "visible_marker_hits", "meaning": "答案正文包含 [1] 这类引用标记的数量", "reading": "用于确认结构化 citation 与正文引用展示一致。"},
+        {"metric": "fallback_like_hits", "meaning": "答案文本像 no-hit fallback 的数量", "reading": "当前 minimal 中应主要对应 no_hit_fallback。"},
+        {
+            "metric": "sample_pass_rate",
+            "meaning": "passed_samples / total_samples",
+            "reading": lambda summary: f"样本断言通过率为 {summary['sample_pass_rate']:.0%}。",
+        },
+        {
+            "metric": "completion_rate",
+            "meaning": "successful_calls / total_samples",
+            "reading": lambda summary: f"HTTP 回放完成率为 {summary['completion_rate']:.0%}。",
+        },
+        {"metric": "knowledge_hit_rate", "meaning": "samples_with_knowledge / successful_calls", "reading": "用于观察知识链路触发比例，不等同于正确率。"},
+        {"metric": "citation_presence_rate", "meaning": "samples_with_citations / successful_calls", "reading": "用于观察回答携带引用的比例，不应覆盖 no-hit 样本。"},
+        {"metric": "answer_keyword_hit_rate", "meaning": "answer_keyword_hits / successful_calls", "reading": "衡量答案是否满足样本最小内容约束。"},
+        {"metric": "expected_source_hit_rate", "meaning": "expected_source_hits / 需要来源命中的样本数", "reading": "衡量引用是否指向预期文档。"},
+    ]
+
+
+def _yes_no(value: bool) -> str:
+    return "yes" if value else "no"
+
+
+def _format_rate(value: float) -> str:
+    return f"{value:.0%}"
+
+
+def _bar(value: float, *, width: int = 20) -> str:
+    bounded = max(0.0, min(1.0, value))
+    filled = round(bounded * width)
+    return "#" * filled + "." * (width - filled)
+
+
+def _build_kpi_table(summary: dict[str, Any]) -> str:
+    rows = [
+        ["样本断言通过率", _format_rate(summary["sample_pass_rate"]), _bar(summary["sample_pass_rate"]), "所有样本必须通过；低于 100% 应阻断回归。"],
+        ["HTTP 回放完成率", _format_rate(summary["completion_rate"]), _bar(summary["completion_rate"]), "用于区分评测失败和服务调用失败。"],
+        ["预期来源命中率", _format_rate(summary["expected_source_hit_rate"]), _bar(summary["expected_source_hit_rate"]), "知识命中样本的 citation 应指向目标 fixture。"],
+        ["答案关键词命中率", _format_rate(summary["answer_keyword_hit_rate"]), _bar(summary["answer_keyword_hit_rate"]), "答案需满足样本定义的最小语义约束。"],
+        ["引用出现率", _format_rate(summary["citation_presence_rate"]), _bar(summary["citation_presence_rate"]), "当前 minimal 中应为知识命中样本占比，而不是 100%。"],
+    ]
+    return _render_console_table(["KPI", "value", "bar", "evidence"], rows)
+
+
+def _build_count_comparison_table(summary: dict[str, Any]) -> str:
+    total = summary["total_samples"]
+    successful = summary["successful_calls"]
+    rows = [
+        ["样本通过", str(summary["passed_samples"]), str(total), _bar(summary["sample_pass_rate"]), "passed_samples / total_samples"],
+        ["样本失败", str(summary["failed_samples"]), str(total), _bar(summary["failed_samples"] / total if total else 0.0), "failed_samples / total_samples"],
+        ["接口成功", str(successful), str(total), _bar(summary["completion_rate"]), "successful_calls / total_samples"],
+        ["接口错误", str(summary["errored_calls"]), str(total), _bar(summary["errored_calls"] / total if total else 0.0), "errored_calls / total_samples"],
+        ["使用知识", str(summary["samples_with_knowledge"]), str(successful), _bar(summary["knowledge_hit_rate"]), "knowledge_used=true / successful_calls"],
+        ["携带引用", str(summary["samples_with_citations"]), str(successful), _bar(summary["citation_presence_rate"]), "citations 非空 / successful_calls"],
+    ]
+    return _render_console_table(["dimension", "count", "base", "bar", "formula"], rows)
+
+
+def _build_sample_evidence_table(results: list[dict[str, Any]]) -> str:
+    rows: list[list[str]] = []
+    for item in results:
+        expected = item.get("target", {})
+        observed = item.get("observed", {})
+        metrics = item.get("metrics", {})
+        if item["status"] != "ok":
+            rows.append([
+                item["sample_id"],
+                "error",
+                str(expected.get("knowledge_used")),
+                "-",
+                "-",
+                "-",
+                _answer_preview("; ".join(item.get("failure_reasons", [])), limit=80),
+            ])
+            continue
+        rows.append([
+            item["sample_id"],
+            _yes_no(bool(item.get("passed"))),
+            str(expected.get("knowledge_used")),
+            str(observed.get("knowledge_used")),
+            str(observed.get("citation_count")),
+            _yes_no(bool(metrics.get("fallback_like"))),
+            _answer_preview(str(observed.get("answer_preview", "")), limit=96),
+        ])
+    return _render_console_table(
+        ["sample_id", "pass", "expected_knowledge", "actual_knowledge", "citations", "fallback_like", "answer_evidence"],
+        rows,
+    )
+
+
+def _build_assertion_matrix(results: list[dict[str, Any]]) -> str:
+    rows: list[list[str]] = []
+    for item in results:
+        assertions = item.get("assertions", [])
+        if not assertions:
+            rows.append([item["sample_id"], "-", "-", "-", _answer_preview("; ".join(item.get("failure_reasons", [])), limit=80)])
+            continue
+        for assertion in assertions:
+            rows.append([
+                item["sample_id"],
+                assertion["name"],
+                str(assertion["expected"]),
+                _answer_preview(str(assertion["actual"]), limit=80),
+                _yes_no(bool(assertion["passed"])),
+            ])
+    return _render_console_table(["sample_id", "assertion", "expected", "actual", "pass"], rows)
+
+
+def _build_no_hit_boundary_table(results: list[dict[str, Any]]) -> str:
+    no_hit = next((item for item in results if item["sample_id"] == "no_hit_fallback"), None)
+    if no_hit is None:
+        return "_no_hit_fallback sample not found_"
+    observed = no_hit.get("observed", {})
+    metrics = no_hit.get("metrics", {})
+    rows = [
+        ["knowledge_used", "false", str(observed.get("knowledge_used")), _yes_no(observed.get("knowledge_used") is False), "防止 no-hit 被误标为使用知识"],
+        ["citation_count", "0", str(observed.get("citation_count")), _yes_no(observed.get("citation_count") == 0), "防止空命中仍返回引用数量"],
+        ["citations", "[]", str(observed.get("citations")), _yes_no(observed.get("citations") == []), "防止伪引用污染溯源结果"],
+        ["visible_marker", "false", str(metrics.get("visible_marker_seen")), _yes_no(metrics.get("visible_marker_seen") is False), "防止正文出现无来源编号"],
+        ["fallback_like", "true", str(metrics.get("fallback_like")), _yes_no(metrics.get("fallback_like") is True), "确认回答语义为无可靠资料"],
+    ]
+    return _render_console_table(["boundary", "expected", "actual", "pass", "why_it_matters"], rows)
 
 
 def _write_markdown_report(*, payload: dict[str, Any], output_path: Path) -> Path:
     report_path = output_path.with_suffix(".md")
+    summary = payload["summary"]
+    results = payload["results"]
     lines = [
         "# Evaluation Harness 回放报告",
         "",
-        "## 这份报告在表达什么",
+        "## Executive Summary",
         "",
-        "这是一份面向通用 `documents` RAG 主链路的轻量回放报告。",
-        "它不是严格的 benchmark，也不是完整自动评分系统；它的作用是用固定样本快速证明当前后端是否具备下面几件事：",
-        "",
-        "- 能否针对常见文档问答问题，检索到预期文档上下文",
-        "- 能否返回 citation 对象，并在答案中展示 `[1]` 这样的可见引用标记",
-        "- 能否在答案里覆盖样本要求的关键词或最小回答约束",
-        "- 当问题和固定文档不匹配时，能否表现出 fallback-like 的回答风格",
-        "",
-        "因此，这份报告更适合当作“可验证演示材料”来看，而不是最终评测体系。",
-        "",
+        f"- run_id: `{payload['run_id']}`",
         f"- executed_at: `{payload['executed_at']}`",
         f"- base_url: `{payload['base_url']}`",
         f"- sample_set: `{payload['sample_set']}`",
+        f"- result: `{summary['passed_samples']}/{summary['total_samples']} samples passed`, `{summary['failed_samples']} failed`",
         "",
-        "## Sample Table：逐条样本怎么看",
+        "本报告用于证明 `generic_assistant + documents` 主链的最小可信回归能力：知识命中样本应返回正确来源，no-hit 样本必须不返回伪引用。",
+        "报告中的 `pass` 来自脚本断言，不依赖 LLM-as-a-judge。",
         "",
-        "表里的每一行都代表 1 条固定样本的真实回放结果。",
+        "## KPI Overview",
         "",
-        "- `sample_id`：样本 ID，用来标识固定问题场景",
-        "- `query`：本条样本实际发送给 `/chat` 的输入问题预览",
-        "- `knowledge`：`/chat` 返回里是否声明 `knowledge_used=true`",
-        "- `citations`：本次回答带回了多少条 citation 对象",
-        "- `source_hit`：返回的 citations 里是否出现了预期来源文档",
-        "- `marker`：答案正文里是否真的出现了 `[1]` 这类可见引用标记",
-        "- `preview`：回答预览，方便人工快速判断回答是否靠谱",
+        _build_kpi_table(summary),
         "",
-        "推荐这样理解单条样本：",
+        "## Count Comparison",
         "",
-        "- 先看 `query`，确认这条样本到底在问什么。",
-        "- 对于知识命中类问题，理想结果是 `knowledge=yes`、`citations>0`、`source_hit=yes`。",
-        "- 如果 `marker=no`，通常表示后端确实返回了 citations，但答案正文没有按预期显式展示引用标记。",
-        "- 对于弱匹配或无意义问题，模型仍可能检索到宽泛上下文，所以要结合 `preview` 一起判断是否已经表现出 fallback 风格。",
+        _build_count_comparison_table(summary),
         "",
-        _build_sample_table(payload["results"]),
+        "## Sample Evidence",
         "",
-        "## Metrics Table：整体指标怎么看",
+        _build_sample_evidence_table(results),
         "",
-        "这些指标都是从上面的样本回放结果里直接汇总出来的轻量指标。",
+        "## no-hit Fallback Boundary",
         "",
-        "- `total_samples`：本次总共回放了多少条样本",
-        "- `successful_calls`：多少条样本完整跑通，没有 HTTP 或运行时错误",
-        "- `errored_calls`：多少条样本因为接口异常或脚本错误没有跑通",
-        "- `samples_with_knowledge`：多少条样本返回了 `knowledge_used=true`",
-        "- `samples_with_citations`：多少条样本返回了 citations",
-        "- `answer_keyword_hits`：多少条样本满足了预设关键词或最小回答约束",
-        "- `expected_source_hits`：多少条样本的 citations 命中了预期来源文档",
-        "- `visible_marker_hits`：多少条样本在答案正文里展示了 `[1]` 这类可见引用标记",
-        "- `fallback_like_hits`：多少条样本在答案文本上看起来像“证据不足 / 没找到信息”的 fallback 回答",
-        "- `completion_rate`：`successful_calls / total_samples`，表示回放链路稳定性",
-        "- `knowledge_hit_rate`：`samples_with_knowledge / successful_calls`，表示知识链路被触发的比例",
-        "- `citation_presence_rate`：`samples_with_citations / successful_calls`，表示回答带引用的比例",
-        "- `answer_keyword_hit_rate`：`answer_keyword_hits / successful_calls`，表示回答满足最小约束的比例",
-        "- `expected_source_hit_rate`：`expected_source_hits / successful_calls`，表示来源命中率",
+        _build_no_hit_boundary_table(results),
         "",
-        "建议按这个顺序看：",
+        "## Assertion Matrix",
         "",
-        "1. 先看 `errored_calls` 和 `completion_rate`，判断回放链路是否稳定。",
-        "2. 再看 `expected_source_hits` 和 `citation_presence_rate`，判断引用溯源是否正常出现。",
-        "3. 再看 `answer_keyword_hits` 和 `preview`，判断答案有没有基本答到点上。",
-        "4. `fallback_like_hits` 只作为定性观察，不应当视为严格正确率。",
+        _build_assertion_matrix(results),
         "",
-        "## 面试讲法",
+        "## Field Guide",
         "",
-        "如果你要把这份表讲给面试官，可以直接用下面这套话术：",
+        _build_metrics_table(summary),
+        "",
+        "## Raw Sample Table",
+        "",
+        _build_sample_table(results),
+        "",
+        "## How To Read",
+        "",
+        "1. 先看 `KPI Overview`，确认样本断言通过率、来源命中率和 no-hit 边界是否正常。",
+        "2. 再看 `no-hit Fallback Boundary`，确认 `knowledge_used=false`、`citations=[]` 和 fallback 语义同时成立。",
+        "3. 如果失败，直接看 `Assertion Matrix` 的 `expected`、`actual` 和 `pass` 列定位异常字段。",
+        "4. `Raw Sample Table` 保留原始逐样本视图，方便和 `latest.json` 交叉核对。",
+        "",
+        "## Demo Narrative",
         "",
         "这套 Evaluation Harness 不是做大而全 benchmark，而是先把通用文档 RAG 的最小可验证闭环固定下来。",
-        "我用了 4 条固定样本去回放真实 `/chat` 链路，每次都会重新上传 fixture、重新入库、重新建 session，然后记录回答、引用和关键指标。",
-        "这样我至少能稳定证明三件事：第一，文档问答能不能命中；第二，引用溯源能不能出来；第三，优化前后我能不能用同一批样本做对比，而不是靠主观感觉说效果变好了。",
-        "如果指标下降，比如 `expected_source_hit_rate` 或 `visible_marker_hits` 下降，我就知道问题是在检索、引用拼装还是答案渲染层，而不是只看最终回答拍脑袋判断。",
-        "",
-        _build_metrics_table(payload["summary"]),
+        "本次回放覆盖 3 条文档命中样本和 1 条 no-hit fallback 边界样本。",
+        "文档命中样本证明引用来源、正文引用标记和答案关键词约束同时成立；no-hit 样本证明系统在没有可靠资料时不会返回伪引用。",
+        "后续如果调整 ReRank、query rewrite、检索阈值或 citation 组装逻辑，只要 no-hit 又返回 citations，`Assertion Matrix` 会直接暴露实际异常值，脚本也会失败退出。",
         "",
     ]
     report_path.write_text("\n".join(lines), encoding="utf-8")
@@ -543,6 +794,9 @@ def run_eval(*, base_url: str, sample_set_name: str, output_path: Path) -> dict[
                     "source_doc": sample.get("source_doc"),
                     "target": sample["expected"],
                     "status": "error",
+                    "passed": False,
+                    "failure_reasons": [str(exc)],
+                    "assertions": [],
                     "error": str(exc),
                 }
             continue
@@ -575,6 +829,9 @@ def run_eval(*, base_url: str, sample_set_name: str, output_path: Path) -> dict[
                 "source_doc": sample.get("source_doc"),
                 "target": sample["expected"],
                 "status": "error",
+                "passed": False,
+                "failure_reasons": [str(exc)],
+                "assertions": [],
                 "error": str(exc),
             }
 
@@ -650,10 +907,14 @@ def main(argv: list[str] | None = None) -> int:
     print("")
     print(
         "Evaluation completed: "
+        f"{summary['passed_samples']}/{summary['total_samples']} samples passed; "
         f"{summary['successful_calls']}/{summary['total_samples']} calls succeeded. "
         f"JSON: {output_path} "
         f"Markdown: {output_path.with_suffix('.md')}"
     )
+    if summary["failed_samples"] > 0:
+        print(f"Evaluation failed: {summary['failed_samples']} sample(s) failed assertions.", file=sys.stderr)
+        return 1
     return 0
 
 
