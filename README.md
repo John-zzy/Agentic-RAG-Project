@@ -1,4 +1,4 @@
-# AI RAG Project
+# AI RAG Project （v1.2)
 
 一个面向多场景智能助手的 RAG 示例项目。仓库当前已经收敛为清晰的三层后端架构：
 
