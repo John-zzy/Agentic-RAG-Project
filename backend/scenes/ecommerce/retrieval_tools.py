@@ -12,13 +12,13 @@ from pydantic import BaseModel, ConfigDict, Field
 from backend.platform.config.settings import AppSettings, settings
 from backend.platform.knowledge.base.text import truncate_snippet
 from backend.platform.knowledge.repositories import VectorStoreFactory
-from backend.platform.rag.core import RetrievalCitation, RetrievalResult, RetrievalTool
-from backend.platform.rag.document_retrieval import (
+from backend.platform.rag.contracts import RetrievalCitation, RetrievalResult, RetrievalTool
+from backend.platform.rag.retrieval.documents import (
     DocumentChunkRetrievalResult,
     DocumentRetrievalService,
 )
 from backend.platform.tools import BaseJsonStore, ToolResult, build_structured_tool
-from backend.platform.retrieval import VectorSearchResult, VectorStoreDocument
+from backend.platform.search_foundation import VectorSearchResult, VectorStoreDocument
 from backend.scenes.ecommerce.knowledge_service import KnowledgeService, create_knowledge_service
 
 logger = logging.getLogger(__name__)

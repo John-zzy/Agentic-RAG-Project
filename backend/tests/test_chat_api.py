@@ -13,9 +13,9 @@ from backend.platform.config.settings import AppSettings
 from backend.platform.knowledge.repositories import VectorStoreFactory
 from backend.platform.memory.base.session_store import SQLiteSessionStore
 from backend.platform.memory.chat.prompt_context import PromptContextBuilder
-from backend.platform.rag.document_retrieval import DocumentChunkRetrievalResult
-from backend.platform.rag.document_retrieval_service import DocumentRetrievalService
-from backend.platform.retrieval import VectorSearchResult, VectorStoreDocument
+from backend.platform.rag.retrieval.documents import DocumentChunkRetrievalResult
+from backend.platform.rag.retrieval.documents.service import DocumentRetrievalService
+from backend.platform.search_foundation import VectorSearchResult, VectorStoreDocument
 from backend.scenes.base import SceneDefinition, SceneFallbackPolicy, SceneRetrievalPolicy
 from backend.scenes.ecommerce.knowledge_service import create_knowledge_service
 from backend.tests.test_support import make_test_runtime_dir

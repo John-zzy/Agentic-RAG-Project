@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 from backend.platform.config.settings import AppSettings, VectorStoreConfig
-from backend.platform.retrieval import VectorSearchResult, VectorStoreDocument
-from backend.platform.rag.document_retrieval import (
+from backend.platform.search_foundation import VectorSearchResult, VectorStoreDocument
+from backend.platform.rag.retrieval.documents import (
     DocumentChunkRetrievalResult,
     DocumentEmbeddingStrategy,
     DocumentHybridRetriever,

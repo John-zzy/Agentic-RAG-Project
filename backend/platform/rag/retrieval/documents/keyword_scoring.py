@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from langchain_community.retrievers import BM25Retriever
 
-from backend.platform.retrieval import LocalHashingEmbedder
+from backend.platform.search_foundation import LocalHashingEmbedder
 
 
 class DocumentKeywordScoreCalculator:

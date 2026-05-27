@@ -7,17 +7,17 @@ from langchain_core.retrievers import BaseRetriever
 from pydantic import ConfigDict, Field
 
 from backend.platform.config.settings import AppSettings, settings
-from backend.platform.rag.document_retrieval_rules import (
+from backend.platform.rag.retrieval.documents.filters import (
     DOCUMENT_MINIMUM_RELEVANCE,
     filter_low_relevance_document_results,
     filter_managed_document_results,
 )
-from backend.platform.rag.core import RecallStrategy
-from backend.platform.rag.document_retrieval_fusion import HybridFusionRanker
-from backend.platform.rag.document_retrieval_keyword import DocumentKeywordRetriever
-from backend.platform.rag.document_retrieval_semantic import DocumentSemanticRetriever
-from backend.platform.rag.document_retrieval_types import DocumentChunkRetrievalResult
-from backend.platform.retrieval import (
+from backend.platform.rag.contracts import RecallStrategy
+from backend.platform.rag.retrieval.documents.fusion import HybridFusionRanker
+from backend.platform.rag.retrieval.documents.keyword import DocumentKeywordRetriever
+from backend.platform.rag.retrieval.documents.semantic import DocumentSemanticRetriever
+from backend.platform.rag.retrieval.documents.types import DocumentChunkRetrievalResult
+from backend.platform.search_foundation import (
     ActiveDocumentChunkSource,
     DocumentChunkVectorRepository,
     VectorSearchResult,

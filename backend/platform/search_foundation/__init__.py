@@ -1,4 +1,4 @@
-from backend.platform.retrieval.foundation import (
+from backend.platform.search_foundation.foundation import (
     ActiveDocumentChunkSource,
     DocumentChunkVectorRepository,
     EmbeddingStrategy,

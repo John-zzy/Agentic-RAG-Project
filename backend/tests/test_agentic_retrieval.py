@@ -4,10 +4,11 @@ import warnings
 
 from backend.application.runtime.service import build_default_scene_registry
 from backend.platform.config.settings import AppSettings
-from backend.platform.rag.document_retrieval_rules import DOCUMENT_MINIMUM_RELEVANCE
-from backend.platform.rag.core import RetrievalContext, SufficiencyDecision
-from backend.platform.retrieval import VectorSearchResult, VectorStoreDocument
-from backend.platform.rag.document_retrieval import DocumentChunkRetrievalResult
+from backend.platform.rag.retrieval.documents.filters import DOCUMENT_MINIMUM_RELEVANCE
+from backend.platform.rag.contracts import RetrievalContext
+from backend.platform.rag.orchestration.decisions import SufficiencyDecision
+from backend.platform.search_foundation import VectorSearchResult, VectorStoreDocument
+from backend.platform.rag.retrieval.documents import DocumentChunkRetrievalResult
 from backend.scenes.ecommerce.definition import create_agentic_knowledge_retriever
 from backend.scenes.ecommerce.retrieval_tools import build_semantic_retrieval_tool
 from backend.scenes.generic_assistant.definition import (

@@ -24,14 +24,16 @@
   - `backend/scenes/ecommerce/definition.py`（可选演示场景，不是平台主线）
   - `backend/scenes/registry.py`（默认 scene 与 business extension 组合装配入口）
 - Agentic Retrieval：
-  - `backend/platform/rag/agentic.py`
-  - `backend/platform/rag/core.py`
-  - `backend/platform/rag/document_retrieval_service.py`
+  - `backend/platform/rag/orchestration/agentic.py`
+  - `backend/platform/rag/orchestration/decisions.py`
+  - `backend/platform/rag/contracts.py`
+  - `backend/platform/rag/pre_retrieval/query_rewrite.py`
+  - `backend/platform/rag/retrieval/documents/service.py`
 - 文档 Hybrid Search：
-  - `backend/platform/rag/document_retrieval_service.py`
-  - `backend/platform/rag/document_retrieval_semantic.py`
-  - `backend/platform/rag/document_retrieval_keyword.py`
-  - `backend/platform/rag/document_retrieval_fusion.py`
+  - `backend/platform/rag/retrieval/documents/service.py`
+  - `backend/platform/rag/retrieval/documents/semantic.py`
+  - `backend/platform/rag/retrieval/documents/keyword.py`
+  - `backend/platform/rag/retrieval/documents/fusion.py`
 - 知识文档写流程：
   - `backend/platform/knowledge/documents/application_service.py`
   - `backend/platform/knowledge/documents/publisher.py`
@@ -65,7 +67,7 @@
 - `platform`
   - 通用底层能力，不感知具体业务场景
   - 包括配置、模型路由、会话记忆、知识处理、RAG 核心、工具协议
-  - `platform/retrieval` 是其子模块，不是独立顶层
+  - `platform/search_foundation` 是其子模块，不是独立顶层
 - `application`
   - 运行时装配与 API 暴露
   - 包括启动、依赖注入、Chat service 组装、FastAPI 路由注册
@@ -83,15 +85,17 @@
 
 ### 改文档检索或 Hybrid Search
 
-- 先看 `backend/platform/rag/document_retrieval_service.py`
-- 语义召回看 `backend/platform/rag/document_retrieval_semantic.py`
-- 关键词召回看 `backend/platform/rag/document_retrieval_keyword.py`
-- 融合排序看 `backend/platform/rag/document_retrieval_fusion.py`
+- 先看 `backend/platform/rag/retrieval/documents/service.py`
+- 语义召回看 `backend/platform/rag/retrieval/documents/semantic.py`
+- 关键词召回看 `backend/platform/rag/retrieval/documents/keyword.py`
+- 融合排序看 `backend/platform/rag/retrieval/documents/fusion.py`
 
 ### 改 Agentic Retrieval 决策
 
-- 先看 `backend/platform/rag/agentic.py`
-- 协议类型在 `backend/platform/rag/core.py`
+- 先看 `backend/platform/rag/orchestration/agentic.py`
+- 决策类型在 `backend/platform/rag/orchestration/decisions.py`
+- 共享检索协议在 `backend/platform/rag/contracts.py`
+- 查询改写协议在 `backend/platform/rag/pre_retrieval/query_rewrite.py`
 - scene 级策略在 `backend/scenes/*/definition.py`
 
 ### 改知识文档入库、重处理、发布
@@ -120,11 +124,12 @@
 - 优先遵守 `platform / application / scenes` 的分层边界。
 - 不要把运行时装配逻辑塞进 `platform` 或 `__init__.py`。
 - `__init__.py` 保持轻量，避免引入循环依赖。
-- `platform.retrieval` 只放共享类型、默认算法和基础读侧契约，不要引入 `platform.knowledge` 或 `platform.rag` 依赖。
+- `platform.search_foundation` 只放共享类型、默认算法和基础读侧契约，不要引入 `platform.knowledge` 或 `platform.rag` 依赖。
 
 ### RAG 与 Knowledge 边界
 
-- 文档召回、关键词召回、Hybrid Search、rerank 这类读侧检索算法统一进 `platform.rag`。
+- 文档召回、关键词召回、Hybrid Search 统一进 `platform.rag.retrieval.documents`，rerank 边界统一进 `platform.rag.post_retrieval`。
+- Agentic RAG 是 `platform.rag.orchestration` 下的编排层，不是与 Modular RAG 并列竞争的架构。
 - `platform.knowledge` 只承接知识管理、底层存储和仓储访问，不要新增面向 scene/chat 的文档召回业务 API。
 - 文档检索统一通过 `DocumentRetrievalService` 进入，不要在 scene 里重造文档召回入口。
 - 如果后续为 `products/reviews` 增加关键词召回或 Hybrid Search，继续放在 `platform.rag`。

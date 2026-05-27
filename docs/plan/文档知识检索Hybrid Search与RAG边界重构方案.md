@@ -253,7 +253,7 @@ provider 层要求：
 
 截至 2026-05-20，仓库已继续完成“中立检索底座解耦”：
 
-- 新增 `backend/platform/retrieval/` 作为 `knowledge` 与 `rag` 共享的唯一中立底座。
+- 新增 `backend/platform/search_foundation/` 作为 `knowledge` 与 `rag` 共享的唯一中立底座。
 - 共享 `VectorStoreDocument`、`VectorSearchResult`、`VectorStoreHealth`、默认 hashing embedder / tokenizer 与读侧 repository 契约已迁入该模块。
 - `platform.rag` 不再直接 import `platform.knowledge.base.*`。
 - `platform.knowledge` 现在只负责知识管理、provider 实现和 repository 工厂输出。

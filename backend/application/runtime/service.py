@@ -21,8 +21,8 @@ from backend.platform.knowledge.sources import (
     DEFAULT_MOUNTED_KNOWLEDGE_SOURCES,
     normalize_mounted_knowledge_sources,
 )
-from backend.platform.rag.agentic import AgenticRetrievalOutcome
-from backend.platform.rag.document_retrieval import DocumentRetrievalService
+from backend.platform.rag.orchestration.agentic import AgenticRetrievalOutcome
+from backend.platform.rag.retrieval.documents import DocumentRetrievalService
 from backend.scenes.base import SceneDefinition, SceneRetrievalPolicy
 from backend.platform.knowledge.base.text import truncate_snippet
 from backend.platform.memory.base.chat_history import SQLiteChatMessageHistory

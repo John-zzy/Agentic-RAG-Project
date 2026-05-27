@@ -9,22 +9,23 @@ from langchain_core.documents import Document
 from langchain_core.retrievers import BaseRetriever
 from pydantic import ConfigDict, Field
 
-from backend.platform.rag.core import (
-    QueryRewrite,
-    QueryRewriter,
+from backend.platform.rag.contracts import (
     RetrievalContext,
-    RetrievalDecisionLogEntry,
     RetrievalPlan,
     RetrievalResult,
     RetrievalTool,
+)
+from backend.platform.rag.orchestration.decisions import (
+    RetrievalDecisionLogEntry,
     SufficiencyDecision,
     SufficiencyJudge,
 )
-from backend.platform.rag.rerank import (
+from backend.platform.rag.post_retrieval.rerank import (
     IdentityRetrievalReranker,
     RetrievalReranker,
     disabled_rerank_trace,
 )
+from backend.platform.rag.pre_retrieval.query_rewrite import QueryRewrite, QueryRewriter
 
 logger = logging.getLogger(__name__)
 

@@ -6,7 +6,7 @@ from pydantic import BaseModel
 
 from backend.platform.config.settings import AppSettings, settings
 from backend.platform.knowledge.repositories import VectorStoreFactory
-from backend.platform.retrieval import (
+from backend.platform.search_foundation import (
     SemanticDocumentStoreRepository,
     VectorSearchResult,
     VectorStoreDocument,

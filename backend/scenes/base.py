@@ -7,7 +7,7 @@ from langchain_core.retrievers import BaseRetriever
 from langchain_core.tools import BaseTool
 
 from backend.platform.models.base.router import TaskComplexity
-from backend.platform.rag.core import RecallStrategy
+from backend.platform.rag.contracts import RecallStrategy
 
 
 @dataclass(frozen=True)

@@ -28,7 +28,7 @@ from backend.platform.knowledge.documents import (
     validate_namespace,
     validate_source_path,
 )
-from backend.platform.retrieval import VectorStoreDocument, VectorStoreHealth
+from backend.platform.search_foundation import VectorStoreDocument, VectorStoreHealth
 
 
 @dataclass(frozen=True)

@@ -196,7 +196,7 @@ flowchart TD
 
     RT --> CORE
     RT --> EKS
-    DOCS --> RETR["platform.retrieval repositories"]
+    DOCS --> RETR["platform.search_foundation repositories"]
     EKS --> RETR
 
     CORE --> TOOL["selected RetrievalTool.retrieve"]
@@ -231,7 +231,7 @@ flowchart TD
 #### documents 召回
 
 - `knowledge_document_search` 最终调用 `DocumentRetrievalService`
-- `DocumentRetrievalService` 再向 `platform.retrieval` 提供的 repository 查向量与文本源
+- `DocumentRetrievalService` 再向 `platform.search_foundation` 提供的 repository 查向量与文本源
 - 通过 semantic + keyword + fusion 形成统一文档召回结果
 
 #### ecommerce 召回

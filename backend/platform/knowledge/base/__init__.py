@@ -7,7 +7,7 @@ from backend.platform.knowledge.base.store import (
     VectorStoreFactory,
 )
 from backend.platform.knowledge.base.text import MAX_SNIPPET_LENGTH, truncate_snippet
-from backend.platform.retrieval import (
+from backend.platform.search_foundation import (
     ActiveDocumentChunkSource,
     DocumentChunkVectorRepository,
     EmbeddingStrategy,

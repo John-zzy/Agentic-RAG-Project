@@ -113,7 +113,7 @@
 - 会话存储与聊天上下文
 - 通用知识文档处理
 - RAG 检索核心协议与实现
-- `platform/retrieval` 作为 `knowledge` 与 `rag` 共享的中立检索底座
+- `platform/search_foundation` 作为 `knowledge` 与 `rag` 共享的中立检索底座
 
 当前关键边界：
 
@@ -152,7 +152,7 @@
 │  │  ├─ memory/                  # 会话存储与聊天上下文
 │  │  ├─ models/                  # 模型抽象与 LLM 客户端
 │  │  ├─ rag/                     # RAG 核心协议与检索实现
-│  │  ├─ retrieval/               # knowledge / rag 共享的中立检索底座
+│  │  ├─ search_foundation/        # knowledge / rag 共享的中立搜索底座
 │  │  └─ tools/                   # 通用工具协议
 │  ├─ scenes/
 │  │  ├─ generic_assistant/       # 通用助手场景

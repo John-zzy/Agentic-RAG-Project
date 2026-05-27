@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from backend.platform.config.settings import AppSettings, settings
-from backend.platform.rag.document_retrieval import DocumentRetrievalService
+from backend.platform.rag.retrieval.documents import DocumentRetrievalService
 from backend.scenes.base import SceneDefinition
 from backend.scenes.ecommerce.definition import (
     build_ecommerce_business_extension,

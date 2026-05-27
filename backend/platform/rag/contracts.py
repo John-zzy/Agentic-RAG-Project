@@ -6,7 +6,6 @@ from typing import Any, Literal
 from langchain_core.callbacks.manager import CallbackManagerForRetrieverRun
 from langchain_core.documents import Document
 from langchain_core.retrievers import BaseRetriever
-from langchain_core.runnables import RunnableConfig, RunnableSerializable
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -123,26 +122,6 @@ class RetrievalPlan(BaseModel):
         )
 
 
-class SufficiencyDecision(BaseModel):
-    """描述当前证据是否足够，以及不足时下一步应该采取的动作。"""
-
-    is_sufficient: bool
-    reason: str
-    next_action: RetrievalNextAction
-    confidence: float | None = None
-    suggested_tool: str | None = None
-    follow_up_question: str | None = None
-    metadata: dict[str, Any] = Field(default_factory=dict)
-
-
-class QueryRewrite(BaseModel):
-    """描述查询改写输出，供后续轮次继续检索使用。"""
-
-    query: str
-    reason: str
-    metadata: dict[str, Any] = Field(default_factory=dict)
-
-
 class RetrievalContext(BaseModel):
     """描述 Agentic Retrieval 当前状态，作为 LangChain runnable 的统一输入。"""
 
@@ -151,23 +130,6 @@ class RetrievalContext(BaseModel):
     documents: list[Document] = Field(default_factory=list)
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
-
-
-class RetrievalDecisionLogEntry(BaseModel):
-
-    round_index: int
-    tool_name: str
-    query: str
-    rewritten_query: str | None = None
-    result_count: int = 0
-    result_success: bool
-    result_confidence: float | None = None
-    decision: RetrievalNextAction
-    is_sufficient: bool
-    reason: str
-    suggested_tool: str | None = None
-    follow_up_question: str | None = None
-    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class RetrievalTool(BaseRetriever, ABC):
@@ -204,36 +166,4 @@ class RetrievalTool(BaseRetriever, ABC):
         rerank_top_n: int | None = None,
     ) -> RetrievalResult:
         """执行具体检索逻辑，并返回标准化检索结果。"""
-        raise NotImplementedError
-
-
-class SufficiencyJudge(RunnableSerializable[RetrievalContext, SufficiencyDecision], ABC):
-    """定义证据充分性判断契约，兼容 LangChain Runnable 调用约定。"""
-
-    model_config = ConfigDict(arbitrary_types_allowed=True)
-
-    @abstractmethod
-    def invoke(
-        self,
-        input: RetrievalContext,
-        config: RunnableConfig | None = None,
-        **kwargs: Any,
-    ) -> SufficiencyDecision:
-        """根据当前计划与累计结果判断是否继续检索。"""
-        raise NotImplementedError
-
-
-class QueryRewriter(RunnableSerializable[RetrievalContext, QueryRewrite], ABC):
-    """定义查询改写契约，兼容 LangChain Runnable 调用约定。"""
-
-    model_config = ConfigDict(arbitrary_types_allowed=True)
-
-    @abstractmethod
-    def invoke(
-        self,
-        input: RetrievalContext,
-        config: RunnableConfig | None = None,
-        **kwargs: Any,
-    ) -> QueryRewrite:
-        """根据当前状态生成下一轮检索查询。"""
         raise NotImplementedError

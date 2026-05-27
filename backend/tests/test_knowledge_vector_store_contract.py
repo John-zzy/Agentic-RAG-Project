@@ -6,7 +6,7 @@ import pytest
 
 from backend.platform.config.settings import AppSettings, VectorStoreConfig
 from backend.platform.knowledge.base.store import ChromaVectorStore, ElasticsearchVectorStore
-from backend.platform.retrieval import VectorStoreDocument
+from backend.platform.search_foundation import VectorStoreDocument
 from backend.tests.test_support import DATA_DIR, make_test_runtime_dir
 
 

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from backend.platform.retrieval import VectorSearchResult
+from backend.platform.search_foundation import VectorSearchResult
 
 
 DOCUMENT_MINIMUM_RELEVANCE = 0.8

@@ -5,7 +5,7 @@ from typing import Protocol
 
 from langchain_core.documents import Document
 
-from backend.platform.rag.core import RetrievalCitation, RetrievalResult
+from backend.platform.rag.contracts import RetrievalCitation, RetrievalResult
 
 
 @dataclass(frozen=True)

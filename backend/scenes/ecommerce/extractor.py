@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from backend.platform.retrieval import VectorStoreDocument
+from backend.platform.search_foundation import VectorStoreDocument
 
 
 def build_product_document(product: dict[str, Any]) -> VectorStoreDocument:

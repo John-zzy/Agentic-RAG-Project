@@ -8,7 +8,7 @@ from backend.platform.knowledge.documents.models import DocumentStatus, Knowledg
 from backend.platform.knowledge.documents.schemas import DocumentRecord
 from backend.platform.knowledge.documents.store_support import KnowledgeDocumentRepositoryGateway
 from backend.platform.knowledge.processing import process_document_records
-from backend.platform.retrieval import VectorStoreDocument
+from backend.platform.search_foundation import VectorStoreDocument
 
 
 class KnowledgeDocumentPublisher:

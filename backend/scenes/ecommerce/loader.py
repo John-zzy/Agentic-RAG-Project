@@ -8,7 +8,7 @@ from pydantic import BaseModel
 
 from backend.platform.config.settings import AppSettings, settings
 from backend.platform.knowledge.repositories import VectorStoreFactory
-from backend.platform.retrieval import SemanticDocumentStoreRepository
+from backend.platform.search_foundation import SemanticDocumentStoreRepository
 from backend.scenes.ecommerce.extractor import build_order_document, build_product_document, build_review_document
 
 

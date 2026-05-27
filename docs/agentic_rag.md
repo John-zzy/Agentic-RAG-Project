@@ -289,8 +289,10 @@ knowledge_document_search
 
 ### Agentic RAG 编排核心
 
-- `backend/platform/rag/core.py`
-- `backend/platform/rag/agentic.py`
+- `backend/platform/rag/contracts.py`
+- `backend/platform/rag/pre_retrieval/query_rewrite.py`
+- `backend/platform/rag/orchestration/decisions.py`
+- `backend/platform/rag/orchestration/agentic.py`
 
 重点关注：
 

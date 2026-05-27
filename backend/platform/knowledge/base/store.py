@@ -8,7 +8,7 @@ import chromadb
 from chromadb.api.models.Collection import Collection
 
 from backend.platform.config.settings import AppSettings, VectorNamespaceConfig, settings
-from backend.platform.retrieval import (
+from backend.platform.search_foundation import (
     ActiveDocumentChunkSource,
     DocumentChunkVectorRepository,
     EmbeddingStrategy,

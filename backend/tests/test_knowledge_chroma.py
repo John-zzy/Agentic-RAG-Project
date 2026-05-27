@@ -9,7 +9,7 @@ from backend.platform.knowledge.base.store import (
     KnowledgeRetriever,
     VectorStoreFactory,
 )
-from backend.platform.retrieval import (
+from backend.platform.search_foundation import (
     SemanticDocumentStoreRepository,
     SemanticVectorQueryRepository,
     VectorStoreDocument,

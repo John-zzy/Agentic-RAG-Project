@@ -5,7 +5,7 @@ from typing import Any
 from backend.platform.config.settings import AppSettings
 from backend.platform.knowledge.documents.models import KnowledgeDocumentStoreError
 from backend.platform.knowledge.repositories import KnowledgeDocumentRepository
-from backend.platform.retrieval import VectorStoreDocument
+from backend.platform.search_foundation import VectorStoreDocument
 
 
 class KnowledgeDocumentRepositoryGateway:

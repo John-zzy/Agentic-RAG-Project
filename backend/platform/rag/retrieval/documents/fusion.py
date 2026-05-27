@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from backend.platform.rag.document_retrieval_types import (
+from backend.platform.rag.retrieval.documents.types import (
     DocumentChunkRetrievalResult,
     merge_matched_by,
 )

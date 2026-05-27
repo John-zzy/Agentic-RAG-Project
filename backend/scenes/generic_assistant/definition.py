@@ -12,22 +12,20 @@ from pydantic import BaseModel, ConfigDict, Field
 from backend.platform.config.settings import AppSettings, settings
 from backend.platform.knowledge.base.text import truncate_snippet
 from backend.platform.knowledge.repositories import VectorStoreFactory
-from backend.platform.rag.agentic import AgenticRetriever
-from backend.platform.rag.core import (
-    QueryRewrite,
-    QueryRewriter,
+from backend.platform.rag.orchestration.agentic import AgenticRetriever
+from backend.platform.rag.contracts import (
     RetrievalCitation,
     RetrievalContext,
     RetrievalResult,
     RetrievalTool,
-    SufficiencyDecision,
-    SufficiencyJudge,
 )
-from backend.platform.rag.document_retrieval import (
+from backend.platform.rag.orchestration.decisions import SufficiencyDecision, SufficiencyJudge
+from backend.platform.rag.pre_retrieval.query_rewrite import QueryRewrite, QueryRewriter
+from backend.platform.rag.retrieval.documents import (
     DocumentChunkRetrievalResult,
     DocumentRetrievalService,
 )
-from backend.platform.rag.document_retrieval_rules import DOCUMENT_MINIMUM_RELEVANCE
+from backend.platform.rag.retrieval.documents.filters import DOCUMENT_MINIMUM_RELEVANCE
 from backend.platform.tools import ToolResult, build_structured_tool
 from backend.scenes.base import (
     SceneBootstrapResult,

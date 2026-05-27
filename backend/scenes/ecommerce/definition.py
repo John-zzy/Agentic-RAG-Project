@@ -8,15 +8,16 @@ from langchain_core.runnables import RunnableConfig
 
 from backend.platform.config.settings import AppSettings, settings
 from backend.platform.knowledge.repositories import VectorStoreFactory
-from backend.platform.rag.document_retrieval import DocumentRetrievalService
-from backend.platform.rag.document_retrieval_rules import DOCUMENT_MINIMUM_RELEVANCE
+from backend.platform.rag.retrieval.documents import DocumentRetrievalService
+from backend.platform.rag.retrieval.documents.filters import DOCUMENT_MINIMUM_RELEVANCE
 from backend.scenes.base import (
     SceneBootstrapResult,
     SceneDefinition,
     SceneFallbackPolicy,
     SceneRetrievalPolicy,
 )
-from backend.platform.rag.core import RetrievalContext, SufficiencyDecision
+from backend.platform.rag.contracts import RetrievalContext
+from backend.platform.rag.orchestration.decisions import SufficiencyDecision
 from backend.platform.models.base.router import TaskComplexity
 from backend.scenes.ecommerce.commerce_tools import build_commerce_tools
 from backend.scenes.ecommerce.knowledge_service import KnowledgeService, create_knowledge_service
