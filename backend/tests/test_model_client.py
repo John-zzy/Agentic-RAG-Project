@@ -79,6 +79,38 @@ def test_get_chat_model_returns_base_chat_model(monkeypatch: pytest.MonkeyPatch)
     assert isinstance(model, BaseChatModel)
 
 
+def test_dashscope_qwen3_chat_model_disables_thinking(monkeypatch: pytest.MonkeyPatch) -> None:
+    observed_kwargs: dict[str, Any] = {}
+
+    def _factory(**kwargs: Any) -> BaseChatModel:
+        observed_kwargs.update(kwargs)
+        return _FakeChatModel()
+
+    client = ModelClient(chat_model_factory=_factory)
+    monkeypatch.setattr(
+        "backend.platform.models.llm.client.get_model_for_task",
+        lambda complexity: type(
+            "RoutedModelStub",
+            (),
+            {
+                "complexity": complexity,
+                "provider": "dashscope",
+                "api_key": "test-key",
+                "model_name": "qwen3.6-plus",
+                "api_base": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+                "timeout_seconds": 30,
+                "temperature": 0.1,
+                "max_tokens": 128,
+                "supports_streaming": True,
+            },
+        )(),
+    )
+
+    client.get_chat_model("simple")
+
+    assert observed_kwargs["extra_body"] == {"enable_thinking": False}
+
+
 def test_get_runnable_without_prompt_returns_chat_model(monkeypatch: pytest.MonkeyPatch) -> None:
     client = _build_client()
     monkeypatch.setattr(

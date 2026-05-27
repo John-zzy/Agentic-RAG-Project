@@ -1,6 +1,7 @@
 import json
 
 from backend.platform.config.settings import AppSettings, VectorStoreConfig
+from backend.platform.config.settings import BASE_DIR, resolve_backend_runtime_path
 from backend.platform.knowledge.base.store import (
     ActiveDocumentChunkSource,
     ChromaVectorStore,
@@ -44,6 +45,15 @@ def build_dynamic_test_settings(tmp_path) -> AppSettings:
             },
             chroma={"persist_directory": tmp_path / ".chroma"},
         ),
+    )
+
+
+def test_chroma_relative_runtime_path_resolves_under_backend_dir() -> None:
+    assert resolve_backend_runtime_path("data/.chroma", BASE_DIR / "data" / ".chroma") == (
+        BASE_DIR / "data" / ".chroma"
+    )
+    assert resolve_backend_runtime_path("backend/data/.chroma", BASE_DIR / "data" / ".chroma") == (
+        BASE_DIR / "data" / ".chroma"
     )
 
 

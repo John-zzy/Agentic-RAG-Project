@@ -101,6 +101,20 @@ def parse_env_json(key: str) -> dict[str, object] | None:
     return json.loads(value)
 
 
+def resolve_backend_runtime_path(value: str | Path | None, default: Path) -> Path:
+    """解析运行时路径；相对路径默认以 backend 目录为基准。"""
+    if value is None or not str(value).strip():
+        return default
+
+    path = Path(value).expanduser()
+    if path.is_absolute():
+        return path
+
+    if path.parts and path.parts[0] == BASE_DIR.name:
+        return BASE_DIR.parent / path
+    return BASE_DIR / path
+
+
 def load_vector_store_config() -> dict[str, object]:
     """汇总向量库相关配置（provider、命名空间、后端参数）。"""
     chroma_directory = get_env_value("AI_RAG_VECTOR_STORE__CHROMA__PERSIST_DIRECTORY")
@@ -131,7 +145,7 @@ def load_vector_store_config() -> dict[str, object]:
             "index_name": get_env_value("AI_RAG_VECTOR_STORE__CHUNKS__INDEX_NAME") or "chunks",
         },
         "chroma": {
-            "persist_directory": Path(chroma_directory) if chroma_directory else CHROMA_DIR,
+            "persist_directory": resolve_backend_runtime_path(chroma_directory, CHROMA_DIR),
         },
         "elasticsearch": {
             "url": get_env_value("AI_RAG_VECTOR_STORE__ELASTICSEARCH__URL") or "http://localhost:9200",

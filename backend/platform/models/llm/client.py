@@ -26,17 +26,30 @@ class ModelClient:
             raise ValueError(f"Missing API key for model complexity: {routed_model.complexity}")
 
         chat_model_cls = self._resolve_chat_model_factory()
-        chat_model = chat_model_cls(
-            model=routed_model.model_name,
-            api_key=routed_model.api_key,
-            base_url=routed_model.api_base,
-            timeout=routed_model.timeout_seconds,
-            temperature=routed_model.temperature,
-            max_tokens=routed_model.max_tokens,
-        )
+        model_kwargs: dict[str, Any] = {
+            "model": routed_model.model_name,
+            "api_key": routed_model.api_key,
+            "base_url": routed_model.api_base,
+            "timeout": routed_model.timeout_seconds,
+            "temperature": routed_model.temperature,
+            "max_tokens": routed_model.max_tokens,
+        }
+        extra_body = self._build_provider_extra_body(routed_model)
+        if extra_body:
+            model_kwargs["extra_body"] = extra_body
+
+        chat_model = chat_model_cls(**model_kwargs)
         if not isinstance(chat_model, BaseChatModel):
             raise TypeError("Configured chat model factory must return a LangChain BaseChatModel instance")
         return chat_model
+
+    def _build_provider_extra_body(self, routed_model: RoutedModel) -> dict[str, Any]:
+        """为 OpenAI-compatible provider 补充供应商特定参数。"""
+        provider = str(getattr(routed_model, "provider", "")).strip().lower()
+        model_name = routed_model.model_name.strip().lower()
+        if provider == "dashscope" and model_name.startswith("qwen3"):
+            return {"enable_thinking": False}
+        return {}
 
     def build_chat_model_for_complexity(self, complexity: TaskComplexity) -> BaseChatModel:
         """按任务复杂度路由并返回 LangChain 聊天模型。"""
