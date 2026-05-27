@@ -95,7 +95,17 @@
 - generic scene 默认暴露 `knowledge_document_search`
 - 只有 scene 已注册业务扩展且当前会话挂载了对应 knowledge source 时，扩展工具才会进入候选集合
 
-`retrieval_policy` 是 runtime 与检索实现之间的配置边界。当前 runtime 会把 `top_k`、`min_relevance_score` 传给支持对应参数的 `retrieve_with_trace` / `search` 路径；不支持这些参数的 LangChain `BaseRetriever.invoke` 兼容路径保持原样。
+`retrieval_policy` 是 runtime 与检索实现之间的配置边界。当前 runtime 会把 `top_k`、`min_relevance_score`、`recall_strategy`、`rerank_enabled`、`rerank_top_n` 传给支持对应参数的 `retrieve_with_trace` / `search` 路径；不支持这些参数的 LangChain `BaseRetriever.invoke` 兼容路径保持原样。
+
+文档检索会实际执行当前 scene 的 `recall_strategy`：
+
+- `hybrid`：语义召回 + 关键词召回 + 融合排序，再做相关性过滤
+- `semantic`：只使用语义召回结果，按 vector score 做相关性过滤
+- `keyword`：只使用关键词召回结果，按 keyword score 做相关性过滤
+
+`no_hit_strategy` 只控制无有效证据时的兜底文案选择，不会放宽 citation 可信边界。无论是 `ask_user` 还是 `fallback_answer`，只要没有可用证据，`/chat` 都必须返回 `knowledge_used=false` 和 `citations=[]`，并且不会调用 evidence-backed answer chain。
+
+ReRank 通过平台级 `RetrievalReranker` 协议接入。默认 `rerank_enabled=false` 时不改变任何排序、citation 顺序或 no-hit 行为；启用但未接入真实 provider 时使用 identity reranker，保留原排序，并在配置 `rerank_top_n` 时对 records、documents 和 citations 做一致截断。SSE `tool.rounds[].rerank` 与 Eval policy evidence 会标明 identity trace，避免把它误认为真实模型 rerank。
 
 ## 5. 首轮为什么默认先查文档
 
@@ -207,7 +217,7 @@ knowledge_document_search
 
 多轮检索过程中，`AgenticRetriever` 会聚合这些结果并做去重。
 
-`/chat stream=true` 的 `tool` 事件会额外带上当前 scene retrieval policy 的安全摘要，只包含策略配置字段，用于 SSE 与 Evaluation Harness 观测，不暴露 prompt、密钥或原始业务数据。
+`/chat stream=true` 的 `tool` 事件会额外带上当前 scene retrieval policy 的安全摘要和每轮 rerank trace，只包含策略配置、工具名、计数与决策字段，用于 SSE 与 Evaluation Harness 观测，不暴露 prompt、密钥或原始业务数据。
 
 `ChatService` 随后会把聚合后的 `documents` 统一映射成 API 层 `Citation` 结构，当前字段包括：
 

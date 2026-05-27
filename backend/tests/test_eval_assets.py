@@ -4,7 +4,12 @@ import json
 from pathlib import Path
 import re
 
-from backend.evals.run_http_eval import _build_assertions, _parse_sse_events
+from backend.evals.run_http_eval import (
+    _build_assertions,
+    _extract_policy_evidence,
+    _parse_sse_events,
+    build_comparison_payload,
+)
 
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
@@ -113,6 +118,63 @@ def test_sse_parser_extracts_event_types_and_json_data() -> None:
     assert events[2]["data"]["citations"] == []
 
 
+def test_eval_extracts_safe_policy_evidence_from_sse_tool_event() -> None:
+    events = [
+        {
+            "event": "tool",
+            "data": {
+                "mode": "agentic",
+                "retrieval_policy": {
+                    "top_k": 5,
+                    "min_relevance_score": 0.8,
+                    "recall_strategy": "hybrid",
+                    "no_hit_strategy": "ask_user",
+                    "rerank_enabled": False,
+                    "rerank_top_n": None,
+                },
+                "candidate_tools": ["knowledge_document_search"],
+                "documents": 1,
+                "exit_reason": "sufficient",
+                "success": True,
+                "rounds": [
+                    {
+                        "round_index": 1,
+                        "tool_name": "knowledge_document_search",
+                        "query": "private query should not be copied",
+                        "reason": "private reason should not be copied",
+                        "decision": "finish",
+                        "is_sufficient": True,
+                        "result_count": 1,
+                        "document_count": 1,
+                        "success": True,
+                    }
+                ],
+                "citations": [{"snippet": "raw private source content"}],
+            },
+        }
+    ]
+
+    evidence = _extract_policy_evidence(events)
+
+    assert evidence is not None
+    assert evidence["retrieval_policy"]["recall_strategy"] == "hybrid"
+    assert evidence["candidate_tools"] == ["knowledge_document_search"]
+    assert evidence["rounds"] == [
+        {
+            "round_index": 1,
+            "tool_name": "knowledge_document_search",
+            "decision": "finish",
+            "is_sufficient": True,
+            "result_count": 1,
+            "document_count": 1,
+            "success": True,
+            "rerank": None,
+        }
+    ]
+    assert "private query" not in json.dumps(evidence, ensure_ascii=False)
+    assert "raw private source content" not in json.dumps(evidence, ensure_ascii=False)
+
+
 def test_no_hit_assertions_fail_when_pseudo_citations_are_returned() -> None:
     expected = {
         "knowledge_used": False,
@@ -140,6 +202,97 @@ def test_no_hit_assertions_fail_when_pseudo_citations_are_returned() -> None:
     assert failures["knowledge_used"]["actual"] is True
     assert failures["max_citations"]["actual"] == 1
     assert failures["citations_empty"]["actual"] == [{"source_name": "eval-harness-quickstart.md"}]
+
+
+def test_eval_comparison_reports_policy_and_no_hit_regression() -> None:
+    baseline = {
+        "run_id": "baseline",
+        "sample_set": "minimal",
+        "results": [
+            {
+                "sample_id": "no_hit_fallback",
+                "status": "ok",
+                "passed": True,
+                "observed": {
+                    "knowledge_used": False,
+                    "citation_count": 0,
+                    "citations": [],
+                },
+                "stream": {
+                    "passed": True,
+                    "event_types": ["start", "history", "tool", "chunk", "done"],
+                    "observed": {"knowledge_used": False, "citation_count": 0},
+                    "policy_evidence": {
+                        "retrieval_policy": {
+                            "recall_strategy": "hybrid",
+                            "rerank_enabled": False,
+                        }
+                    },
+                },
+            }
+        ],
+    }
+    candidate = {
+        "run_id": "candidate",
+        "sample_set": "minimal",
+        "results": [
+            {
+                "sample_id": "no_hit_fallback",
+                "status": "ok",
+                "passed": False,
+                "observed": {
+                    "knowledge_used": True,
+                    "citation_count": 1,
+                    "citations": [{"source_name": "pseudo.md"}],
+                },
+                "stream": {
+                    "passed": False,
+                    "event_types": ["start", "history", "tool", "done"],
+                    "observed": {"knowledge_used": True, "citation_count": 1},
+                    "policy_evidence": {
+                        "retrieval_policy": {
+                            "recall_strategy": "keyword",
+                            "rerank_enabled": True,
+                        }
+                    },
+                },
+            }
+        ],
+    }
+
+    comparison = build_comparison_payload(
+        baseline_payload=baseline,
+        candidate_payload=candidate,
+    )
+    sample = comparison["samples"][0]
+
+    assert comparison["summary"]["changed_samples"] == 1
+    assert sample["sample_id"] == "no_hit_fallback"
+    assert "knowledge_used" in sample["differences"]
+    assert "citation_count" in sample["differences"]
+    assert "no_hit_citations_empty" in sample["differences"]
+    assert "policy_evidence" in sample["differences"]
+    assert sample["compared"]["no_hit_citations_empty"]["baseline"] is True
+    assert sample["compared"]["no_hit_citations_empty"]["candidate"] is False
+
+
+def test_eval_comparison_reports_missing_samples_by_sample_id() -> None:
+    comparison = build_comparison_payload(
+        baseline_payload={
+            "run_id": "baseline",
+            "results": [{"sample_id": "baseline_only", "passed": True}],
+        },
+        candidate_payload={
+            "run_id": "candidate",
+            "results": [{"sample_id": "candidate_only", "passed": True}],
+        },
+    )
+    statuses = {item["sample_id"]: item["status"] for item in comparison["samples"]}
+
+    assert statuses == {
+        "baseline_only": "missing_candidate",
+        "candidate_only": "missing_baseline",
+    }
 
 
 def test_eval_fixtures_remain_generic_document_assets() -> None:

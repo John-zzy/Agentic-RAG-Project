@@ -81,12 +81,14 @@ class GenericKnowledgeDocumentRetriever(BaseRetriever):
         query: str,
         top_k: int | None = None,
         min_relevance_score: float | None = None,
+        recall_strategy: str = "hybrid",
     ) -> list[Document]:
         """仅在已上传文档知识中检索证据。"""
         return self.document_retrieval_service.search(
             query=query,
             top_k=top_k or self.default_top_k,
             minimum_relevance=min_relevance_score,
+            recall_strategy=recall_strategy,
         )
 
 
@@ -107,6 +109,7 @@ class GenericKnowledgeDocumentSearchTool(RetrievalTool):
         run_manager: Any | None = None,
         top_k: int | None = None,
         min_relevance_score: float | None = None,
+        recall_strategy: str = "hybrid",
         rerank_enabled: bool = False,
         rerank_top_n: int | None = None,
     ) -> RetrievalResult:
@@ -116,6 +119,7 @@ class GenericKnowledgeDocumentSearchTool(RetrievalTool):
             query=query,
             top_k=top_k or self.default_top_k,
             minimum_relevance=min_relevance_score,
+            recall_strategy=recall_strategy,
         )
         records = [_build_document_record(result) for result in retrieval_results]
         citations = [
@@ -425,6 +429,7 @@ def build_generic_knowledge_document_tool(
             query=query,
             top_k=top_k,
             minimum_relevance=retrieval_policy.min_relevance_score,
+            recall_strategy=retrieval_policy.recall_strategy,
         )
         records = [_build_document_record(result) for result in retrieval_results]
         return ToolResult.ok(

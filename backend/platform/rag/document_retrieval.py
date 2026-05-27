@@ -10,6 +10,7 @@ from backend.platform.rag.document_retrieval_service import (
     DocumentRetrievalService,
 )
 from backend.platform.rag.document_retrieval_types import DocumentChunkRetrievalResult
+from backend.platform.rag.core import RecallStrategy
 
 
 __all__ = [
@@ -21,4 +22,5 @@ __all__ = [
     "DocumentRetrievalService",
     "DocumentSemanticRetriever",
     "HybridFusionRanker",
+    "RecallStrategy",
 ]

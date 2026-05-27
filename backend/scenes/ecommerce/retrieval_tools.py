@@ -166,11 +166,12 @@ class SemanticRetrievalTool(RetrievalTool):
         run_manager: Any | None = None,
         top_k: int | None = None,
         min_relevance_score: float | None = None,
+        recall_strategy: str = "hybrid",
         rerank_enabled: bool = False,
         rerank_top_n: int | None = None,
     ) -> RetrievalResult:
         """从指定知识库执行语义检索并返回标准化结果。"""
-        del run_manager, rerank_top_n
+        del run_manager, recall_strategy, rerank_top_n
         resolved_top_k = top_k or self.default_top_k
         logger.info(
             "Semantic retrieval started: tool=%s, namespace=%s, query=%r, top_k=%s",
@@ -225,6 +226,7 @@ class KnowledgeDocumentSemanticRetrievalTool(RetrievalTool):
         run_manager: Any | None = None,
         top_k: int | None = None,
         min_relevance_score: float | None = None,
+        recall_strategy: str = "hybrid",
         rerank_enabled: bool = False,
         rerank_top_n: int | None = None,
     ) -> RetrievalResult:
@@ -241,6 +243,7 @@ class KnowledgeDocumentSemanticRetrievalTool(RetrievalTool):
             query=query,
             top_k=resolved_top_k,
             minimum_relevance=min_relevance_score,
+            recall_strategy=recall_strategy,
         )
         if rerank_enabled:
             logger.info("Rerank is configured but no rerank service is wired; preserving retrieval order.")
@@ -303,11 +306,12 @@ class InventoryLookupRetrievalTool(RetrievalTool):
         run_manager: Any | None = None,
         top_k: int | None = None,
         min_relevance_score: float | None = None,
+        recall_strategy: str = "hybrid",
         rerank_enabled: bool = False,
         rerank_top_n: int | None = None,
     ) -> RetrievalResult:
         """按 product_id 查询库存信息。"""
-        del run_manager, top_k, min_relevance_score, rerank_enabled, rerank_top_n
+        del run_manager, top_k, min_relevance_score, recall_strategy, rerank_enabled, rerank_top_n
         logger.info("Inventory lookup started: tool=%s, product_id=%r", self.name, query.strip())
         product = self.product_store.find_product(query.strip())
         if product is None:
@@ -364,11 +368,12 @@ class ProductDetailLookupRetrievalTool(RetrievalTool):
         run_manager: Any | None = None,
         top_k: int | None = None,
         min_relevance_score: float | None = None,
+        recall_strategy: str = "hybrid",
         rerank_enabled: bool = False,
         rerank_top_n: int | None = None,
     ) -> RetrievalResult:
         """按 product_id 返回结构化详情。"""
-        del run_manager, top_k, min_relevance_score, rerank_enabled, rerank_top_n
+        del run_manager, top_k, min_relevance_score, recall_strategy, rerank_enabled, rerank_top_n
         logger.info("Product detail lookup started: tool=%s, product_id=%r", self.name, query.strip())
         product = self.product_store.find_product(query.strip())
         if product is None:
@@ -603,7 +608,12 @@ def _build_knowledge_document_tool(
     """构建上传文档检索 StructuredTool，供通用场景与兼容链路复用。"""
 
     def knowledge_document_search(query: str, top_k: int = 5) -> ToolResult:
-        vector_results = document_retrieval_service.retrieve(query=query, top_k=top_k)
+        # 兼容 StructuredTool 入口固定使用 hybrid；/chat 主链路以 scene policy 为准。
+        vector_results = document_retrieval_service.retrieve(
+            query=query,
+            top_k=top_k,
+            recall_strategy="hybrid",
+        )
         retrieval_result = build_retrieval_result(
             tool_name="knowledge_document_search",
             namespace="documents",

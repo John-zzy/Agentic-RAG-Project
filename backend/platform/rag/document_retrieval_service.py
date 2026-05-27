@@ -12,6 +12,7 @@ from backend.platform.rag.document_retrieval_rules import (
     filter_low_relevance_document_results,
     filter_managed_document_results,
 )
+from backend.platform.rag.core import RecallStrategy
 from backend.platform.rag.document_retrieval_fusion import HybridFusionRanker
 from backend.platform.rag.document_retrieval_keyword import DocumentKeywordRetriever
 from backend.platform.rag.document_retrieval_semantic import DocumentSemanticRetriever
@@ -48,12 +49,14 @@ class DocumentHybridRetriever(BaseRetriever):
         top_k: int | None = None,
         namespace: str | None = None,
         minimum_relevance: float | None = None,
+        recall_strategy: RecallStrategy = "hybrid",
     ) -> list[Document]:
         return self.retrieval_service.search(
             query=query,
             top_k=top_k or self.default_top_k,
             namespace=namespace or self.namespace,
             minimum_relevance=minimum_relevance,
+            recall_strategy=recall_strategy,
         )
 
 
@@ -92,13 +95,13 @@ class DocumentRetrievalService:
         top_k: int = 5,
         namespace: str | None = None,
         minimum_relevance: float | None = None,
+        recall_strategy: RecallStrategy = "hybrid",
     ) -> list[DocumentChunkRetrievalResult]:
-        vector_results = self.semantic_retriever.retrieve(query=query, top_k=top_k, namespace=namespace)
-        keyword_results = self.keyword_retriever.retrieve(query=query, top_k=top_k, namespace=namespace)
-        results = self.fusion_ranker.rank(
-            vector_results=vector_results,
-            keyword_results=keyword_results,
+        results = self._retrieve_by_strategy(
+            query=query,
             top_k=top_k,
+            namespace=namespace,
+            recall_strategy=recall_strategy,
         )
         filtered_results = filter_low_relevance_document_results(
             [VectorSearchResult(document=result.document, score=result.score) for result in results],
@@ -117,6 +120,7 @@ class DocumentRetrievalService:
         top_k: int = 5,
         namespace: str | None = None,
         minimum_relevance: float | None = None,
+        recall_strategy: RecallStrategy = "hybrid",
     ) -> list[Document]:
         return [
             self._to_document(result)
@@ -125,6 +129,7 @@ class DocumentRetrievalService:
                 top_k=top_k,
                 namespace=namespace,
                 minimum_relevance=minimum_relevance,
+                recall_strategy=recall_strategy,
             )
         ]
 
@@ -150,6 +155,75 @@ class DocumentRetrievalService:
         )
         allowed_ids = {result.document.id for result in filtered}
         return [result for result in results if result.document.id in allowed_ids]
+
+    def _retrieve_by_strategy(
+        self,
+        *,
+        query: str,
+        top_k: int,
+        namespace: str | None,
+        recall_strategy: RecallStrategy,
+    ) -> list[DocumentChunkRetrievalResult]:
+        # 召回策略只决定候选来源，相关性过滤和托管文档过滤仍走统一出口。
+        if recall_strategy == "semantic":
+            return self._semantic_results(query=query, top_k=top_k, namespace=namespace)
+        if recall_strategy == "keyword":
+            return self._keyword_results(query=query, top_k=top_k, namespace=namespace)
+        if recall_strategy == "hybrid":
+            vector_results = self.semantic_retriever.retrieve(
+                query=query,
+                top_k=top_k,
+                namespace=namespace,
+            )
+            keyword_results = self.keyword_retriever.retrieve(
+                query=query,
+                top_k=top_k,
+                namespace=namespace,
+            )
+            return self.fusion_ranker.rank(
+                vector_results=vector_results,
+                keyword_results=keyword_results,
+                top_k=top_k,
+            )
+        raise ValueError(f"Unsupported document recall_strategy: {recall_strategy!r}")
+
+    def _semantic_results(
+        self,
+        *,
+        query: str,
+        top_k: int,
+        namespace: str | None,
+    ) -> list[DocumentChunkRetrievalResult]:
+        results = self.semantic_retriever.retrieve(query=query, top_k=top_k, namespace=namespace)
+        return [
+            result.model_copy(
+                update={
+                    "score": result.vector_score,
+                    "vector_rank": rank,
+                    "matched_by": result.matched_by or ["vector"],
+                }
+            )
+            for rank, result in enumerate(results, start=1)
+        ]
+
+    def _keyword_results(
+        self,
+        *,
+        query: str,
+        top_k: int,
+        namespace: str | None,
+    ) -> list[DocumentChunkRetrievalResult]:
+        results = self.keyword_retriever.retrieve(query=query, top_k=top_k, namespace=namespace)
+        return [
+            result.model_copy(
+                update={
+                    "score": result.keyword_score,
+                    "keyword_rank": rank,
+                    "matched_by": result.matched_by or ["keyword"],
+                }
+            )
+            for rank, result in enumerate(results, start=1)
+        ]
 
     def _to_document(self, result: DocumentChunkRetrievalResult) -> Document:
         metadata = {

@@ -61,8 +61,8 @@
 
 ### 近期：把现有 RAG 主链做稳
 
-- [ ] 检索效果：补充 ReRank，并通过 scene retrieval policy 配置召回阈值、`top_k`、召回策略和 no-hit 策略
-- [ ] 评测体系：扩展 Evaluation Harness 样本集，覆盖多轮问答、低相关误召回、知识源切换和 SSE 输出稳定性
+- [x] 检索效果：scene retrieval policy 已控制 `top_k`、相关性阈值、文档 `recall_strategy`、no-hit 策略，并提供默认关闭的 identity ReRank 边界
+- [x] 评测体系：Evaluation Harness 已覆盖 no-hit / SSE 基础回放，并支持 baseline/candidate artifact 对比
 - [ ] 可观测性：在日志、接口或调试页中暴露每轮 retrieval trace、query rewrite、tool decision 和 citation score
 - [ ] 知识管理：支持批量重建索引、失败重试、文档版本对比、索引状态诊断和上传文件清理
 - [ ] 前端调试页：完善 SSE 流式展示、引用展开、检索过程查看和错误态展示，保持轻量定位能力
@@ -256,8 +256,9 @@ backend\.venv\Scripts\python.exe backend\run.py
 
 文档召回当前行为：
 
-- `DocumentRetrievalService` 会先执行语义召回与关键词召回，再通过融合排序生成候选结果
-- `/chat` 请求体不再传 `top_k`；运行时会从当前 scene retrieval policy 读取 `top_k`、最低相关性阈值、召回策略和 ReRank 接入位，并在 SSE `tool` 事件中输出安全策略摘要
+- `DocumentRetrievalService` 按当前 scene `recall_strategy` 选择召回路径：`hybrid` 执行语义 + 关键词 + 融合，`semantic` 只使用向量分数，`keyword` 只使用关键词分数
+- `/chat` 请求体不再传 `top_k`；运行时会从当前 scene retrieval policy 读取 `top_k`、最低相关性阈值、召回策略、no-hit 策略和 ReRank 接入位，并在 SSE `tool` 事件中输出安全策略摘要
+- `rerank_enabled=false` 是默认值，不改变现有排序；启用后先走 identity ReRank 边界，保留原排序并可用 `rerank_top_n` 一致截断 records、documents 和 citations
 - 低于当前相关性阈值的文档片段会被丢弃，不会进入 prompt、citations 或最终回答
 - 如果过滤后没有可用文档，`/chat` 会返回 scene fallback，`knowledge_used=false` 且 `citations=[]`
 - 对 `你好` 这类没有明确文档查询意图的问题，`generic_assistant` 不再进入“相关文档 / FAQ / 手册”式查询改写，避免误召回不相关知识
@@ -322,11 +323,20 @@ Evaluation Harness 基础版：
 backend\.venv\Scripts\python.exe backend\evals\run_http_eval.py --base-url http://127.0.0.1:8000 --sample-set minimal --output backend\data\evals\latest.json
 ```
 
+baseline / candidate 对比：
+
+```powershell
+backend\.venv\Scripts\python.exe backend\evals\run_http_eval.py --base-url http://127.0.0.1:8000 --sample-set minimal --output backend\data\evals\baseline.json
+# 调整 scene retrieval policy、阈值或 ReRank 实现后再跑 candidate
+backend\.venv\Scripts\python.exe backend\evals\run_http_eval.py --base-url http://127.0.0.1:8000 --sample-set minimal --output backend\data\evals\candidate.json --compare-to backend\data\evals\baseline.json
+```
+
 说明：
 
 - 该命令要求本地后端已启动，并且 `backend\.env` 中已配置真实模型 API Key
 - 评测结果会写入 `backend\data\evals\latest.json`
 - 同时会生成可直接展示的表格报告 `backend\data\evals\latest.md`
+- 传入 `--compare-to` 时会额外生成 `*.compare.json` 和 `*.compare.md`，按 `sample_id` 对比 pass 状态、`knowledge_used`、citation 数量、citation 来源、no-hit 空 citation 语义、SSE 结果和 policy evidence
 - `minimal` 样本集固定包含 `no_hit_fallback`，用于回归验证 no-hit 时必须返回 `knowledge_used=false` 且 `citations=[]`
 - `minimal` 样本集会对关键样本执行 `stream=true` SSE 回放，报告中的 `SSE Stream Evidence` 用于确认 `done` 事件、`chunk` 事件和最终引用语义
 - 报告中的 `pass` 表示样本断言结果；如果 no-hit 又返回伪引用，`failure` 和 `latest.json` 中的 `assertions` 会暴露实际 `knowledge_used` 与 `citations`

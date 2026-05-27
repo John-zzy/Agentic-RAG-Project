@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Any, Callable, Literal
 
 from langchain_core.retrievers import BaseRetriever
 from langchain_core.tools import BaseTool
 
 from backend.platform.models.base.router import TaskComplexity
+from backend.platform.rag.core import RecallStrategy
 
 
 @dataclass(frozen=True)
@@ -21,6 +22,16 @@ class SceneFallbackPolicy:
     """描述场景在未命中知识时的兜底回复策略。"""
 
     no_hit_message: str
+    neutral_no_hit_message: str | None = None
+
+    def message_for_strategy(self, strategy: str) -> str:
+        """按 no-hit 策略返回不携带引用的兜底文案。"""
+        if strategy == "fallback_answer" and self.neutral_no_hit_message:
+            return self.neutral_no_hit_message
+        return self.no_hit_message
+
+
+NoHitStrategy = Literal["ask_user", "fallback_answer"]
 
 
 @dataclass(frozen=True)
@@ -32,13 +43,29 @@ class SceneRetrievalPolicy:
     # 最低相关性阈值；None 表示沿用检索服务默认判断。
     min_relevance_score: float | None = None
     # 召回策略名称，例如 semantic、keyword、hybrid。
-    recall_strategy: str = "hybrid"
+    recall_strategy: RecallStrategy = "hybrid"
     # 无命中后的处理策略，例如 ask_user、fallback_answer。
-    no_hit_strategy: str = "ask_user"
+    no_hit_strategy: NoHitStrategy = "ask_user"
     # 是否启用 ReRank；当前仅作为 scene 级接入位。
     rerank_enabled: bool = False
     # ReRank 后保留条数；None 表示不覆盖召回条数。
     rerank_top_n: int | None = None
+
+    def __post_init__(self) -> None:
+        allowed_recall_strategies = ("semantic", "keyword", "hybrid")
+        if self.recall_strategy not in allowed_recall_strategies:
+            raise ValueError(
+                "Unsupported scene retrieval recall_strategy "
+                f"{self.recall_strategy!r}; expected one of {allowed_recall_strategies}."
+            )
+        allowed_no_hit_strategies = ("ask_user", "fallback_answer")
+        if self.no_hit_strategy not in allowed_no_hit_strategies:
+            raise ValueError(
+                "Unsupported scene retrieval no_hit_strategy "
+                f"{self.no_hit_strategy!r}; expected one of {allowed_no_hit_strategies}."
+            )
+        if self.rerank_top_n is not None and self.rerank_top_n <= 0:
+            raise ValueError("Scene retrieval rerank_top_n must be None or a positive integer.")
 
 
 @dataclass(frozen=True)

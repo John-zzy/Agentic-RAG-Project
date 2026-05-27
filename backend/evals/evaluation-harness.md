@@ -40,6 +40,14 @@
 backend\.venv\Scripts\python.exe backend\evals\run_http_eval.py --base-url http://127.0.0.1:8000 --sample-set minimal --output backend\data\evals\latest.json
 ```
 
+baseline / candidate 对比命令：
+
+```powershell
+backend\.venv\Scripts\python.exe backend\evals\run_http_eval.py --base-url http://127.0.0.1:8000 --sample-set minimal --output backend\data\evals\baseline.json
+# 调整 scene retrieval policy、阈值或 ReRank 实现后再跑 candidate
+backend\.venv\Scripts\python.exe backend\evals\run_http_eval.py --base-url http://127.0.0.1:8000 --sample-set minimal --output backend\data\evals\candidate.json --compare-to backend\data\evals\baseline.json
+```
+
 脚本流程固定为：
 
 1. 检查 `/health`
@@ -52,6 +60,7 @@ backend\.venv\Scripts\python.exe backend\evals\run_http_eval.py --base-url http:
 8. 对配置了 `eval_stream=true` 的样本调 `/chat stream=true` 回放 SSE
 9. 输出 `latest.json` 和 `latest.md`
 10. 如果任一样本断言失败，以非 0 退出码结束
+11. 如果传入 `--compare-to`，在 candidate 输出旁生成 `*.compare.json` 和 `*.compare.md`
 
 ## 样本与文体映射
 
@@ -120,10 +129,53 @@ JSON 字段目前固定包含：
 - `stream.event_types`
 - `stream.chunk_count`
 - `stream.chunk_text_preview`
+- `stream.policy_evidence`
 
 流式断言以 SSE `done` 事件作为最终权威结果；`chunk` 只用于验证流式链路确实有增量输出。
 
 SSE `tool` 事件还会暴露当前 scene retrieval policy 的安全摘要，用于对比不同策略下的检索行为。该摘要只包含 `top_k`、`min_relevance_score`、`recall_strategy`、`no_hit_strategy`、`rerank_enabled`、`rerank_top_n` 等配置字段，不包含 prompt、密钥或原始业务数据。
+
+`stream.policy_evidence` 从 SSE `tool` 事件提取安全字段：
+
+- `mode`
+- `retrieval_policy`
+- `candidate_tools`
+- `documents`
+- `exit_reason`
+- `success`
+- `rounds[].tool_name`
+- `rounds[].decision`
+- `rounds[].result_count`
+- `rounds[].document_count`
+- `rounds[].rerank`
+
+它不会保存 query、prompt、citation snippet 或原始私有文档内容。
+
+## baseline / candidate 对比报告
+
+传入 `--compare-to <baseline.json>` 后，脚本仍会正常生成 candidate 的 `candidate.json` 和 `candidate.md`，并额外生成：
+
+- `candidate.compare.json`
+- `candidate.compare.md`
+
+对比按稳定的 `sample_id` 匹配样本，不依赖列表位置。报告会显式标记：
+
+- baseline 里有、candidate 里没有的 `missing_candidate`
+- candidate 里有、baseline 里没有的 `missing_baseline`
+- 两边都有但关键字段变化的 `changed`
+- 两边关键字段一致的 `same`
+
+样本级对比字段包括：
+
+- pass 状态
+- `knowledge_used`
+- citation 数量
+- citation 来源名称
+- no-hit 场景下 `citations=[]` 是否仍成立
+- stream pass 状态、事件类型、最终 `knowledge_used` 和最终 citation 数量
+- SSE `tool` 事件捕获到的 policy evidence
+
+典型用法是先保存一份 baseline，再调整 `SceneRetrievalPolicy`、相关性阈值或真实 ReRank provider，随后跑 candidate 并使用 `--compare-to`。如果 `no_hit_fallback` 从 `knowledge_used=false/citations=[]` 变成了伪引用，candidate 自身断言会失败，对比报告也会在 `no_hit_citations_empty`、`knowledge_used` 和 `citation_count` 中暴露差异。
 
 ## 当前指标口径
 
@@ -204,6 +256,7 @@ SSE `tool` 事件还会暴露当前 scene retrieval policy 的安全摘要，用
 6. 针对 `no_hit_fallback` 确认 `pass=yes`、`knowledge=no`、`citations=0`
 7. 查看 `SSE Stream Evidence`，确认关键样本 `stream_pass=yes` 且事件包含 `done`
 8. 再打开 `backend/data/evals/latest.json` 查看单条样本明细、`assertions`、`observed.knowledge_used`、`observed.citations` 和 `stream.observed`
+9. 调整 scene 策略或 ReRank 实现后，用 `--compare-to backend\data\evals\baseline.json` 生成 candidate 对比报告，展示策略变更是否影响 normal-hit、no-hit 和 SSE 关键语义
 
 ## JD 证明点
 

@@ -15,6 +15,7 @@ from backend.scenes.generic_assistant.definition import (
     GenericAssistantBusinessExtension,
     build_generic_assistant_scene_definition,
 )
+from backend.scenes.base import SceneRetrievalPolicy
 from backend.scenes.ecommerce.definition import ECOMMERCE_RETRIEVAL_POLICY, build_ecommerce_scene_definition
 from backend.tests.test_support import DATA_DIR, make_test_runtime_dir
 
@@ -112,9 +113,16 @@ class FakeDocumentRetrievalService:
         top_k: int = 5,
         namespace: str | None = None,
         minimum_relevance: float | None = None,
+        recall_strategy: str = "hybrid",
     ) -> list[DocumentChunkRetrievalResult]:
         del query, namespace
-        self.calls.append({"top_k": top_k, "minimum_relevance": minimum_relevance})
+        self.calls.append(
+            {
+                "top_k": top_k,
+                "minimum_relevance": minimum_relevance,
+                "recall_strategy": recall_strategy,
+            }
+        )
         results = self._knowledge_service._documents
         if minimum_relevance is not None:
             results = [
@@ -311,6 +319,24 @@ def test_scene_definitions_declare_explicit_retrieval_policies() -> None:
         assert policy.rerank_top_n is None
 
 
+def test_scene_retrieval_policy_validates_allowed_values_and_rerank_top_n() -> None:
+    assert SceneRetrievalPolicy(recall_strategy="semantic").recall_strategy == "semantic"
+    assert SceneRetrievalPolicy(recall_strategy="keyword").recall_strategy == "keyword"
+    assert SceneRetrievalPolicy(no_hit_strategy="fallback_answer").no_hit_strategy == "fallback_answer"
+    assert SceneRetrievalPolicy(rerank_top_n=1).rerank_top_n == 1
+
+
+def test_scene_retrieval_policy_rejects_invalid_values() -> None:
+    import pytest
+
+    with pytest.raises(ValueError, match="recall_strategy"):
+        SceneRetrievalPolicy(recall_strategy="vector")  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="no_hit_strategy"):
+        SceneRetrievalPolicy(no_hit_strategy="guess")  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="rerank_top_n"):
+        SceneRetrievalPolicy(rerank_top_n=0)
+
+
 def test_ecommerce_semantic_tool_filters_low_relevance_results() -> None:
     knowledge_service = FakeKnowledgeService()
     knowledge_service._products = [
@@ -469,6 +495,66 @@ def test_agentic_retriever_stays_on_documents_for_document_question() -> None:
         str(document.metadata.get("namespace")) == "documents"
         for document in outcome.documents
     )
+
+
+def test_agentic_retriever_passes_recall_strategy_to_document_tool() -> None:
+    app_settings, knowledge_service = _build_knowledge_service("agentic-recall-strategy")
+    document_service = FakeDocumentRetrievalService(knowledge_service)
+    definition = build_generic_assistant_scene_definition(
+        app_settings=app_settings,
+        document_retrieval_service=document_service,
+        retrieval_policy=SceneRetrievalPolicy(recall_strategy="keyword"),
+    )
+    retriever = definition.build_retriever()
+
+    outcome = retriever.retrieve_with_trace(
+        "请根据产品手册说明 AeroPhone X 的价格和电池参数",
+        recall_strategy=definition.retrieval_policy.recall_strategy,
+    )
+
+    assert outcome.documents
+    assert document_service.calls[-1]["recall_strategy"] == "keyword"
+
+
+def test_agentic_identity_rerank_truncates_records_documents_and_citations() -> None:
+    app_settings, knowledge_service = _build_knowledge_service("agentic-identity-rerank")
+    definition = build_generic_assistant_scene_definition(
+        app_settings=app_settings,
+        document_retrieval_service=FakeDocumentRetrievalService(knowledge_service),
+    )
+    retriever = definition.build_retriever()
+
+    outcome = retriever.retrieve_with_trace(
+        "请根据产品手册说明 AeroPhone X 的价格和电池参数",
+        rerank_enabled=True,
+        rerank_top_n=1,
+    )
+
+    assert len(outcome.results[0].records) == 1
+    assert len(outcome.results[0].documents) == 1
+    assert len(outcome.results[0].citations) == 1
+    assert outcome.results[0].metadata["rerank"] == {
+        "enabled": True,
+        "provider": "identity",
+        "applied": False,
+        "input_count": 2,
+        "output_count": 1,
+        "top_n": 1,
+    }
+
+
+def test_agentic_rerank_disabled_preserves_result_order() -> None:
+    app_settings, knowledge_service = _build_knowledge_service("agentic-rerank-disabled")
+    definition = build_generic_assistant_scene_definition(
+        app_settings=app_settings,
+        document_retrieval_service=FakeDocumentRetrievalService(knowledge_service),
+    )
+    retriever = definition.build_retriever()
+
+    outcome = retriever.retrieve_with_trace("请根据产品手册说明 AeroPhone X 的价格和电池参数")
+
+    assert [record["citation_id"] for record in outcome.results[0].records] == ["DOC-001", "DOC-002"]
+    assert outcome.results[0].metadata["rerank"]["enabled"] is False
 
 
 def test_generic_docs_sufficient_does_not_handoff_to_mounted_extension() -> None:

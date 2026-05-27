@@ -189,6 +189,7 @@ class RetrievalExecutor:
                             "document_count": len(round_trace.result.documents),
                             "success": round_trace.result.success,
                             "error": round_trace.result.error,
+                            "rerank": round_trace.result.metadata.get("rerank"),
                         }
                         for round_trace in outcome.rounds
                     ],
@@ -283,6 +284,7 @@ class RetrievalExecutor:
         except (TypeError, ValueError):
             return {}
 
+        # 运行时只负责把 scene policy 适配给当前 retriever 支持的参数名。
         accepts_kwargs = any(
             parameter.kind == Parameter.VAR_KEYWORD for parameter in parameters.values()
         )
@@ -290,6 +292,7 @@ class RetrievalExecutor:
             "top_k": policy.top_k,
             "min_relevance_score": policy.min_relevance_score,
             "minimum_relevance": policy.min_relevance_score,
+            "recall_strategy": policy.recall_strategy,
             "rerank_enabled": policy.rerank_enabled,
             "rerank_top_n": policy.rerank_top_n,
         }
@@ -817,7 +820,8 @@ class ChatService:
 
     def _build_fallback_answer(self, prepared: PreparedChatTurn) -> tuple[str, list[Citation]]:
         """构造无命中时的 fallback 回答。"""
-        return self.scene_definition.fallback_policy.no_hit_message, []
+        policy = self.scene_definition.retrieval_policy
+        return self.scene_definition.fallback_policy.message_for_strategy(policy.no_hit_strategy), []
 
     def _finalize_answer_text(
         self,

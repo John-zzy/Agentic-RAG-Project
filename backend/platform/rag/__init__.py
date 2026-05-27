@@ -4,6 +4,7 @@ from backend.platform.rag.agentic import AgenticRetrievalOutcome, AgenticRetriev
 from backend.platform.rag.core import (
     QueryRewrite,
     QueryRewriter,
+    RecallStrategy,
     RetrievalContext,
     RetrievalCitation,
     RetrievalDecisionLogEntry,
@@ -23,6 +24,7 @@ from backend.platform.rag.document_retrieval import (
     DocumentSemanticRetriever,
     HybridFusionRanker,
 )
+from backend.platform.rag.rerank import IdentityRetrievalReranker, RetrievalReranker, RerankTrace
 
 __all__ = [
     "AgenticRetrievalOutcome",
@@ -37,6 +39,7 @@ __all__ = [
     "HybridFusionRanker",
     "QueryRewrite",
     "QueryRewriter",
+    "RecallStrategy",
     "RetrievalContext",
     "RetrievalCitation",
     "RetrievalDecisionLogEntry",
@@ -44,6 +47,9 @@ __all__ = [
     "RetrievalResult",
     "RetrievalRound",
     "RetrievalTool",
+    "IdentityRetrievalReranker",
+    "RetrievalReranker",
+    "RerankTrace",
     "SufficiencyDecision",
     "SufficiencyJudge",
 ]

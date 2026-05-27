@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 RetrievalNextAction = Literal["finish", "rewrite", "switch_tool", "ask_user"]
+RecallStrategy = Literal["semantic", "keyword", "hybrid"]
 
 
 class RetrievalCitation(BaseModel):
@@ -94,6 +95,7 @@ class RetrievalPlan(BaseModel):
     filters: dict[str, Any] = Field(default_factory=dict)
     top_k: int | None = None
     min_relevance_score: float | None = None
+    recall_strategy: RecallStrategy = "hybrid"
     rerank_enabled: bool = False
     rerank_top_n: int | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
@@ -197,6 +199,7 @@ class RetrievalTool(BaseRetriever, ABC):
         run_manager: CallbackManagerForRetrieverRun | None = None,
         top_k: int | None = None,
         min_relevance_score: float | None = None,
+        recall_strategy: RecallStrategy = "hybrid",
         rerank_enabled: bool = False,
         rerank_top_n: int | None = None,
     ) -> RetrievalResult:

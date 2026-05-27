@@ -20,6 +20,11 @@ from backend.platform.rag.core import (
     SufficiencyDecision,
     SufficiencyJudge,
 )
+from backend.platform.rag.rerank import (
+    IdentityRetrievalReranker,
+    RetrievalReranker,
+    disabled_rerank_trace,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +55,7 @@ class AgenticRetriever(BaseRetriever):
     tools: dict[str, RetrievalTool] = Field(default_factory=dict)
     sufficiency_judge: SufficiencyJudge = Field(exclude=True)
     query_rewriter: QueryRewriter | None = Field(default=None, exclude=True)
+    reranker: Any = Field(default_factory=IdentityRetrievalReranker, exclude=True)
     default_tool: str | None = None
     max_rounds: int = Field(default=3, ge=1)
     attach_trace: bool = True
@@ -75,6 +81,7 @@ class AgenticRetriever(BaseRetriever):
         filters: dict[str, Any] | None = None,
         top_k: int | None = None,
         min_relevance_score: float | None = None,
+        recall_strategy: str = "hybrid",
         rerank_enabled: bool = False,
         rerank_top_n: int | None = None,
     ) -> AgenticRetrievalOutcome:
@@ -98,6 +105,7 @@ class AgenticRetriever(BaseRetriever):
             filters=filters or {},
             top_k=top_k,
             min_relevance_score=min_relevance_score,
+            recall_strategy=recall_strategy,  # type: ignore[arg-type]
             rerank_enabled=rerank_enabled,
             rerank_top_n=rerank_top_n,
         )
@@ -116,6 +124,7 @@ class AgenticRetriever(BaseRetriever):
                 current_plan.attempted_tools,
             )
             result = self._run_tool(current_plan, run_manager)
+            result = self._apply_rerank(plan=current_plan, result=result)
             results.append(result)
             documents = self._merge_documents(documents, result.documents)
             logger.info(
@@ -331,11 +340,33 @@ class AgenticRetriever(BaseRetriever):
             retrieve_kwargs["top_k"] = plan.top_k
         if self._supports_tool_argument(tool, "min_relevance_score"):
             retrieve_kwargs["min_relevance_score"] = plan.min_relevance_score
+        if self._supports_tool_argument(tool, "recall_strategy"):
+            retrieve_kwargs["recall_strategy"] = plan.recall_strategy
         if self._supports_tool_argument(tool, "rerank_enabled"):
             retrieve_kwargs["rerank_enabled"] = plan.rerank_enabled
         if self._supports_tool_argument(tool, "rerank_top_n"):
             retrieve_kwargs["rerank_top_n"] = plan.rerank_top_n
         return tool.retrieve(**retrieve_kwargs)
+
+    def _apply_rerank(self, *, plan: RetrievalPlan, result: RetrievalResult) -> RetrievalResult:
+        """在 tool result 后、充分性判断前应用可替换 rerank 边界。"""
+        if not plan.rerank_enabled:
+            # 默认关闭时只补 trace，不改 records/documents/citations 的既有语义。
+            trace = disabled_rerank_trace(result)
+            return result.model_copy(
+                update={
+                    "metadata": {
+                        **result.metadata,
+                        "rerank": trace.to_dict(),
+                    }
+                }
+            )
+        reranked, _trace = self.reranker.rerank(
+            query=plan.active_query,
+            result=result,
+            top_n=plan.rerank_top_n,
+        )
+        return reranked
 
     def _rewrite_query(
         self,

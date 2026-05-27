@@ -114,6 +114,7 @@ def _request_sse_chat(*, base_url: str, json_body: dict[str, Any]) -> dict[str, 
         "event_types": [event["event"] for event in events],
         "chunk_count": sum(1 for event in events if event["event"] == "chunk"),
         "chunk_text_preview": _answer_preview(chunk_text),
+        "policy_evidence": _extract_policy_evidence(events),
         "done": done_events[-1]["data"],
     }
 
@@ -141,6 +142,60 @@ def _parse_sse_events(raw: str) -> list[dict[str, Any]]:
                 raise EvalRuntimeError(f"Invalid SSE JSON payload for event {event_name!r}: {data_text}") from exc
         events.append({"event": event_name, "data": data})
     return events
+
+
+def _extract_policy_evidence(events: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """从 SSE tool 事件提取不含原文片段的检索策略证据。"""
+    tool_events = [
+        event.get("data")
+        for event in events
+        if event.get("event") == "tool" and isinstance(event.get("data"), dict)
+    ]
+    if not tool_events:
+        return None
+    tool_event = tool_events[-1]
+    policy = tool_event.get("retrieval_policy")
+    if not isinstance(policy, dict):
+        policy = {}
+    rounds = tool_event.get("rounds")
+    safe_rounds = []
+    if isinstance(rounds, list):
+        for item in rounds:
+            if not isinstance(item, dict):
+                continue
+            safe_rounds.append(
+                {
+                    "round_index": item.get("round_index"),
+                    "tool_name": item.get("tool_name"),
+                    "decision": item.get("decision"),
+                    "is_sufficient": item.get("is_sufficient"),
+                    "result_count": item.get("result_count"),
+                    "document_count": item.get("document_count"),
+                    "success": item.get("success"),
+                    "rerank": item.get("rerank"),
+                }
+            )
+    return {
+        "mode": tool_event.get("mode"),
+        # 只保留策略证据，不写入 query、reason 或原文片段，避免评估报告泄露上下文。
+        "retrieval_policy": {
+            key: policy.get(key)
+            for key in (
+                "top_k",
+                "min_relevance_score",
+                "recall_strategy",
+                "no_hit_strategy",
+                "rerank_enabled",
+                "rerank_top_n",
+            )
+            if key in policy
+        },
+        "candidate_tools": tool_event.get("candidate_tools", []),
+        "documents": tool_event.get("documents"),
+        "exit_reason": tool_event.get("exit_reason"),
+        "success": tool_event.get("success"),
+        "rounds": safe_rounds,
+    }
 
 
 def _build_multipart_body(
@@ -601,6 +656,7 @@ def _run_stream_sample(
         "event_types": stream_payload["event_types"],
         "chunk_count": stream_payload["chunk_count"],
         "chunk_text_preview": stream_payload["chunk_text_preview"],
+        "policy_evidence": stream_payload.get("policy_evidence"),
     }
 
 
@@ -935,6 +991,228 @@ def _build_stream_evidence_table(results: list[dict[str, Any]]) -> str:
     )
 
 
+def _citation_source_names(item: dict[str, Any]) -> list[str]:
+    observed = item.get("observed", {})
+    citations = observed.get("citations", [])
+    if not isinstance(citations, list):
+        return []
+    return [
+        str(citation.get("source_name"))
+        for citation in citations
+        if isinstance(citation, dict) and citation.get("source_name") is not None
+    ]
+
+
+def _stream_observations(item: dict[str, Any]) -> dict[str, Any] | None:
+    stream = item.get("stream")
+    if not isinstance(stream, dict):
+        return None
+    observed = stream.get("observed", {})
+    return {
+        "passed": stream.get("passed"),
+        "event_types": stream.get("event_types", []),
+        "knowledge_used": observed.get("knowledge_used") if isinstance(observed, dict) else None,
+        "citation_count": observed.get("citation_count") if isinstance(observed, dict) else None,
+    }
+
+
+def _sample_compare_entry(
+    *,
+    sample_id: str,
+    baseline: dict[str, Any] | None,
+    candidate: dict[str, Any] | None,
+) -> dict[str, Any]:
+    if baseline is None or candidate is None:
+        return {
+            "sample_id": sample_id,
+            "status": "missing_baseline" if baseline is None else "missing_candidate",
+            "baseline": None if baseline is None else {"passed": baseline.get("passed")},
+            "candidate": None if candidate is None else {"passed": candidate.get("passed")},
+            "differences": ["missing_baseline" if baseline is None else "missing_candidate"],
+        }
+
+    baseline_observed = baseline.get("observed", {})
+    candidate_observed = candidate.get("observed", {})
+    baseline_citations = baseline_observed.get("citations", []) if isinstance(baseline_observed, dict) else []
+    candidate_citations = candidate_observed.get("citations", []) if isinstance(candidate_observed, dict) else []
+    baseline_stream = _stream_observations(baseline)
+    candidate_stream = _stream_observations(candidate)
+    compared = {
+        "pass": {"baseline": baseline.get("passed"), "candidate": candidate.get("passed")},
+        "knowledge_used": {
+            "baseline": baseline_observed.get("knowledge_used") if isinstance(baseline_observed, dict) else None,
+            "candidate": candidate_observed.get("knowledge_used") if isinstance(candidate_observed, dict) else None,
+        },
+        "citation_count": {
+            "baseline": baseline_observed.get("citation_count") if isinstance(baseline_observed, dict) else None,
+            "candidate": candidate_observed.get("citation_count") if isinstance(candidate_observed, dict) else None,
+        },
+        "citation_sources": {
+            "baseline": _citation_source_names(baseline),
+            "candidate": _citation_source_names(candidate),
+        },
+        "no_hit_citations_empty": {
+            "baseline": baseline_citations == [],
+            "candidate": candidate_citations == [],
+        },
+        "stream": {"baseline": baseline_stream, "candidate": candidate_stream},
+        "policy_evidence": {
+            "baseline": (baseline.get("stream") or {}).get("policy_evidence") if isinstance(baseline.get("stream"), dict) else None,
+            "candidate": (candidate.get("stream") or {}).get("policy_evidence") if isinstance(candidate.get("stream"), dict) else None,
+        },
+    }
+    differences = [
+        key
+        for key, value in compared.items()
+        if isinstance(value, dict) and value.get("baseline") != value.get("candidate")
+    ]
+    return {
+        "sample_id": sample_id,
+        "status": "changed" if differences else "same",
+        "baseline": {
+            "status": baseline.get("status"),
+            "passed": baseline.get("passed"),
+        },
+        "candidate": {
+            "status": candidate.get("status"),
+            "passed": candidate.get("passed"),
+        },
+        "compared": compared,
+        "differences": differences,
+    }
+
+
+def build_comparison_payload(
+    *,
+    baseline_payload: dict[str, Any],
+    candidate_payload: dict[str, Any],
+) -> dict[str, Any]:
+    # 使用 sample_id 对齐基线与候选，避免样本顺序变化造成误判。
+    baseline_by_id = {
+        str(item["sample_id"]): item
+        for item in baseline_payload.get("results", [])
+        if isinstance(item, dict) and item.get("sample_id") is not None
+    }
+    candidate_by_id = {
+        str(item["sample_id"]): item
+        for item in candidate_payload.get("results", [])
+        if isinstance(item, dict) and item.get("sample_id") is not None
+    }
+    sample_ids = sorted(set(baseline_by_id) | set(candidate_by_id))
+    samples = [
+        _sample_compare_entry(
+            sample_id=sample_id,
+            baseline=baseline_by_id.get(sample_id),
+            candidate=candidate_by_id.get(sample_id),
+        )
+        for sample_id in sample_ids
+    ]
+    return {
+        "comparison_id": uuid4().hex,
+        "executed_at": _now_iso(),
+        "baseline_run_id": baseline_payload.get("run_id"),
+        "candidate_run_id": candidate_payload.get("run_id"),
+        "sample_set": candidate_payload.get("sample_set") or baseline_payload.get("sample_set"),
+        "summary": {
+            "total_samples": len(samples),
+            "same_samples": sum(1 for item in samples if item["status"] == "same"),
+            "changed_samples": sum(1 for item in samples if item["status"] == "changed"),
+            "missing_baseline_samples": sum(1 for item in samples if item["status"] == "missing_baseline"),
+            "missing_candidate_samples": sum(1 for item in samples if item["status"] == "missing_candidate"),
+        },
+        "samples": samples,
+    }
+
+
+def _format_policy_evidence(value: Any) -> str:
+    if not isinstance(value, dict):
+        return "-"
+    policy = value.get("retrieval_policy")
+    if not isinstance(policy, dict):
+        return "-"
+    return ", ".join(f"{key}={policy.get(key)!r}" for key in sorted(policy))
+
+
+def _write_comparison_markdown(*, comparison: dict[str, Any], output_path: Path) -> Path:
+    report_path = output_path.with_suffix(".compare.md")
+    rows: list[list[str]] = []
+    for item in comparison["samples"]:
+        compared = item.get("compared", {})
+        rows.append(
+            [
+                item["sample_id"],
+                item["status"],
+                ",".join(item.get("differences", [])) or "-",
+                str(compared.get("knowledge_used", {}).get("baseline")) if compared else "-",
+                str(compared.get("knowledge_used", {}).get("candidate")) if compared else "-",
+                str(compared.get("citation_count", {}).get("baseline")) if compared else "-",
+                str(compared.get("citation_count", {}).get("candidate")) if compared else "-",
+                _format_policy_evidence(compared.get("policy_evidence", {}).get("baseline")) if compared else "-",
+                _format_policy_evidence(compared.get("policy_evidence", {}).get("candidate")) if compared else "-",
+            ]
+        )
+    lines = [
+        "# Evaluation Baseline Comparison",
+        "",
+        f"- comparison_id: `{comparison['comparison_id']}`",
+        f"- baseline_run_id: `{comparison.get('baseline_run_id')}`",
+        f"- candidate_run_id: `{comparison.get('candidate_run_id')}`",
+        f"- sample_set: `{comparison.get('sample_set')}`",
+        "",
+        "## Summary",
+        "",
+        _render_console_table(
+            ["metric", "value"],
+            [[key, str(value)] for key, value in comparison["summary"].items()],
+        ),
+        "",
+        "## Sample Differences",
+        "",
+        _render_console_table(
+            [
+                "sample_id",
+                "status",
+                "differences",
+                "base_knowledge",
+                "cand_knowledge",
+                "base_citations",
+                "cand_citations",
+                "base_policy",
+                "cand_policy",
+            ],
+            rows,
+        ),
+        "",
+        "## Reading Notes",
+        "",
+        "- `no_hit_citations_empty` changing to `false` is a no-hit citation regression.",
+        "- `policy_evidence` is captured only from SSE `tool` events and excludes prompt text and raw source snippets.",
+        "- Compare baseline and candidate runs produced under different scene policy or ReRank code/config to attribute retrieval changes.",
+        "",
+    ]
+    report_path.write_text("\n".join(lines), encoding="utf-8")
+    return report_path
+
+
+def write_comparison_reports(
+    *,
+    baseline_path: Path,
+    candidate_payload: dict[str, Any],
+    output_path: Path,
+) -> dict[str, Any]:
+    baseline_payload = _read_json(baseline_path)
+    comparison = build_comparison_payload(
+        baseline_payload=baseline_payload,
+        candidate_payload=candidate_payload,
+    )
+    compare_json_path = output_path.with_suffix(".compare.json")
+    compare_json_path.write_text(json.dumps(comparison, ensure_ascii=False, indent=2), encoding="utf-8")
+    compare_md_path = _write_comparison_markdown(comparison=comparison, output_path=output_path)
+    comparison["json_path"] = str(compare_json_path)
+    comparison["report_path"] = str(compare_md_path)
+    return comparison
+
+
 def _write_markdown_report(*, payload: dict[str, Any], output_path: Path) -> Path:
     report_path = output_path.with_suffix(".md")
     summary = payload["summary"]
@@ -1006,7 +1284,13 @@ def _write_markdown_report(*, payload: dict[str, Any], output_path: Path) -> Pat
     return report_path
 
 
-def run_eval(*, base_url: str, sample_set_name: str, output_path: Path) -> dict[str, Any]:
+def run_eval(
+    *,
+    base_url: str,
+    sample_set_name: str,
+    output_path: Path,
+    compare_to: Path | None = None,
+) -> dict[str, Any]:
     sample_path = SAMPLES_DIR / f"{sample_set_name}.json"
     if not sample_path.exists():
         raise EvalRuntimeError(f"Sample set not found: {sample_path}")
@@ -1093,6 +1377,12 @@ def run_eval(*, base_url: str, sample_set_name: str, output_path: Path) -> dict[
     output_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     report_path = _write_markdown_report(payload=payload, output_path=output_path)
     payload["report_path"] = str(report_path)
+    if compare_to is not None:
+        payload["comparison"] = write_comparison_reports(
+            baseline_path=compare_to,
+            candidate_payload=payload,
+            output_path=output_path,
+        )
     return payload
 
 
@@ -1105,6 +1395,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         default=str(DEFAULT_OUTPUT),
         help="Path to the JSON output file.",
     )
+    parser.add_argument(
+        "--compare-to",
+        default=None,
+        help="Optional baseline JSON output to compare against the candidate run.",
+    )
     return parser.parse_args(argv)
 
 
@@ -1116,6 +1411,7 @@ def main(argv: list[str] | None = None) -> int:
             base_url=args.base_url.rstrip("/"),
             sample_set_name=args.sample_set,
             output_path=output_path,
+            compare_to=Path(args.compare_to) if args.compare_to else None,
         )
     except EvalRuntimeError as exc:
         error_payload = {
@@ -1156,6 +1452,14 @@ def main(argv: list[str] | None = None) -> int:
         f"JSON: {output_path} "
         f"Markdown: {output_path.with_suffix('.md')}"
     )
+    if payload.get("comparison"):
+        comparison = payload["comparison"]
+        print(
+            "Comparison completed: "
+            f"{comparison['summary']['changed_samples']} changed sample(s). "
+            f"JSON: {comparison['json_path']} "
+            f"Markdown: {comparison['report_path']}"
+        )
     if summary["failed_samples"] > 0:
         print(f"Evaluation failed: {summary['failed_samples']} sample(s) failed assertions.", file=sys.stderr)
         return 1

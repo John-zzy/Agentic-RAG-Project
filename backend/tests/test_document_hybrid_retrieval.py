@@ -215,6 +215,74 @@ def test_document_retrieval_service_uses_call_level_minimum_relevance() -> None:
     assert [result.document.id for result in strict_results] == ["chunk-high"]
 
 
+def test_document_retrieval_service_honors_semantic_recall_strategy() -> None:
+    runtime_dir = make_test_runtime_dir("document-semantic-strategy")
+    app_settings = AppSettings(data_dir=runtime_dir, vector_store=VectorStoreConfig(provider="chroma"))
+    semantic_chunk = _chunk(
+        "semantic-hit",
+        "语义召回内容",
+        document_id="doc-semantic",
+        vector_score=0.91,
+    )
+    keyword_chunk = _chunk(
+        "keyword-hit",
+        "keywordonlytoken",
+        document_id="doc-keyword",
+        vector_score=0.1,
+    )
+    service = DocumentRetrievalService(
+        app_settings=app_settings,
+        vector_repository=FakeDocumentChunkVectorRepository([semantic_chunk]),
+        chunk_source=FakeActiveDocumentChunkSource([keyword_chunk]),
+        minimum_relevance=0.8,
+    )
+
+    results = service.retrieve(query="keywordonlytoken", top_k=2, recall_strategy="semantic")
+
+    assert [result.document.id for result in results] == ["semantic-hit"]
+    assert results[0].score == 0.91
+    assert results[0].matched_by == ["vector"]
+
+
+def test_document_retrieval_service_honors_keyword_recall_strategy() -> None:
+    runtime_dir = make_test_runtime_dir("document-keyword-strategy")
+    app_settings = AppSettings(data_dir=runtime_dir, vector_store=VectorStoreConfig(provider="chroma"))
+    vector_chunk = _chunk("vector-hit", "语义召回内容", document_id="doc-vector", vector_score=0.91)
+    keyword_chunk = _chunk(
+        "keyword-hit",
+        "唯一关键词 keywordonlytoken 出现在这里",
+        document_id="doc-keyword",
+        vector_score=0.1,
+    )
+    service = DocumentRetrievalService(
+        app_settings=app_settings,
+        vector_repository=FakeDocumentChunkVectorRepository([vector_chunk]),
+        chunk_source=FakeActiveDocumentChunkSource([keyword_chunk]),
+        minimum_relevance=0.0,
+    )
+
+    results = service.retrieve(query="keywordonlytoken", top_k=2, recall_strategy="keyword")
+
+    assert results
+    assert results[0].document.id == "keyword-hit"
+    assert results[0].score == results[0].keyword_score
+    assert results[0].matched_by == ["keyword"]
+
+
+def test_document_retrieval_service_recall_strategy_preserves_no_hit_threshold() -> None:
+    runtime_dir = make_test_runtime_dir("document-strategy-no-hit-threshold")
+    app_settings = AppSettings(data_dir=runtime_dir, vector_store=VectorStoreConfig(provider="chroma"))
+    low_chunk = _chunk("low-hit", "低相关语义内容", document_id="doc-low", vector_score=0.4)
+    service = DocumentRetrievalService(
+        app_settings=app_settings,
+        vector_repository=FakeDocumentChunkVectorRepository([low_chunk]),
+        chunk_source=FakeActiveDocumentChunkSource([low_chunk]),
+        minimum_relevance=0.8,
+    )
+
+    assert service.retrieve(query="低相关", top_k=1, recall_strategy="semantic") == []
+
+
 def test_document_hybrid_retriever_delegates_to_service() -> None:
     runtime_dir = make_test_runtime_dir("document-hybrid-retriever")
     app_settings = AppSettings(

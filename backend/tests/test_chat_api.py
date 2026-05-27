@@ -77,9 +77,16 @@ class FakeDocumentRetrievalService:
         top_k: int = 5,
         namespace: str | None = None,
         minimum_relevance: float | None = None,
+        recall_strategy: str = "hybrid",
     ) -> list[DocumentChunkRetrievalResult]:
         del query, namespace
-        self.calls.append({"top_k": top_k, "minimum_relevance": minimum_relevance})
+        self.calls.append(
+            {
+                "top_k": top_k,
+                "minimum_relevance": minimum_relevance,
+                "recall_strategy": recall_strategy,
+            }
+        )
         documents = self._documents
         if minimum_relevance is not None:
             documents = [
@@ -1174,6 +1181,7 @@ def test_chat_service_passes_scene_retrieval_policy_to_agentic_retriever() -> No
             candidate_tools: tuple[str, ...],
             top_k: int | None = None,
             min_relevance_score: float | None = None,
+            recall_strategy: str = "hybrid",
             rerank_enabled: bool = False,
             rerank_top_n: int | None = None,
         ):
@@ -1182,6 +1190,7 @@ def test_chat_service_passes_scene_retrieval_policy_to_agentic_retriever() -> No
                 {
                     "top_k": top_k,
                     "min_relevance_score": min_relevance_score,
+                    "recall_strategy": recall_strategy,
                     "rerank_enabled": rerank_enabled,
                     "rerank_top_n": rerank_top_n,
                 }
@@ -1239,10 +1248,56 @@ def test_chat_service_passes_scene_retrieval_policy_to_agentic_retriever() -> No
         {
             "top_k": 2,
             "min_relevance_score": 0.91,
+            "recall_strategy": "hybrid",
             "rerank_enabled": True,
             "rerank_top_n": 1,
         }
     ]
+
+
+def test_chat_no_hit_strategy_fallback_answer_uses_neutral_message() -> None:
+    class _EmptySearchRetriever:
+        def search(self, **kwargs: Any) -> list[Document]:
+            del kwargs
+            return []
+
+    scene_definition = SceneDefinition(
+        scene="generic_assistant",
+        name="Fallback Answer Scene",
+        description="Track no-hit strategy.",
+        build_retriever=lambda: _EmptySearchRetriever(),  # type: ignore[return-value]
+        build_tools=lambda: (),
+        candidate_retrieval_tools_resolver=lambda _: ("knowledge_document_search",),
+        system_prompt="test",
+        fallback_policy=SceneFallbackPolicy(
+            no_hit_message="ask user fallback",
+            neutral_no_hit_message="neutral no evidence fallback",
+        ),
+        infer_complexity=lambda _: "simple",
+        retrieval_policy=SceneRetrievalPolicy(no_hit_strategy="fallback_answer"),
+    )
+    runtime_dir = make_test_runtime_dir("chat-no-hit-strategy-fallback-answer")
+    sqlite_path = runtime_dir / "chat-sessions.db"
+    service = ChatService(
+        scene_definition=scene_definition,
+        app_settings=AppSettings(
+            data_dir=runtime_dir,
+            session={"sqlite_path": sqlite_path, "window_size": 3},
+        ),
+        session_store=SQLiteSessionStore(sqlite_path=sqlite_path),
+        context_builder=PromptContextBuilder(window_size=3),
+        model=FakeModel(answer="unused"),
+    )
+
+    response = service.chat(type("Payload", (), {
+        "message": "hello",
+        "session_id": None,
+        "stream": False,
+    })())
+
+    assert response.knowledge_used is False
+    assert response.citations == []
+    assert response.answer == "neutral no evidence fallback"
 
 
 def test_chat_scene_policy_min_relevance_preserves_no_hit_fallback() -> None:
