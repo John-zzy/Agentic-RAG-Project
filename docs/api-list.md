@@ -17,7 +17,6 @@
   - Body `message`: 用户输入文本，必填，1-4000 字符。
   - Body `session_id`: 会话 ID，可选；不传时由服务侧按默认逻辑处理。
   - Body `stream`: 是否流式，布尔值；传 `false` 或不传时返回 JSON，传 `true` 时返回 `text/event-stream`。
-  - Body `top_k`: 检索条数上限，可选，1-20。
 - 返回结构：
   - 非流式 `stream=false`：
     - `session_id`: 会话 ID。
@@ -32,7 +31,7 @@
     - 事件类型为 `start`、`history`、`tool`、`chunk`、`done`、`error`，且 `data` 一律为 JSON。
     - `start.data` 包含 `session_id`、`request_id`、`knowledge_used`、`scene`、`agent`。
     - `history.data` 包含 `session_id`、`request_id`、`window_size`、`message_count`、`messages`，用于暴露本轮注入模型前的历史消息窗口；`messages` 每项包含 `type` 与 `content`。
-    - `tool.data` 包含 retrieval 阶段的结构化结果，固定补充 `session_id`、`request_id`、`knowledge_used`、`citations`；当前常见字段还包括 `stage`、`mode`、`candidate_tools`、`documents`、`rounds`。
+    - `tool.data` 包含 retrieval 阶段的结构化结果，固定补充 `session_id`、`request_id`、`knowledge_used`、`citations`；当前常见字段还包括 `stage`、`mode`、`retrieval_policy`、`candidate_tools`、`documents`、`rounds`。
     - `chunk.data` 包含 `delta`，表示最终回答文本增量。
     - `done.data` 与非流式 `ChatResponse` 结构一致，客户端应以 `done.answer` 作为最终权威文本。
     - `error.data` 包含 `code`、`message`、`request_id`。
@@ -40,6 +39,8 @@
 补充说明：
 
 - `stream=true` 只会对“最终回答生成阶段”按 `chunk` 推送文本增量；但在生成回答前，服务端会先发送 `history` 和 `tool` 事件用于暴露可观测上下文。
+- `/chat` 请求体不再接收检索数量参数；检索数量、最低相关性阈值、召回策略和 ReRank 接入位由当前 scene 的 `retrieval_policy` 控制。
+- `tool.data.retrieval_policy` 只包含可观测的策略配置摘要：`top_k`、`min_relevance_score`、`recall_strategy`、`no_hit_strategy`、`rerank_enabled`、`rerank_top_n`。
 - 命中知识时，成功路径事件顺序通常为 `start -> history -> tool -> chunk... -> done`。
 - 无知识命中时，仍返回 SSE 成功态，事件顺序为 `start -> history -> tool -> chunk -> done`，其中 `tool.documents = 0`，`done.knowledge_used = false`。
 - 失败路径事件顺序为 `start -> history -> tool -> error`。

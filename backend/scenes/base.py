@@ -24,6 +24,24 @@ class SceneFallbackPolicy:
 
 
 @dataclass(frozen=True)
+class SceneRetrievalPolicy:
+    """描述场景级检索策略，作为 runtime 与 RAG 能力之间的配置边界。"""
+
+    # 默认召回条数上限。
+    top_k: int = 5
+    # 最低相关性阈值；None 表示沿用检索服务默认判断。
+    min_relevance_score: float | None = None
+    # 召回策略名称，例如 semantic、keyword、hybrid。
+    recall_strategy: str = "hybrid"
+    # 无命中后的处理策略，例如 ask_user、fallback_answer。
+    no_hit_strategy: str = "ask_user"
+    # 是否启用 ReRank；当前仅作为 scene 级接入位。
+    rerank_enabled: bool = False
+    # ReRank 后保留条数；None 表示不覆盖召回条数。
+    rerank_top_n: int | None = None
+
+
+@dataclass(frozen=True)
 class SceneDefinition:
     """描述场景可挂载到 runtime 的最小装配协议。"""
 
@@ -36,6 +54,7 @@ class SceneDefinition:
     system_prompt: str
     fallback_policy: SceneFallbackPolicy
     infer_complexity: Callable[[str], TaskComplexity]
+    retrieval_policy: SceneRetrievalPolicy = field(default_factory=SceneRetrievalPolicy)
     bootstrap: Callable[[], SceneBootstrapResult] | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 

@@ -90,9 +90,12 @@
 候选工具不再由 runtime 维护硬编码映射，而是由当前 `SceneDefinition` 根据 `mounted_knowledge_sources` 解析：
 
 - runtime 只读取 session 的 `mounted_knowledge_sources`
+- runtime 每次检索都会读取当前 scene definition 的 `retrieval_policy`
 - runtime 调用当前 scene definition 的 candidate tool resolver
 - generic scene 默认暴露 `knowledge_document_search`
 - 只有 scene 已注册业务扩展且当前会话挂载了对应 knowledge source 时，扩展工具才会进入候选集合
+
+`retrieval_policy` 是 runtime 与检索实现之间的配置边界。当前 runtime 会把 `top_k`、`min_relevance_score` 传给支持对应参数的 `retrieve_with_trace` / `search` 路径；不支持这些参数的 LangChain `BaseRetriever.invoke` 兼容路径保持原样。
 
 ## 5. 首轮为什么默认先查文档
 
@@ -203,6 +206,8 @@ knowledge_document_search
 - `metadata`：调试和决策相关信息
 
 多轮检索过程中，`AgenticRetriever` 会聚合这些结果并做去重。
+
+`/chat stream=true` 的 `tool` 事件会额外带上当前 scene retrieval policy 的安全摘要，只包含策略配置字段，用于 SSE 与 Evaluation Harness 观测，不暴露 prompt、密钥或原始业务数据。
 
 `ChatService` 随后会把聚合后的 `documents` 统一映射成 API 层 `Citation` 结构，当前字段包括：
 

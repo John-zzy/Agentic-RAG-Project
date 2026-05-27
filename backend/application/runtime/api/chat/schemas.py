@@ -14,7 +14,6 @@ class ChatRequest(BaseModel):
         default=False,
         description="是否请求流式输出；为 true 时返回 SSE，仅最终回答阶段按 chunk 推送。",
     )
-    top_k: int | None = Field(default=None, ge=1, le=20, description="检索条数上限。")
 
 
 class SceneSummary(BaseModel):

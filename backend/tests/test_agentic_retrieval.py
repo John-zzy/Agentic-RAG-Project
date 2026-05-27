@@ -4,16 +4,18 @@ import warnings
 
 from backend.application.runtime.service import build_default_scene_registry
 from backend.platform.config.settings import AppSettings
+from backend.platform.rag.document_retrieval_rules import DOCUMENT_MINIMUM_RELEVANCE
 from backend.platform.rag.core import RetrievalContext, SufficiencyDecision
 from backend.platform.retrieval import VectorSearchResult, VectorStoreDocument
 from backend.platform.rag.document_retrieval import DocumentChunkRetrievalResult
 from backend.scenes.ecommerce.definition import create_agentic_knowledge_retriever
 from backend.scenes.ecommerce.retrieval_tools import build_semantic_retrieval_tool
 from backend.scenes.generic_assistant.definition import (
+    GENERIC_ASSISTANT_RETRIEVAL_POLICY,
     GenericAssistantBusinessExtension,
     build_generic_assistant_scene_definition,
 )
-from backend.scenes.ecommerce.definition import build_ecommerce_scene_definition
+from backend.scenes.ecommerce.definition import ECOMMERCE_RETRIEVAL_POLICY, build_ecommerce_scene_definition
 from backend.tests.test_support import DATA_DIR, make_test_runtime_dir
 
 
@@ -101,6 +103,7 @@ class FakeKnowledgeService:
 class FakeDocumentRetrievalService:
     def __init__(self, knowledge_service: FakeKnowledgeService) -> None:
         self._knowledge_service = knowledge_service
+        self.calls: list[dict[str, object]] = []
 
     def retrieve(
         self,
@@ -108,8 +111,17 @@ class FakeDocumentRetrievalService:
         query: str,
         top_k: int = 5,
         namespace: str | None = None,
+        minimum_relevance: float | None = None,
     ) -> list[DocumentChunkRetrievalResult]:
         del query, namespace
+        self.calls.append({"top_k": top_k, "minimum_relevance": minimum_relevance})
+        results = self._knowledge_service._documents
+        if minimum_relevance is not None:
+            results = [
+                result
+                for result in results
+                if result.score is None or float(result.score) >= minimum_relevance
+            ]
         return [
             DocumentChunkRetrievalResult(
                 document=result.document,
@@ -118,7 +130,7 @@ class FakeDocumentRetrievalService:
                 vector_rank=index,
                 matched_by=["vector"],
             )
-            for index, result in enumerate(self._knowledge_service._documents[:top_k], start=1)
+            for index, result in enumerate(results[:top_k], start=1)
         ]
 
 
@@ -274,6 +286,29 @@ def test_ecommerce_scene_definition_builds_agentic_retriever_and_scene_metadata(
     assert outcome.decision_log[0].tool_name == "knowledge_document_search"
     assert outcome.decision_log[1].tool_name == "product_semantic_search"
     assert outcome.decision_log[2].tool_name == "inventory_lookup"
+
+
+def test_scene_definitions_declare_explicit_retrieval_policies() -> None:
+    app_settings, knowledge_service = _build_knowledge_service("scene-retrieval-policy-defaults")
+    generic_definition = build_generic_assistant_scene_definition(
+        app_settings=app_settings,
+        document_retrieval_service=FakeDocumentRetrievalService(knowledge_service),
+    )
+    ecommerce_definition = build_ecommerce_scene_definition(
+        app_settings=app_settings,
+        knowledge_service=knowledge_service,
+        document_retrieval_service=FakeDocumentRetrievalService(knowledge_service),
+    )
+
+    assert generic_definition.retrieval_policy == GENERIC_ASSISTANT_RETRIEVAL_POLICY
+    assert ecommerce_definition.retrieval_policy == ECOMMERCE_RETRIEVAL_POLICY
+    for policy in (generic_definition.retrieval_policy, ecommerce_definition.retrieval_policy):
+        assert policy.top_k == 5
+        assert policy.min_relevance_score == DOCUMENT_MINIMUM_RELEVANCE
+        assert policy.recall_strategy == "hybrid"
+        assert policy.no_hit_strategy == "ask_user"
+        assert policy.rerank_enabled is False
+        assert policy.rerank_top_n is None
 
 
 def test_ecommerce_scene_definition_resolves_candidate_tools_from_generic_docs_first_chain() -> None:

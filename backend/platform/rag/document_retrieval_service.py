@@ -47,11 +47,13 @@ class DocumentHybridRetriever(BaseRetriever):
         query: str,
         top_k: int | None = None,
         namespace: str | None = None,
+        minimum_relevance: float | None = None,
     ) -> list[Document]:
         return self.retrieval_service.search(
             query=query,
             top_k=top_k or self.default_top_k,
             namespace=namespace or self.namespace,
+            minimum_relevance=minimum_relevance,
         )
 
 
@@ -89,6 +91,7 @@ class DocumentRetrievalService:
         query: str,
         top_k: int = 5,
         namespace: str | None = None,
+        minimum_relevance: float | None = None,
     ) -> list[DocumentChunkRetrievalResult]:
         vector_results = self.semantic_retriever.retrieve(query=query, top_k=top_k, namespace=namespace)
         keyword_results = self.keyword_retriever.retrieve(query=query, top_k=top_k, namespace=namespace)
@@ -99,7 +102,9 @@ class DocumentRetrievalService:
         )
         filtered_results = filter_low_relevance_document_results(
             [VectorSearchResult(document=result.document, score=result.score) for result in results],
-            minimum_relevance=self.minimum_relevance,
+            minimum_relevance=(
+                self.minimum_relevance if minimum_relevance is None else minimum_relevance
+            ),
         )
         allowed_ids = {result.document.id for result in filtered_results}
         final_results = [result for result in results if result.document.id in allowed_ids]
@@ -111,8 +116,17 @@ class DocumentRetrievalService:
         query: str,
         top_k: int = 5,
         namespace: str | None = None,
+        minimum_relevance: float | None = None,
     ) -> list[Document]:
-        return [self._to_document(result) for result in self.retrieve(query=query, top_k=top_k, namespace=namespace)]
+        return [
+            self._to_document(result)
+            for result in self.retrieve(
+                query=query,
+                top_k=top_k,
+                namespace=namespace,
+                minimum_relevance=minimum_relevance,
+            )
+        ]
 
     def build_retriever(
         self,

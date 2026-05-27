@@ -297,7 +297,8 @@
 | `message` | `str` | 必填 | 用户消息文本。 |
 | `session_id` | `str \| null` | 可空 | 会话 ID。 |
 | `stream` | `bool` |  | 是否流式。 |
-| `top_k` | `int \| null` | 可空 | 检索数量上限。 |
+
+补充说明：`/chat` 请求体不再暴露检索数量字段；检索数量由当前 scene 的 `retrieval_policy.top_k` 控制。
 
 ### 10. `Citation`
 

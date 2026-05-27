@@ -9,10 +9,12 @@ from langchain_core.runnables import RunnableConfig
 from backend.platform.config.settings import AppSettings, settings
 from backend.platform.knowledge.repositories import VectorStoreFactory
 from backend.platform.rag.document_retrieval import DocumentRetrievalService
+from backend.platform.rag.document_retrieval_rules import DOCUMENT_MINIMUM_RELEVANCE
 from backend.scenes.base import (
     SceneBootstrapResult,
     SceneDefinition,
     SceneFallbackPolicy,
+    SceneRetrievalPolicy,
 )
 from backend.platform.rag.core import RetrievalContext, SufficiencyDecision
 from backend.platform.models.base.router import TaskComplexity
@@ -35,6 +37,15 @@ ECOMMERCE_SYSTEM_PROMPT = (
     "Answer with retrieved product, review, order, and document evidence first. "
     "Do not fabricate inventory, price, or order status details. "
     "If evidence is missing, say what is missing and ask the user for a product name, order id, or keyword."
+)
+
+ECOMMERCE_RETRIEVAL_POLICY = SceneRetrievalPolicy(
+    top_k=5,
+    min_relevance_score=DOCUMENT_MINIMUM_RELEVANCE,
+    recall_strategy="hybrid",
+    no_hit_strategy="ask_user",
+    rerank_enabled=False,
+    rerank_top_n=None,
 )
 
 logger = logging.getLogger(__name__)
@@ -423,6 +434,7 @@ def build_ecommerce_scene_definition(
         app_settings=current_settings,
         business_extensions=(ecommerce_extension,),
         document_retrieval_service=resolved_document_retrieval_service,
+        retrieval_policy=ECOMMERCE_RETRIEVAL_POLICY,
         max_rounds=max_rounds,
     )
     return SceneDefinition(
@@ -444,6 +456,7 @@ def build_ecommerce_scene_definition(
             no_hit_message="No relevant ecommerce knowledge was found. Please provide a more specific product name, order detail, or document keyword."
         ),
         infer_complexity=infer_ecommerce_complexity,
+        retrieval_policy=ECOMMERCE_RETRIEVAL_POLICY,
         bootstrap=lambda: _bootstrap_scene(current_settings, resolved_knowledge_service),
         metadata={
             **generic_definition.metadata,

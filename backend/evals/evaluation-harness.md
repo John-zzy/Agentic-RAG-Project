@@ -123,6 +123,8 @@ JSON 字段目前固定包含：
 
 流式断言以 SSE `done` 事件作为最终权威结果；`chunk` 只用于验证流式链路确实有增量输出。
 
+SSE `tool` 事件还会暴露当前 scene retrieval policy 的安全摘要，用于对比不同策略下的检索行为。该摘要只包含 `top_k`、`min_relevance_score`、`recall_strategy`、`no_hit_strategy`、`rerank_enabled`、`rerank_top_n` 等配置字段，不包含 prompt、密钥或原始业务数据。
+
 ## 当前指标口径
 
 - `completion_rate = 成功完成调用的样本数 / 总样本数`
@@ -145,7 +147,7 @@ JSON 字段目前固定包含：
 - `observed.citations=[]`
 - `metrics.fallback_like=true`
 
-如果后续修改 ReRank、query rewrite、检索阈值或 citation 组装逻辑，导致 no-hit 又返回 citations，则该样本应失败。定位时优先看：
+如果后续修改 ReRank、scene retrieval policy、query rewrite、检索阈值或 citation 组装逻辑，导致 no-hit 又返回 citations，则该样本应失败。定位时优先看：
 
 - `results[].failure_reasons`
 - `results[].assertions`
@@ -198,9 +200,10 @@ JSON 字段目前固定包含：
 2. 运行 `backend/evals/run_http_eval.py`
 3. 打开 `backend/data/evals/latest.md`
 4. 先展示 Sample Table 里的 `pass`、`stream`、`knowledge`、`citations` 和 `failure`
-5. 针对 `no_hit_fallback` 确认 `pass=yes`、`knowledge=no`、`citations=0`
-6. 查看 `SSE Stream Evidence`，确认关键样本 `stream_pass=yes` 且事件包含 `done`
-7. 再打开 `backend/data/evals/latest.json` 查看单条样本明细、`assertions`、`observed.knowledge_used`、`observed.citations` 和 `stream.observed`
+5. 说明主链顺序：Hybrid Search 先召回与融合，scene retrieval policy 控制数量、阈值和 ReRank 接入位，后续可用同一评测集做策略对比
+6. 针对 `no_hit_fallback` 确认 `pass=yes`、`knowledge=no`、`citations=0`
+7. 查看 `SSE Stream Evidence`，确认关键样本 `stream_pass=yes` 且事件包含 `done`
+8. 再打开 `backend/data/evals/latest.json` 查看单条样本明细、`assertions`、`observed.knowledge_used`、`observed.citations` 和 `stream.observed`
 
 ## JD 证明点
 
@@ -208,7 +211,7 @@ JSON 字段目前固定包含：
 - 有可重复 replay 命令，不靠临场手工提问演示
 - 能把“命中文档”“引用来源”“基础回退表现”落成结构化日志和表格
 - 能把 `stream=true` 的真实对话路径纳入回归，避免流式响应和普通响应语义漂移
-- 后续可以继续接入 rerank、更多样本、更多场景，而不需要重做入口
+- 后续可以继续接入 scene retrieval policy 对比、rerank、更多样本、更多场景，而不需要重做入口
 
 ## 简历素材草稿
 

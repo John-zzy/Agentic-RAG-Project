@@ -83,6 +83,22 @@ def test_minimal_eval_includes_stream_replay_boundaries() -> None:
     assert stream_samples["no_hit_fallback"]["expected"]["knowledge_used"] is False
 
 
+def test_evaluation_harness_documents_scene_retrieval_policy_observability() -> None:
+    guide = (EVALS_DIR / "evaluation-harness.md").read_text(encoding="utf-8")
+
+    assert "retrieval policy" in guide
+    assert "tool" in guide
+    for field in (
+        "top_k",
+        "min_relevance_score",
+        "recall_strategy",
+        "no_hit_strategy",
+        "rerank_enabled",
+        "rerank_top_n",
+    ):
+        assert field in guide
+
+
 def test_sse_parser_extracts_event_types_and_json_data() -> None:
     raw = (
         'event: start\ndata: {"request_id": "req-1"}\n\n'

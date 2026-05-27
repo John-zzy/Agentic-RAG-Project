@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import inspect
 from typing import Any
 
 from langchain_core.callbacks.manager import CallbackManagerForRetrieverRun
@@ -72,6 +73,10 @@ class AgenticRetriever(BaseRetriever):
         selected_tool: str | None = None,
         candidate_tools: tuple[str, ...] | None = None,
         filters: dict[str, Any] | None = None,
+        top_k: int | None = None,
+        min_relevance_score: float | None = None,
+        rerank_enabled: bool = False,
+        rerank_top_n: int | None = None,
     ) -> AgenticRetrievalOutcome:
         """执行多轮检索并返回完整轨迹，供 Agent 或 LangGraph 复用。"""
         self._validate_tools()
@@ -91,6 +96,10 @@ class AgenticRetriever(BaseRetriever):
             max_rounds=self.max_rounds,
             candidate_tools=resolved_candidate_tools,
             filters=filters or {},
+            top_k=top_k,
+            min_relevance_score=min_relevance_score,
+            rerank_enabled=rerank_enabled,
+            rerank_top_n=rerank_top_n,
         )
         rounds: list[RetrievalRound] = []
         decision_log: list[RetrievalDecisionLogEntry] = []
@@ -314,7 +323,19 @@ class AgenticRetriever(BaseRetriever):
             plan.active_query,
             plan.round_index,
         )
-        return tool.retrieve(query=plan.active_query, run_manager=child_manager)
+        retrieve_kwargs: dict[str, Any] = {
+            "query": plan.active_query,
+            "run_manager": child_manager,
+        }
+        if self._supports_tool_argument(tool, "top_k"):
+            retrieve_kwargs["top_k"] = plan.top_k
+        if self._supports_tool_argument(tool, "min_relevance_score"):
+            retrieve_kwargs["min_relevance_score"] = plan.min_relevance_score
+        if self._supports_tool_argument(tool, "rerank_enabled"):
+            retrieve_kwargs["rerank_enabled"] = plan.rerank_enabled
+        if self._supports_tool_argument(tool, "rerank_top_n"):
+            retrieve_kwargs["rerank_top_n"] = plan.rerank_top_n
+        return tool.retrieve(**retrieve_kwargs)
 
     def _rewrite_query(
         self,
@@ -427,6 +448,14 @@ class AgenticRetriever(BaseRetriever):
         if tool is None:
             raise KeyError(f"Retrieval tool '{tool_name}' is not registered.")
         return tool
+
+    def _supports_tool_argument(self, tool: RetrievalTool, argument_name: str) -> bool:
+        """兼容旧 RetrievalTool 实现，避免一次性改动所有 scene。"""
+        parameters = inspect.signature(tool.retrieve).parameters
+        return argument_name in parameters or any(
+            parameter.kind == inspect.Parameter.VAR_KEYWORD
+            for parameter in parameters.values()
+        )
 
     def _validate_tools(self) -> None:
         """校验工具集合、默认工具和最大轮次配置是否有效。"""

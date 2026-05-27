@@ -16,7 +16,7 @@ from backend.platform.memory.chat.prompt_context import PromptContextBuilder
 from backend.platform.rag.document_retrieval import DocumentChunkRetrievalResult
 from backend.platform.rag.document_retrieval_service import DocumentRetrievalService
 from backend.platform.retrieval import VectorSearchResult, VectorStoreDocument
-from backend.scenes.base import SceneDefinition, SceneFallbackPolicy
+from backend.scenes.base import SceneDefinition, SceneFallbackPolicy, SceneRetrievalPolicy
 from backend.scenes.ecommerce.knowledge_service import create_knowledge_service
 from backend.tests.test_support import make_test_runtime_dir
 
@@ -68,6 +68,7 @@ class FakeKnowledgeService:
 class FakeDocumentRetrievalService:
     def __init__(self, documents: list[VectorSearchResult] | None = None) -> None:
         self._documents = documents or []
+        self.calls: list[dict[str, object]] = []
 
     def retrieve(
         self,
@@ -75,8 +76,17 @@ class FakeDocumentRetrievalService:
         query: str,
         top_k: int = 5,
         namespace: str | None = None,
+        minimum_relevance: float | None = None,
     ) -> list[DocumentChunkRetrievalResult]:
         del query, namespace
+        self.calls.append({"top_k": top_k, "minimum_relevance": minimum_relevance})
+        documents = self._documents
+        if minimum_relevance is not None:
+            documents = [
+                result
+                for result in documents
+                if result.score is None or float(result.score) >= minimum_relevance
+            ]
         return [
             DocumentChunkRetrievalResult(
                 document=result.document,
@@ -85,7 +95,7 @@ class FakeDocumentRetrievalService:
                 vector_rank=index,
                 matched_by=["vector"],
             )
-            for index, result in enumerate(self._documents[:top_k], start=1)
+            for index, result in enumerate(documents[:top_k], start=1)
         ]
 
 
@@ -372,6 +382,14 @@ def test_chat_api_sse_success_path_returns_structured_events() -> None:
     assert tool_payload["knowledge_used"] is True
     assert tool_payload["documents"] == 1
     assert tool_payload["rounds"][0]["tool_name"] == "knowledge_document_search"
+    assert tool_payload["retrieval_policy"] == {
+        "top_k": 5,
+        "min_relevance_score": 0.8,
+        "recall_strategy": "hybrid",
+        "no_hit_strategy": "ask_user",
+        "rerank_enabled": False,
+        "rerank_top_n": None,
+    }
     assert done_payload["answer"] == "推荐 P001，续航表现较好。[1]"
     assert done_payload["knowledge_used"] is True
     assert done_payload["scene"] == "generic_assistant"
@@ -1143,6 +1161,125 @@ def test_chat_service_passes_through_scene_defined_custom_candidate_tools() -> N
 
     assert response.knowledge_used is False
     assert observed_candidate_tools == [("alpha_tool", "beta_extension_tool")]
+
+
+def test_chat_service_passes_scene_retrieval_policy_to_agentic_retriever() -> None:
+    observed_kwargs: list[dict[str, Any]] = []
+
+    class _TrackingRetriever:
+        def retrieve_with_trace(
+            self,
+            query: str,
+            *,
+            candidate_tools: tuple[str, ...],
+            top_k: int | None = None,
+            min_relevance_score: float | None = None,
+            rerank_enabled: bool = False,
+            rerank_top_n: int | None = None,
+        ):
+            del query, candidate_tools
+            observed_kwargs.append(
+                {
+                    "top_k": top_k,
+                    "min_relevance_score": min_relevance_score,
+                    "rerank_enabled": rerank_enabled,
+                    "rerank_top_n": rerank_top_n,
+                }
+            )
+
+            class _Outcome:
+                documents: list[Document] = []
+                exit_reason = "ask_user"
+                success = False
+                rounds: list[object] = []
+
+            return _Outcome()
+
+    scene_definition = SceneDefinition(
+        scene="generic_assistant",
+        name="Policy Scene",
+        description="Track scene retrieval policy propagation.",
+        build_retriever=lambda: _TrackingRetriever(),  # type: ignore[return-value]
+        build_tools=lambda: (),
+        candidate_retrieval_tools_resolver=lambda _: ("knowledge_document_search",),
+        system_prompt="test",
+        fallback_policy=SceneFallbackPolicy(no_hit_message="no hit"),
+        infer_complexity=lambda _: "simple",
+        retrieval_policy=SceneRetrievalPolicy(
+            top_k=2,
+            min_relevance_score=0.91,
+            recall_strategy="hybrid",
+            no_hit_strategy="ask_user",
+            rerank_enabled=True,
+            rerank_top_n=1,
+        ),
+    )
+    runtime_dir = make_test_runtime_dir("chat-service-scene-policy-propagation")
+    sqlite_path = runtime_dir / "chat-sessions.db"
+    service = ChatService(
+        scene_definition=scene_definition,
+        app_settings=AppSettings(
+            data_dir=runtime_dir,
+            session={"sqlite_path": sqlite_path, "window_size": 3},
+        ),
+        session_store=SQLiteSessionStore(sqlite_path=sqlite_path),
+        context_builder=PromptContextBuilder(window_size=3),
+        model=FakeModel(answer="unused"),
+    )
+
+    response = service.chat(type("Payload", (), {
+        "message": "hello",
+        "session_id": None,
+        "stream": False,
+        "top_k": 99,
+    })())
+
+    assert response.knowledge_used is False
+    assert observed_kwargs == [
+        {
+            "top_k": 2,
+            "min_relevance_score": 0.91,
+            "rerank_enabled": True,
+            "rerank_top_n": 1,
+        }
+    ]
+
+
+def test_chat_scene_policy_min_relevance_preserves_no_hit_fallback() -> None:
+    document_retrieval_service = FakeDocumentRetrievalService(
+        documents=[
+            _result(
+                doc_id="doc-low",
+                content="低相关片段不应进入回答。",
+                score=0.5,
+                metadata={
+                    "document_id": "doc-low",
+                    "source_path": "low.md",
+                    "namespace": "documents",
+                    "is_managed_document": True,
+                    "chunk_id": "chunk-low",
+                    "chunk_index": 0,
+                },
+            )
+        ]
+    )
+    model = FakeModel(answer="unused")
+    service = _build_chat_service(
+        "chat-api-scene-min-relevance-no-hit",
+        FakeKnowledgeService(),
+        document_retrieval_service,
+        model,
+    )
+    app = create_app(chat_service=service)
+
+    with TestClient(app) as client:
+        response = client.post("/chat", json={"message": "低相关问题"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["knowledge_used"] is False
+    assert payload["citations"] == []
+    assert document_retrieval_service.calls[-1]["minimum_relevance"] == 0.8
 
 
 def test_chat_documents_and_ecommerce_mounts_do_not_force_extension_when_docs_are_sufficient() -> None:

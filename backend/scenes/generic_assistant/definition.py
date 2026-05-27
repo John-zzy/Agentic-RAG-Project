@@ -27,16 +27,27 @@ from backend.platform.rag.document_retrieval import (
     DocumentChunkRetrievalResult,
     DocumentRetrievalService,
 )
+from backend.platform.rag.document_retrieval_rules import DOCUMENT_MINIMUM_RELEVANCE
 from backend.platform.tools import ToolResult, build_structured_tool
 from backend.scenes.base import (
     SceneBootstrapResult,
     SceneDefinition,
     SceneFallbackPolicy,
+    SceneRetrievalPolicy,
 )
 
 
 GENERIC_DOCUMENT_TOOL_NAME = "knowledge_document_search"
 GENERIC_DOCUMENT_KNOWLEDGE_SOURCE = "documents"
+
+GENERIC_ASSISTANT_RETRIEVAL_POLICY = SceneRetrievalPolicy(
+    top_k=5,
+    min_relevance_score=DOCUMENT_MINIMUM_RELEVANCE,
+    recall_strategy="hybrid",
+    no_hit_strategy="ask_user",
+    rerank_enabled=False,
+    rerank_top_n=None,
+)
 
 
 GENERIC_ASSISTANT_SYSTEM_PROMPT = (
@@ -65,11 +76,17 @@ class GenericKnowledgeDocumentRetriever(BaseRetriever):
         """适配 LangChain retriever 协议。"""
         return self.search(query=query, top_k=self.default_top_k)
 
-    def search(self, query: str, top_k: int | None = None) -> list[Document]:
+    def search(
+        self,
+        query: str,
+        top_k: int | None = None,
+        min_relevance_score: float | None = None,
+    ) -> list[Document]:
         """仅在已上传文档知识中检索证据。"""
         return self.document_retrieval_service.search(
             query=query,
             top_k=top_k or self.default_top_k,
+            minimum_relevance=min_relevance_score,
         )
 
 
@@ -83,10 +100,23 @@ class GenericKnowledgeDocumentSearchTool(RetrievalTool):
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
-    def retrieve(self, query: str, *, run_manager: Any | None = None) -> RetrievalResult:
+    def retrieve(
+        self,
+        query: str,
+        *,
+        run_manager: Any | None = None,
+        top_k: int | None = None,
+        min_relevance_score: float | None = None,
+        rerank_enabled: bool = False,
+        rerank_top_n: int | None = None,
+    ) -> RetrievalResult:
         """在上传文档分块中检索并返回标准化结果。"""
-        del run_manager
-        retrieval_results = self.document_retrieval_service.retrieve(query=query, top_k=self.default_top_k)
+        del run_manager, rerank_enabled, rerank_top_n
+        retrieval_results = self.document_retrieval_service.retrieve(
+            query=query,
+            top_k=top_k or self.default_top_k,
+            minimum_relevance=min_relevance_score,
+        )
         records = [_build_document_record(result) for result in retrieval_results]
         citations = [
             RetrievalCitation(
@@ -331,10 +361,12 @@ def build_generic_assistant_scene_definition(
     *,
     business_extensions: tuple[GenericAssistantBusinessExtension, ...] = (),
     document_retrieval_service: DocumentRetrievalService | None = None,
+    retrieval_policy: SceneRetrievalPolicy = GENERIC_ASSISTANT_RETRIEVAL_POLICY,
     max_rounds: int = 3,
 ) -> SceneDefinition:
     """构建通用知识助手场景定义。"""
     current_settings = app_settings or settings
+    resolved_retrieval_policy = retrieval_policy
     resolved_business_extensions = tuple(business_extensions)
     resolved_document_retrieval_service = document_retrieval_service or DocumentRetrievalService(
         app_settings=current_settings,
@@ -348,11 +380,13 @@ def build_generic_assistant_scene_definition(
         build_retriever=lambda: _build_generic_agentic_retriever(
             document_retrieval_service=resolved_document_retrieval_service,
             business_extensions=resolved_business_extensions,
+            retrieval_policy=resolved_retrieval_policy,
             max_rounds=max_rounds,
         ),
         build_tools=lambda: (
             build_generic_knowledge_document_tool(
                 resolved_document_retrieval_service,
+                retrieval_policy=resolved_retrieval_policy,
             ),
         ),
         candidate_retrieval_tools_resolver=lambda mounted_knowledge_sources: (
@@ -366,6 +400,7 @@ def build_generic_assistant_scene_definition(
             no_hit_message="暂时没有检索到足够相关的文档知识。请补充更具体的主题、术语或文档范围，我再继续帮你查。"
         ),
         infer_complexity=infer_generic_assistant_complexity,
+        retrieval_policy=resolved_retrieval_policy,
         bootstrap=lambda: _bootstrap_generic_scene(resolved_business_extensions),
         metadata={
             "supports_agentic_retrieval": True,
@@ -381,11 +416,16 @@ def build_generic_assistant_scene_definition(
 
 def build_generic_knowledge_document_tool(
     document_retrieval_service: DocumentRetrievalService,
+    retrieval_policy: SceneRetrievalPolicy = GENERIC_ASSISTANT_RETRIEVAL_POLICY,
 ) -> BaseTool:
     """构建面向通用知识助手的文档检索工具。"""
 
-    def knowledge_document_search(query: str, top_k: int = 5) -> ToolResult:
-        retrieval_results = document_retrieval_service.retrieve(query=query, top_k=top_k)
+    def knowledge_document_search(query: str, top_k: int = retrieval_policy.top_k) -> ToolResult:
+        retrieval_results = document_retrieval_service.retrieve(
+            query=query,
+            top_k=top_k,
+            minimum_relevance=retrieval_policy.min_relevance_score,
+        )
         records = [_build_document_record(result) for result in retrieval_results]
         return ToolResult.ok(
             tool_name=GENERIC_DOCUMENT_TOOL_NAME,
@@ -436,12 +476,14 @@ def _build_generic_agentic_retriever(
     *,
     document_retrieval_service: DocumentRetrievalService,
     business_extensions: tuple[GenericAssistantBusinessExtension, ...],
+    retrieval_policy: SceneRetrievalPolicy,
     max_rounds: int,
 ) -> AgenticRetriever:
     """为通用场景构建文档优先的 AgenticRetriever。"""
     tools = _build_docs_first_retrieval_tools(
         document_retrieval_service=document_retrieval_service,
         business_extensions=business_extensions,
+        retrieval_policy=retrieval_policy,
     )
     return AgenticRetriever(
         tools={tool.name: tool for tool in tools},
@@ -458,11 +500,13 @@ def _build_docs_first_retrieval_tools(
     *,
     document_retrieval_service: DocumentRetrievalService,
     business_extensions: tuple[GenericAssistantBusinessExtension, ...],
+    retrieval_policy: SceneRetrievalPolicy,
 ) -> tuple[RetrievalTool, ...]:
     """按 docs-only 默认边界组装主链工具，再按扩展顺序附加业务工具。"""
     tools: list[RetrievalTool] = [
         GenericKnowledgeDocumentSearchTool(
             document_retrieval_service=document_retrieval_service,
+            default_top_k=retrieval_policy.top_k,
         )
     ]
     seen = {GENERIC_DOCUMENT_TOOL_NAME}

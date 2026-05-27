@@ -51,6 +51,21 @@ class FakeActiveDocumentChunkSource:
         return filtered[: limit or len(filtered)]
 
 
+class FakeFusionRanker:
+    def __init__(self, results: list[DocumentChunkRetrievalResult]) -> None:
+        self._results = results
+
+    def rank(
+        self,
+        *,
+        vector_results: list[DocumentChunkRetrievalResult],
+        keyword_results: list[DocumentChunkRetrievalResult],
+        top_k: int,
+    ) -> list[DocumentChunkRetrievalResult]:
+        del vector_results, keyword_results
+        return self._results[:top_k]
+
+
 def _chunk(
     chunk_id: str,
     content: str,
@@ -155,6 +170,49 @@ def test_document_retrieval_service_returns_documents_with_hybrid_metadata() -> 
     assert first.metadata["score"] is not None
     assert first.metadata["keyword_score"] is not None
     assert "keyword" in first.metadata["matched_by"]
+
+
+def test_document_retrieval_service_uses_call_level_minimum_relevance() -> None:
+    runtime_dir = make_test_runtime_dir("document-hybrid-call-level-minimum-relevance")
+    app_settings = AppSettings(
+        data_dir=runtime_dir,
+        vector_store=VectorStoreConfig(provider="chroma"),
+    )
+    high_chunk = _chunk("chunk-high", "高相关内容 specialtoken", document_id="doc-high", vector_score=0.9)
+    low_chunk = _chunk("chunk-low", "低相关内容 specialtoken", document_id="doc-low", vector_score=0.7)
+    service = DocumentRetrievalService(
+        app_settings=app_settings,
+        vector_repository=FakeDocumentChunkVectorRepository([high_chunk, low_chunk]),
+        chunk_source=FakeActiveDocumentChunkSource([high_chunk, low_chunk]),
+        fusion_ranker=FakeFusionRanker(
+            [
+                DocumentChunkRetrievalResult(
+                    document=high_chunk,
+                    score=0.9,
+                    vector_score=0.9,
+                    matched_by=["vector"],
+                ),
+                DocumentChunkRetrievalResult(
+                    document=low_chunk,
+                    score=0.7,
+                    vector_score=0.7,
+                    matched_by=["vector"],
+                ),
+            ]
+        ),
+        minimum_relevance=0.6,
+    )
+
+    default_results = service.retrieve(query="specialtoken", top_k=2, namespace="faq")
+    strict_results = service.retrieve(
+        query="specialtoken",
+        top_k=2,
+        namespace="faq",
+        minimum_relevance=0.85,
+    )
+
+    assert {result.document.id for result in default_results} == {"chunk-high", "chunk-low"}
+    assert [result.document.id for result in strict_results] == ["chunk-high"]
 
 
 def test_document_hybrid_retriever_delegates_to_service() -> None:

@@ -159,23 +159,35 @@ class SemanticRetrievalTool(RetrievalTool):
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
-    def retrieve(self, query: str, *, run_manager: Any | None = None) -> RetrievalResult:
+    def retrieve(
+        self,
+        query: str,
+        *,
+        run_manager: Any | None = None,
+        top_k: int | None = None,
+        min_relevance_score: float | None = None,
+        rerank_enabled: bool = False,
+        rerank_top_n: int | None = None,
+    ) -> RetrievalResult:
         """从指定知识库执行语义检索并返回标准化结果。"""
-        del run_manager
+        del run_manager, min_relevance_score, rerank_top_n
+        resolved_top_k = top_k or self.default_top_k
         logger.info(
             "Semantic retrieval started: tool=%s, namespace=%s, query=%r, top_k=%s",
             self.name,
             self.namespace,
             query,
-            self.default_top_k,
+            resolved_top_k,
         )
         search_func = getattr(self.knowledge_service, self.search_method)
-        vector_results = search_func(query=query, top_k=self.default_top_k)
+        vector_results = search_func(query=query, top_k=resolved_top_k)
         
         if self.namespace == "products" and self.product_store:
             vector_results = _inject_named_product_match(query, vector_results, self.product_store)
         if self.namespace == "orders":
             vector_results = _rank_order_results(query, vector_results)
+        if rerank_enabled:
+            logger.info("Rerank is configured but no rerank service is wired; preserving retrieval order.")
 
         retrieval_result = build_retrieval_result(
             tool_name=self.name,
@@ -203,16 +215,32 @@ class KnowledgeDocumentSemanticRetrievalTool(RetrievalTool):
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
-    def retrieve(self, query: str, *, run_manager: Any | None = None) -> RetrievalResult:
+    def retrieve(
+        self,
+        query: str,
+        *,
+        run_manager: Any | None = None,
+        top_k: int | None = None,
+        min_relevance_score: float | None = None,
+        rerank_enabled: bool = False,
+        rerank_top_n: int | None = None,
+    ) -> RetrievalResult:
         """从文档分块索引中检索用户上传的知识。"""
-        del run_manager
+        del run_manager, rerank_top_n
+        resolved_top_k = top_k or self.default_top_k
         logger.info(
             "Document retrieval started: tool=%s, query=%r, top_k=%s",
             self.name,
             query,
-            self.default_top_k,
+            resolved_top_k,
         )
-        document_results = self.document_retrieval_service.retrieve(query=query, top_k=self.default_top_k)
+        document_results = self.document_retrieval_service.retrieve(
+            query=query,
+            top_k=resolved_top_k,
+            minimum_relevance=min_relevance_score,
+        )
+        if rerank_enabled:
+            logger.info("Rerank is configured but no rerank service is wired; preserving retrieval order.")
         retrieval_result = build_retrieval_result(
             tool_name=self.name,
             namespace="documents",
@@ -265,9 +293,18 @@ class InventoryLookupRetrievalTool(RetrievalTool):
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
-    def retrieve(self, query: str, *, run_manager: Any | None = None) -> RetrievalResult:
+    def retrieve(
+        self,
+        query: str,
+        *,
+        run_manager: Any | None = None,
+        top_k: int | None = None,
+        min_relevance_score: float | None = None,
+        rerank_enabled: bool = False,
+        rerank_top_n: int | None = None,
+    ) -> RetrievalResult:
         """按 product_id 查询库存信息。"""
-        del run_manager
+        del run_manager, top_k, min_relevance_score, rerank_enabled, rerank_top_n
         logger.info("Inventory lookup started: tool=%s, product_id=%r", self.name, query.strip())
         product = self.product_store.find_product(query.strip())
         if product is None:
@@ -317,9 +354,18 @@ class ProductDetailLookupRetrievalTool(RetrievalTool):
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
-    def retrieve(self, query: str, *, run_manager: Any | None = None) -> RetrievalResult:
+    def retrieve(
+        self,
+        query: str,
+        *,
+        run_manager: Any | None = None,
+        top_k: int | None = None,
+        min_relevance_score: float | None = None,
+        rerank_enabled: bool = False,
+        rerank_top_n: int | None = None,
+    ) -> RetrievalResult:
         """按 product_id 返回结构化详情。"""
-        del run_manager
+        del run_manager, top_k, min_relevance_score, rerank_enabled, rerank_top_n
         logger.info("Product detail lookup started: tool=%s, product_id=%r", self.name, query.strip())
         product = self.product_store.find_product(query.strip())
         if product is None:

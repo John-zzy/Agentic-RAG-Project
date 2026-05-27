@@ -22,7 +22,7 @@
 - 会话创建、查询、删除与 `mounted_knowledge_sources` 知识源挂载
 - 本地知识文件上传、预处理预览、正式入库、重处理与重切块
 - 文档切块、索引、语义检索与 `documents/chunks` 的 `Hybrid Search`
-- 文档召回默认过滤低相关片段，融合分数低于 `0.8` 的结果不会进入回答上下文
+- 文档召回默认过滤低相关片段，检索数量与阈值由 scene retrieval policy 控制
 - Agentic Retrieval 编排，支持“文档优先 + 按需切换场景工具”
 - `generic_assistant` 对寒暄、无明确文档意图的问题直接走 no-hit fallback，避免被改写成宽泛 FAQ/手册查询
 - 结构化 `citations`、回答正文引用编号与 session `retrieval_snippets` 落库
@@ -61,7 +61,7 @@
 
 ### 近期：把现有 RAG 主链做稳
 
-- [ ] 检索效果：补充 ReRank，并支持按 scene 配置召回阈值、`top_k`、召回策略和 no-hit 策略
+- [ ] 检索效果：补充 ReRank，并通过 scene retrieval policy 配置召回阈值、`top_k`、召回策略和 no-hit 策略
 - [ ] 评测体系：扩展 Evaluation Harness 样本集，覆盖多轮问答、低相关误召回、知识源切换和 SSE 输出稳定性
 - [ ] 可观测性：在日志、接口或调试页中暴露每轮 retrieval trace、query rewrite、tool decision 和 citation score
 - [ ] 知识管理：支持批量重建索引、失败重试、文档版本对比、索引状态诊断和上传文件清理
@@ -240,7 +240,7 @@ backend\.venv\Scripts\python.exe backend\run.py
 
 1. 启动服务
 2. 通过 `POST /sessions` 创建会话并指定场景，可选传入 `mounted_knowledge_sources`
-3. 通过 `POST /chat` 发起对话；运行时会根据会话挂载源动态组装 candidate tools
+3. 通过 `POST /chat` 发起对话；运行时会读取当前 scene retrieval policy，并根据会话挂载源动态组装 candidate tools
    传 `stream=true` 时，接口会以 SSE 返回 `start`、`history`、`tool`、`chunk`、`done`、`error` 事件；其中只有最终回答阶段按 `chunk` 流式输出文本，`history/tool` 用于暴露主链上下文
 4. 如需知识增强，先通过 `POST /files/upload` 上传知识文件
 5. 通过 `POST /knowledge/documents/preprocess-preview` 预览清洗规则、样本和统计
@@ -257,7 +257,8 @@ backend\.venv\Scripts\python.exe backend\run.py
 文档召回当前行为：
 
 - `DocumentRetrievalService` 会先执行语义召回与关键词召回，再通过融合排序生成候选结果
-- 融合分数低于 `0.8` 的文档片段会被丢弃，不会进入 prompt、citations 或最终回答
+- `/chat` 请求体不再传 `top_k`；运行时会从当前 scene retrieval policy 读取 `top_k`、最低相关性阈值、召回策略和 ReRank 接入位，并在 SSE `tool` 事件中输出安全策略摘要
+- 低于当前相关性阈值的文档片段会被丢弃，不会进入 prompt、citations 或最终回答
 - 如果过滤后没有可用文档，`/chat` 会返回 scene fallback，`knowledge_used=false` 且 `citations=[]`
 - 对 `你好` 这类没有明确文档查询意图的问题，`generic_assistant` 不再进入“相关文档 / FAQ / 手册”式查询改写，避免误召回不相关知识
 

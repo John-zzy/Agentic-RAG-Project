@@ -92,6 +92,10 @@ class RetrievalPlan(BaseModel):
     attempted_tools: tuple[str, ...] = ()
     previous_queries: tuple[str, ...] = ()
     filters: dict[str, Any] = Field(default_factory=dict)
+    top_k: int | None = None
+    min_relevance_score: float | None = None
+    rerank_enabled: bool = False
+    rerank_top_n: int | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
     def create_followup(
@@ -191,6 +195,10 @@ class RetrievalTool(BaseRetriever, ABC):
         query: str,
         *,
         run_manager: CallbackManagerForRetrieverRun | None = None,
+        top_k: int | None = None,
+        min_relevance_score: float | None = None,
+        rerank_enabled: bool = False,
+        rerank_top_n: int | None = None,
     ) -> RetrievalResult:
         """执行具体检索逻辑，并返回标准化检索结果。"""
         raise NotImplementedError

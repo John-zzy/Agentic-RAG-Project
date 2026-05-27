@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from inspect import Parameter, signature
 import logging
 from pathlib import Path
 import re
@@ -22,7 +23,7 @@ from backend.platform.knowledge.sources import (
 )
 from backend.platform.rag.agentic import AgenticRetrievalOutcome
 from backend.platform.rag.document_retrieval import DocumentRetrievalService
-from backend.scenes.base import SceneDefinition
+from backend.scenes.base import SceneDefinition, SceneRetrievalPolicy
 from backend.platform.knowledge.base.text import truncate_snippet
 from backend.platform.memory.base.chat_history import SQLiteChatMessageHistory
 from backend.platform.memory.base.session_store import (
@@ -136,6 +137,8 @@ class RetrievalExecutor:
         *,
         mounted_knowledge_sources: tuple[str, ...],
     ) -> RetrievalExecutionResult:
+        policy = self._scene_definition.retrieval_policy
+        policy_summary = self._build_policy_summary(policy)
         candidate_tools = self._scene_definition.resolve_candidate_retrieval_tools(
             mounted_knowledge_sources
         )
@@ -147,9 +150,12 @@ class RetrievalExecutor:
             candidate_tools,
         )
         if hasattr(self._retriever, "retrieve_with_trace"):
+            retrieve_with_trace = self._retriever.retrieve_with_trace
+            retrieval_kwargs = self._build_supported_policy_kwargs(retrieve_with_trace, policy)
             outcome: AgenticRetrievalOutcome = self._retriever.retrieve_with_trace(  # type: ignore[attr-defined]
                 message,
                 candidate_tools=candidate_tools,
+                **retrieval_kwargs,
             )
             logger.info(
                 "Agentic retrieval completed for scene=%s: exit_reason=%s, rounds=%s, documents=%s",
@@ -163,6 +169,7 @@ class RetrievalExecutor:
                 tool_event={
                     "stage": "retrieval",
                     "mode": "agentic",
+                    "retrieval_policy": policy_summary,
                     "candidate_tools": list(candidate_tools),
                     "documents": len(outcome.documents),
                     "exit_reason": outcome.exit_reason,
@@ -188,7 +195,9 @@ class RetrievalExecutor:
                 },
             )
         if hasattr(self._retriever, "search"):
-            documents = list(self._retriever.search(query=message))  # type: ignore[attr-defined]
+            search = self._retriever.search
+            retrieval_kwargs = self._build_supported_policy_kwargs(search, policy)
+            documents = list(search(query=message, **retrieval_kwargs))  # type: ignore[attr-defined]
             logger.info(
                 "Retriever search completed for scene=%s: documents=%s",
                 self._scene_definition.scene,
@@ -199,6 +208,7 @@ class RetrievalExecutor:
                 tool_event={
                     "stage": "retrieval",
                     "mode": "search",
+                    "retrieval_policy": policy_summary,
                     "candidate_tools": list(candidate_tools),
                     "documents": len(documents),
                     "rounds": [
@@ -230,6 +240,7 @@ class RetrievalExecutor:
                 tool_event={
                     "stage": "retrieval",
                     "mode": "base_retriever",
+                    "retrieval_policy": policy_summary,
                     "candidate_tools": list(candidate_tools),
                     "documents": len(documents),
                     "rounds": [
@@ -250,6 +261,43 @@ class RetrievalExecutor:
                 },
             )
         raise TypeError("Retriever does not support document retrieval.")
+
+    def _build_policy_summary(self, policy: SceneRetrievalPolicy) -> dict[str, Any]:
+        """返回可暴露到事件流的 scene 检索策略摘要。"""
+        return {
+            "top_k": policy.top_k,
+            "min_relevance_score": policy.min_relevance_score,
+            "recall_strategy": policy.recall_strategy,
+            "no_hit_strategy": policy.no_hit_strategy,
+            "rerank_enabled": policy.rerank_enabled,
+            "rerank_top_n": policy.rerank_top_n,
+        }
+
+    def _build_supported_policy_kwargs(
+        self,
+        callable_obj: Any,
+        policy: SceneRetrievalPolicy,
+    ) -> dict[str, Any]:
+        try:
+            parameters = signature(callable_obj).parameters
+        except (TypeError, ValueError):
+            return {}
+
+        accepts_kwargs = any(
+            parameter.kind == Parameter.VAR_KEYWORD for parameter in parameters.values()
+        )
+        policy_kwargs = {
+            "top_k": policy.top_k,
+            "min_relevance_score": policy.min_relevance_score,
+            "minimum_relevance": policy.min_relevance_score,
+            "rerank_enabled": policy.rerank_enabled,
+            "rerank_top_n": policy.rerank_top_n,
+        }
+        return {
+            name: value
+            for name, value in policy_kwargs.items()
+            if value is not None and (accepts_kwargs or name in parameters)
+        }
 
 
 class CitationMapper:
