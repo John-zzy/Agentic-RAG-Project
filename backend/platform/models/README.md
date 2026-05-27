@@ -1,36 +1,216 @@
 # `backend/platform/models`
 
-`platform.models` 是平台里的模型访问适配层，负责把“按复杂度选择模型配置”与“用 LangChain LCEL 执行模型调用”隔离开。
+`platform.models` 是项目里的“模型入口”。它解决一个问题：
 
-当前这层的定位是：
+> 业务代码只说这次任务有多复杂，模型包负责选模型、创建 LangChain 模型对象，并提供统一调用入口。
 
-- 上游只声明任务复杂度 `simple / moderate / complex`
-- 中间由 `ModelRouter` 从配置中选出对应模型
-- 再由 `ModelClient` 构造 LangChain `BaseChatModel` 或 `Runnable`
-- 最终供 runtime、agent 或后续 LangGraph 链路复用
+也就是说，调用方不需要到处写 API Key、模型名、base_url，也不需要每个模块都自己 new 一个 LangChain 模型。
 
-这层现在是 **LCEL First**：
+## 先用一句话理解 LangChain
 
-- 主接口是 `get_chat_model()` 和 `get_runnable()`
-- `invoke_runnable()` / `stream_runnable()` 是统一执行入口
-- `invoke_template()` / `stream_template()` 只是兼容 helper
+LangChain 可以先理解成一个“把大模型调用标准化”的 Python 工具箱。
 
-它不负责：
+在本项目里，你先掌握 4 个概念就够了：
 
-- memory / session / history 注入
-- `RunnableWithMessageHistory` 装配
-- scene 级 prompt 编排
+- `ChatOpenAI`
+  - LangChain 提供的聊天模型实现。
+  - 名字叫 OpenAI，但它支持 OpenAI-compatible 接口，所以这里也能接 DashScope 的兼容模式。
+- `BaseChatModel`
+  - LangChain 对“聊天模型”的统一抽象。
+  - `ChatOpenAI` 创建出来的对象就是一种 `BaseChatModel`。
+- `PromptTemplate`
+  - 提示词模板。
+  - 例如 `"请回答：{question}"`，运行时传入 `{"question": "..."}`。
+- `Runnable`
+  - LangChain 里“可以被执行的东西”。
+  - prompt、model、parser 都可以像管道一样串起来：`prompt | model | parser`。
 
-## 包内结构
+这条管道叫 LCEL，意思是 LangChain Expression Language。你不用把它想复杂，它在代码里就是用 `|` 把步骤串起来。
 
-- `base/router.py`
-  - 负责模型路由
-  - 把 `settings.models` 中的配置映射成 `RoutedModel`
-- `llm/client.py`
-  - 负责 LangChain 模型实例构造、LCEL runnable 组装与执行封装
-  - 对外提供 `get_chat_model()`、`get_runnable()`、`invoke_runnable()`、`stream_runnable()` 等入口
-- `__init__.py`
-  - 当前仅保留兼容导出
+## 这个包当前的真实结构
+
+```text
+backend/platform/models/
+├── __init__.py
+├── README.md
+├── base/
+│   ├── __init__.py
+│   └── router.py
+└── llm/
+    ├── __init__.py
+    └── client.py
+```
+
+### `base/router.py`
+
+这一层只负责“选模型”，不调用模型。
+
+它提供：
+
+- `TaskComplexity`
+  - 任务复杂度类型：`simple`、`moderate`、`complex`。
+- `RoutedModel`
+  - 一次路由后的模型信息。
+  - 包含 `provider`、`model_name`、`api_base`、`api_key`、`supports_streaming`、`timeout_seconds`、`max_tokens`、`temperature`。
+- `ModelRouter`
+  - 从 `settings.models` 里按复杂度取出对应配置。
+- `get_model_for_task(complexity)`
+  - 模块级快捷函数。
+
+简单说：
+
+```python
+get_model_for_task("simple")
+```
+
+会得到一个 `RoutedModel`，它描述“simple 任务应该用哪个模型、怎么连这个模型”。
+
+### `llm/client.py`
+
+这一层负责“把路由结果变成 LangChain 可执行对象”，并提供统一执行方法。
+
+它提供：
+
+- `ModelClient.build_chat_model(routed_model)`
+  - 把 `RoutedModel` 变成 LangChain 的 `BaseChatModel`。
+  - 默认实际创建的是 `langchain_openai.ChatOpenAI`。
+- `ModelClient.get_chat_model(complexity)`
+  - 先路由，再返回聊天模型对象。
+- `ModelClient.get_runnable(complexity, prompt_template=None, output_parser=None)`
+  - 不传 `prompt_template`：直接返回聊天模型。
+  - 传了 `prompt_template`：返回 `prompt -> model -> parser` 这条 LangChain 管道。
+- `ModelClient.invoke_runnable(runnable, input)`
+  - 同步执行 runnable。
+  - 如果模型返回空内容，会抛 `ValueError`。
+- `ModelClient.stream_runnable(runnable, input)`
+  - 流式执行 runnable。
+  - 会过滤空 chunk。
+
+文件底部还有一个全局实例：
+
+```python
+model_client = ModelClient()
+```
+
+业务代码通常直接复用它。
+
+## 配置从哪里来
+
+模型名和 base URL 来自：
+
+```text
+backend/platform/config/model_routing.json
+```
+
+API Key 来自环境变量或 `backend/.env`：
+
+```env
+AI_RAG_MODELS__SIMPLE__API_KEY=your-dashscope-api-key
+AI_RAG_MODELS__MODERATE__API_KEY=your-dashscope-api-key
+AI_RAG_MODELS__COMPLEX__API_KEY=your-dashscope-api-key
+```
+
+这些配置会在 `backend/platform/config/settings.py` 里组装成：
+
+```python
+settings.models
+```
+
+然后 `ModelRouter` 读取 `settings.models`。
+
+## 一次完整调用是怎么发生的
+
+以 runtime 里生成 RAG 答案为例，调用链大致是：
+
+```text
+ChatService
+  -> model_client.get_runnable("simple", prompt_template=...)
+  -> get_model_for_task("simple")
+  -> ModelRouter.select("simple")
+  -> RoutedModel
+  -> ChatOpenAI(...)
+  -> prompt | model | StrOutputParser()
+  -> model_client.invoke_runnable(...)
+```
+
+对应到 LangChain，就是这件事：
+
+```python
+runnable = prompt_template | chat_model | output_parser
+answer = runnable.invoke(variables)
+```
+
+如果是流式输出，就是：
+
+```python
+for chunk in runnable.stream(variables):
+    ...
+```
+
+本项目把这些细节包进了 `ModelClient`，所以调用方不用重复写。
+
+## 最小示例
+
+### 直接拿聊天模型
+
+```python
+from backend.platform.models.llm.client import model_client
+
+chat_model = model_client.get_chat_model("simple")
+response = chat_model.invoke("hello")
+```
+
+这里拿到的是 LangChain 的 `BaseChatModel`，可以继续交给 Agent、LangGraph 或其他 LangChain 组件。
+
+### 使用 prompt 管道
+
+```python
+from langchain_core.prompts import PromptTemplate
+
+from backend.platform.models.llm.client import model_client
+
+prompt = PromptTemplate.from_template("请用一句话回答：{question}")
+runnable = model_client.get_runnable(
+    complexity="simple",
+    prompt_template=prompt,
+)
+
+answer = model_client.invoke_runnable(
+    runnable,
+    {"question": "LangChain 是什么？"},
+)
+```
+
+这等价于：
+
+```python
+prompt -> model -> StrOutputParser
+```
+
+其中 `StrOutputParser` 会把模型返回的消息对象转成普通字符串。
+
+### 流式输出
+
+```python
+from langchain_core.prompts import PromptTemplate
+
+from backend.platform.models.llm.client import model_client
+
+prompt = PromptTemplate.from_template("请列出 3 个要点：{topic}")
+runnable = model_client.get_runnable("simple", prompt_template=prompt)
+
+for chunk in model_client.stream_runnable(runnable, {"topic": "RAG"}):
+    print(chunk, end="")
+```
+
+如果使用旧 helper，也可以：
+
+```python
+for chunk in model_client.stream("hello", complexity="simple"):
+    print(chunk, end="")
+```
+
+但新代码更推荐显式使用 `get_runnable()`、`invoke_runnable()` 和 `stream_runnable()`。
 
 ## 类关系图
 
@@ -111,80 +291,63 @@ classDiagram
 
 ```mermaid
 flowchart TD
-    A[Caller] --> B[ModelClient get_chat_model or get_runnable]
-    B --> C[ModelClient build_chat_model_for_complexity]
-    C --> D[get_model_for_task complexity]
-    D --> E[ModelRouter select]
-    E --> F[RoutedModel from_config]
+    A[调用方] --> B[ModelClient.get_chat_model 或 get_runnable]
+    B --> C[按复杂度构建聊天模型]
+    C --> D[get_model_for_task]
+    D --> E[ModelRouter.select]
+    E --> F[RoutedModel.from_config]
     F --> G[settings.models]
 
-    C --> H[ModelClient build_chat_model]
-    H --> I[resolve factory default ChatOpenAI]
-    I --> J[BaseChatModel instance]
+    C --> H[ModelClient.build_chat_model]
+    H --> I[默认工厂 ChatOpenAI]
+    I --> J[BaseChatModel 实例]
 
-    B --> K{prompt template provided}
-    K -- No --> J
-    K -- Yes --> L[prompt template pipe model pipe parser]
+    B --> K{是否传入 prompt_template}
+    K -- 否 --> J
+    K -- 是 --> L[prompt_template 到 model 到 parser]
 
-    A --> M[invoke_runnable or stream_runnable]
+    A --> M[invoke_runnable 或 stream_runnable]
     M --> J
     M --> L
-
-    A --> N[invoke_template or stream_template]
-    N --> B
-    N --> M
 ```
 
-## 关键职责
+## 这层不负责什么
 
-### `RoutedModel`
+`platform.models` 只负责模型路由和模型调用入口。下面这些事情在别的层做：
 
-`RoutedModel` 是“路由结果对象”。
+- 会话、历史消息、窗口裁剪
+  - 在 `backend/platform/memory/` 和 runtime 中处理。
+- `RunnableWithMessageHistory`
+  - 在 `backend/application/runtime/service.py` 中装配。
+- scene prompt 和检索策略
+  - 在 `backend/scenes/` 和 runtime 中处理。
+- 文档检索、Hybrid Search、Agentic Retrieval
+  - 在 `backend/platform/rag/` 中处理。
 
-它不是配置源本身，而是把 `ModelEndpointConfig` 转成调用层可以直接消费的只读结构，避免上层直接依赖配置对象。
+这样的好处是：模型包只回答“用哪个模型、怎么调模型”，不关心一次聊天业务到底怎么组织。
 
-### `ModelRouter`
+## 当前边界和注意点
 
-`ModelRouter` 只负责按复杂度，从 `settings.models` 里选出模型配置。
+- 当前默认模型工厂是 `langchain_openai.ChatOpenAI`。
+- `provider` 字段已经进入 `RoutedModel`，但 `ModelClient` 还没有按 provider 分发不同 SDK。
+- 所以当前更准确的定位是：
+  - “按复杂度路由的 OpenAI-compatible LangChain 模型层”。
+  - 还不是完整的多 provider 模型抽象层。
+- `model_routing.json` 里的 `task_types`、`fallback` 当前主要是配置语义说明，`ModelRouter.select()` 现在只按 `simple / moderate / complex` 取配置，没有执行 fallback 逻辑。
 
-这一层不关心 LangChain prompt，不关心 memory，也不直接发请求。
+## 写新代码时怎么选入口
 
-### `ModelClient`
+- 想把模型交给 LangChain、Agent 或 LangGraph：
+  - 用 `get_chat_model()`。
+- 想构造一条 `prompt -> model -> parser` 链：
+  - 用 `get_runnable()`。
+- 想执行链：
+  - 用 `invoke_runnable()` 或 `stream_runnable()`。
+- 只是临时兼容旧写法：
+  - 可以用 `invoke()`、`stream()`、`invoke_template()`、`stream_template()`。
 
-`ModelClient` 负责三件事：
+优先记住这条主线就够了：
 
-- 把 `RoutedModel` 构造成 LangChain `BaseChatModel`
-- 组装 LCEL runnable
-- 通过统一执行入口运行 runnable
-
-推荐调用顺序是：
-
-1. 用 `get_chat_model()` 拿到底层 `BaseChatModel`
-2. 或用 `get_runnable()` 组装 `prompt -> model -> parser` 链
-3. 再用 `invoke_runnable()` / `stream_runnable()` 执行
-
-如果上游还没迁移完，也可以继续使用：
-
-- `invoke_template()`
-- `stream_template()`
-- `invoke()`
-- `stream()`
-
-但这些方法只是对 runnable 路径的兼容封装，不再是主设计中心。
-
-## 当前设计边界
-
-- 这层已经把“模型路由”和“模型执行”拆开
-- 当前默认工厂仍是 `langchain_openai.ChatOpenAI`
-- `provider` 字段已进入路由结果，但当前执行仍走 OpenAI-compatible 路线
-
-因此它现在更准确的定位是：
-
-- “复杂度驱动的 OpenAI-compatible LangChain 执行层”
-- 不是“完整的多 Provider 模型抽象层”
-
-## 对调用方的建议
-
-- 如果你在写新链路，优先使用 `get_chat_model()` / `get_runnable()`
-- 如果你在迁移旧链路，可以暂时保留 `invoke_template()` / `stream_template()`
-- 如果你要做 memory/history，应该在上游 runtime 或 LangGraph 层完成，不要塞回 `platform.models`
+```text
+complexity -> RoutedModel -> ChatOpenAI/BaseChatModel -> Runnable -> invoke/stream
+```
