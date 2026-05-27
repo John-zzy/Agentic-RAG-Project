@@ -311,6 +311,32 @@ def test_scene_definitions_declare_explicit_retrieval_policies() -> None:
         assert policy.rerank_top_n is None
 
 
+def test_ecommerce_semantic_tool_filters_low_relevance_results() -> None:
+    knowledge_service = FakeKnowledgeService()
+    knowledge_service._products = [
+        VectorSearchResult(
+            document=VectorStoreDocument(
+                id="P-low",
+                content="AeroPhone X 低相关商品片段",
+                metadata={"product_id": "P-low", "name": "AeroPhone X"},
+            ),
+            score=0.5,
+        )
+    ]
+    tool = build_semantic_retrieval_tool(
+        knowledge_service,
+        namespace="products",
+        tool_name="product_semantic_search",
+        description="Search products.",
+    )
+
+    result = tool.retrieve("aerophone x", min_relevance_score=DOCUMENT_MINIMUM_RELEVANCE)
+
+    assert result.records == []
+    assert result.documents == []
+    assert result.citations == []
+
+
 def test_ecommerce_scene_definition_resolves_candidate_tools_from_generic_docs_first_chain() -> None:
     app_settings, knowledge_service = _build_knowledge_service("scene-ecommerce-candidate-tools")
     definition = build_ecommerce_scene_definition(

@@ -170,7 +170,7 @@ class SemanticRetrievalTool(RetrievalTool):
         rerank_top_n: int | None = None,
     ) -> RetrievalResult:
         """从指定知识库执行语义检索并返回标准化结果。"""
-        del run_manager, min_relevance_score, rerank_top_n
+        del run_manager, rerank_top_n
         resolved_top_k = top_k or self.default_top_k
         logger.info(
             "Semantic retrieval started: tool=%s, namespace=%s, query=%r, top_k=%s",
@@ -180,7 +180,10 @@ class SemanticRetrievalTool(RetrievalTool):
             resolved_top_k,
         )
         search_func = getattr(self.knowledge_service, self.search_method)
-        vector_results = search_func(query=query, top_k=resolved_top_k)
+        vector_results = _filter_vector_results_by_min_relevance(
+            search_func(query=query, top_k=resolved_top_k),
+            min_relevance_score,
+        )
         
         if self.namespace == "products" and self.product_store:
             vector_results = _inject_named_product_match(query, vector_results, self.product_store)
@@ -854,6 +857,20 @@ def _average_score(records: list[dict[str, Any]]) -> float | None:
     if not scores:
         return None
     return sum(scores) / len(scores)
+
+
+def _filter_vector_results_by_min_relevance(
+    results: list[VectorSearchResult],
+    minimum_relevance: float | None,
+) -> list[VectorSearchResult]:
+    """按 scene 阈值过滤低相关语义结果。"""
+    if minimum_relevance is None:
+        return results
+    return [
+        result
+        for result in results
+        if result.score is None or float(result.score) >= minimum_relevance
+    ]
 
 
 def _to_tool_result(retrieval_result: RetrievalResult) -> ToolResult:
