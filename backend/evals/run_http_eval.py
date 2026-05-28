@@ -12,13 +12,23 @@ from typing import Any
 from urllib import error, parse, request
 from uuid import uuid4
 
-
 ROOT_DIR = Path(__file__).resolve().parents[2]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+
+from backend.evals.retrieval_metrics import (
+    compute_retrieval_benchmark_metrics,
+    qrels_list_to_mapping,
+)
+from backend.evals.retrieval_probe import run_retrieval_probe
+
+
 EVALS_DIR = Path(__file__).resolve().parent
 SAMPLES_DIR = EVALS_DIR / "samples"
 FIXTURES_DIR = EVALS_DIR / "fixtures"
+QRELS_DIR = EVALS_DIR / "qrels"
 DEFAULT_OUTPUT = ROOT_DIR / "backend" / "data" / "evals" / "latest.json"
-EVAL_FILE_PREFIX = "eval-harness-"
+EVAL_FILE_PREFIXES = ("eval-harness-", "eval-benchmark-")
 
 
 class EvalRuntimeError(RuntimeError):
@@ -443,9 +453,21 @@ def _validate_manifest(sample_set: dict[str, Any]) -> None:
         raise EvalRuntimeError("Sample set must define a non-empty samples list.")
 
 
+def _load_qrels(sample_set: dict[str, Any]) -> dict[str, Any] | None:
+    qrels_path = sample_set.get("qrels_path")
+    if not qrels_path:
+        return None
+    resolved = QRELS_DIR / str(qrels_path)
+    if not resolved.exists():
+        raise EvalRuntimeError(f"Qrels file not found: {resolved}")
+    return _read_json(resolved)
+
+
 def _build_fixture_upload_content(sample_set: dict[str, Any], fixture_path: Path) -> str:
     """Append sample anchors so HTTP eval fixtures match the replay language."""
     content = fixture_path.read_text(encoding="utf-8").strip()
+    if sample_set.get("append_eval_anchors") is False:
+        return content
     anchors: list[str] = []
     for sample in sample_set["samples"]:
         if sample.get("source_doc") != fixture_path.name:
@@ -473,7 +495,7 @@ def _cleanup_eval_files(base_url: str) -> None:
     files = payload.get("files", []) if isinstance(payload, dict) else []
     for item in files:
         filename = item.get("filename")
-        if isinstance(filename, str) and filename.startswith(EVAL_FILE_PREFIX):
+        if isinstance(filename, str) and filename.startswith(EVAL_FILE_PREFIXES):
             encoded = parse.quote(filename, safe="")
             _request_json(method="DELETE", url=f"{base_url}/files/{encoded}")
 
@@ -488,7 +510,7 @@ def _cleanup_eval_documents(base_url: str, namespace: str) -> None:
         document_id = item.get("document_id")
         source_path = item.get("source_path")
         source_name = Path(source_path).name if isinstance(source_path, str) else ""
-        if isinstance(document_id, str) and source_name.startswith(EVAL_FILE_PREFIX):
+        if isinstance(document_id, str) and source_name.startswith(EVAL_FILE_PREFIXES):
             encoded = parse.quote(document_id, safe="")
             _request_json(method="DELETE", url=f"{base_url}/knowledge/documents/{encoded}")
 
@@ -991,6 +1013,253 @@ def _build_stream_evidence_table(results: list[dict[str, Any]]) -> str:
     )
 
 
+def _build_effect_conclusion(summary: dict[str, Any], results: list[dict[str, Any]]) -> str:
+    no_hit = next((item for item in results if item.get("sample_id") == "no_hit_fallback"), None)
+    no_hit_ok = bool(no_hit and no_hit.get("passed") is True)
+    all_clear = (
+        summary["failed_samples"] == 0
+        and summary["completion_rate"] == 1.0
+        and summary["expected_source_hit_rate"] == 1.0
+        and summary["answer_keyword_hit_rate"] == 1.0
+        and summary["stream_pass_rate"] == 1.0
+        and no_hit_ok
+    )
+    if all_clear:
+        return (
+            "结论：当前 `generic_assistant + documents` 在 minimal 固定样本集上通过最小 RAG "
+            f"回归评测。{summary['passed_samples']}/{summary['total_samples']} 条样本通过；"
+            "命中类问题能返回预期来源和最小正确答案；no-hit 问题没有返回伪引用；"
+            "stream=true 与普通响应的关键语义一致。"
+        )
+    return (
+        "结论：当前回放不能作为 RAG 主链通过证据。存在样本失败、接口错误、预期来源未命中、"
+        "答案关键词未命中、no-hit 边界失败或 stream=true 语义不一致。请优先查看失败样本和 latest.json 中的 assertions。"
+    )
+
+
+def _build_effect_metrics_table(summary: dict[str, Any], results: list[dict[str, Any]]) -> str:
+    no_hit = next((item for item in results if item.get("sample_id") == "no_hit_fallback"), None)
+    no_hit_pass = no_hit.get("passed") is True if no_hit else False
+    rows = [
+        ["Regression Gate", "Sample Pass Rate", "样本断言通过率", _format_rate(summary["sample_pass_rate"]), f"{summary['passed_samples']}/{summary['total_samples']} samples passed"],
+        ["Retrieval Quality", "Expected Source Hit Rate", "预期来源命中率", _format_rate(summary["expected_source_hit_rate"]), "citation 指向目标 fixture"],
+        ["Generation Quality", "Answer Keyword Hit Rate", "答案关键词命中率", _format_rate(summary["answer_keyword_hit_rate"]), "答案满足样本最小语义约束"],
+        ["Faithfulness Boundary", "No-hit Fallback Correctness", "无命中回退正确性", "pass" if no_hit_pass else "fail", "无可靠资料时不返回 citations"],
+        ["System Reliability", "Completion Rate", "HTTP 回放完成率", _format_rate(summary["completion_rate"]), f"{summary['successful_calls']}/{summary['total_samples']} calls succeeded"],
+        ["Streaming Consistency", "Stream Pass Rate", "SSE 回放通过率", _format_rate(summary["stream_pass_rate"]), f"{summary['stream_passed_samples']}/{summary['stream_samples']} stream samples passed"],
+    ]
+    return _render_console_table(["dimension", "metric", "中文说明", "value", "evidence"], rows)
+
+
+def _expected_source_required_count(results: list[dict[str, Any]]) -> int:
+    return sum(
+        1
+        for item in results
+        if item.get("status") == "ok" and item.get("target", {}).get("citation_source_name")
+    )
+
+
+def _current_retrieval_quality_table(summary: dict[str, Any], results: list[dict[str, Any]]) -> str:
+    no_hit = next((item for item in results if item.get("sample_id") == "no_hit_fallback"), None)
+    no_hit_clean = bool(
+        no_hit
+        and no_hit.get("observed", {}).get("knowledge_used") is False
+        and no_hit.get("observed", {}).get("citations") == []
+    )
+    source_required = _expected_source_required_count(results)
+    rows = [
+        [
+            "Expected Source Hit Rate",
+            "预期来源命中率",
+            _format_rate(summary["expected_source_hit_rate"]),
+            f"{summary['expected_source_hits']}/{source_required}",
+            "命中样本的 citation 指向目标 fixture；当前最接近检索相关性判断。",
+        ],
+        [
+            "Citation Presence Rate",
+            "引用出现率",
+            _format_rate(summary["citation_presence_rate"]),
+            f"{summary['samples_with_citations']}/{summary['successful_calls']}",
+            "观察回答是否携带引用；当前包含 no-hit 样本，因此不是越高越好。",
+        ],
+        [
+            "Knowledge Hit Rate",
+            "知识触发率",
+            _format_rate(summary["knowledge_hit_rate"]),
+            f"{summary['samples_with_knowledge']}/{summary['successful_calls']}",
+            "观察 knowledge_used=true 的比例；用于排查检索链路是否被触发。",
+        ],
+        [
+            "No-hit Pseudo-citation Boundary",
+            "无命中伪引用边界",
+            "pass" if no_hit_clean else "fail",
+            "knowledge_used=false, citations=[]",
+            "确认陌生问题不会被误判为命中文档。",
+        ],
+    ]
+    return _render_console_table(["metric", "中文说明", "value", "evidence", "meaning"], rows)
+
+
+def _current_generation_quality_table(summary: dict[str, Any], results: list[dict[str, Any]]) -> str:
+    rows = [
+        [
+            "Answer Keyword Hit Rate",
+            "答案关键词命中率",
+            _format_rate(summary["answer_keyword_hit_rate"]),
+            f"{summary['answer_keyword_hits']}/{summary['successful_calls']}",
+            "答案包含样本定义的最小正确内容。",
+        ],
+        [
+            "Visible Citation Marker Count",
+            "正文引用标记命中数",
+            str(summary["visible_marker_hits"]),
+            "命中类样本应出现 [1] 等引用标记",
+            "确认结构化 citations 与正文可溯源展示一致。",
+        ],
+        [
+            "Fallback-like Answer Count",
+            "回退语义命中数",
+            str(summary["fallback_like_hits"]),
+            "当前 minimal 中应主要对应 no_hit_fallback",
+            "确认无资料时回答为证据不足，而不是编造答案。",
+        ],
+    ]
+    return _render_console_table(["metric", "中文说明", "value", "evidence", "meaning"], rows)
+
+
+def _current_system_quality_table(summary: dict[str, Any]) -> str:
+    rows = [
+        [
+            "Completion Rate",
+            "HTTP 回放完成率",
+            _format_rate(summary["completion_rate"]),
+            f"{summary['successful_calls']}/{summary['total_samples']}",
+            "确认 /chat 主链可完成调用。",
+        ],
+        [
+            "Error Count",
+            "接口错误数",
+            str(summary["errored_calls"]),
+            "status != ok",
+            "用于区分服务异常和评测断言失败。",
+        ],
+        [
+            "Stream Pass Rate",
+            "SSE 回放通过率",
+            _format_rate(summary["stream_pass_rate"]),
+            f"{summary['stream_passed_samples']}/{summary['stream_samples']}",
+            "确认 stream=true 样本拿到 done 事件并满足最终语义断言。",
+        ],
+    ]
+    return _render_console_table(["metric", "中文说明", "value", "evidence", "meaning"], rows)
+
+
+def _build_dimension_coverage_table() -> str:
+    rows = [
+        [
+            "Retrieval Quality",
+            "检索质量",
+            "预期来源命中、citation 数量、no-hit 不伪引用、retrieval policy evidence",
+            "Precision@k / Recall@k / MRR / NDCG",
+            "需要 qrels 和完整 ranked retrieval list",
+        ],
+        [
+            "Generation Quality",
+            "生成质量",
+            "答案关键词、引用标记、fallback 语义、stream done 一致性",
+            "CR / AR / F 的 judge 或人工评分",
+            "需要 LLM-as-a-judge 或人工评分表",
+        ],
+        [
+            "System Performance",
+            "系统性能",
+            "HTTP 完成率、错误样本数、SSE 是否完成",
+            "延迟分位数、吞吐量、并发错误率",
+            "需要请求计时和压测入口",
+        ],
+    ]
+    return _render_console_table(["dimension", "中文说明", "current coverage", "not yet covered", "next step"], rows)
+
+
+def _build_compact_sample_results_table(results: list[dict[str, Any]]) -> str:
+    rows: list[list[str]] = []
+    for item in results:
+        if item["status"] != "ok":
+            rows.append([
+                item["sample_id"],
+                "no",
+                "-",
+                "-",
+                "-",
+                _stream_status_label(item),
+                _answer_preview("; ".join(item.get("failure_reasons", [])), limit=80),
+            ])
+            continue
+        metrics = item["metrics"]
+        observed = item["observed"]
+        rows.append([
+            item["sample_id"],
+            _yes_no(bool(item.get("passed"))),
+            _yes_no(bool(metrics.get("knowledge_used"))),
+            "yes" if metrics.get("expected_source_seen") else (
+                "n/a" if not item.get("target", {}).get("citation_source_name") else "no"
+            ),
+            str(observed.get("citation_count")),
+            _stream_status_label(item),
+            _answer_preview(str(observed.get("answer_preview", "")), limit=96),
+        ])
+    return _render_console_table(
+        ["sample_id", "pass", "knowledge", "source_hit", "citations", "stream", "answer_preview"],
+        rows,
+    )
+
+
+def _build_pending_development_table() -> str:
+    rows = [
+        [
+            "Retrieval Benchmark",
+            "检索 benchmark",
+            "为样本增加 qrels，保存完整 ranked retrieval list，计算 Precision@k / Recall@k / MRR / NDCG。",
+            "需要确认 qrels 标注粒度：document 级、chunk 级，还是两者都要。",
+        ],
+        [
+            "Generation Quality Judge",
+            "生成质量 judge",
+            "增加 LLM-as-a-judge 或人工评分表，输出 CR / AR / F 评分和原因。",
+            "需要确认评分模型、分值范围、失败阈值和是否允许人工复核。",
+        ],
+        [
+            "Performance Evaluation",
+            "性能评估",
+            "记录请求总耗时、检索耗时、生成耗时、首 token 时间、P95、错误率；必要时增加并发压测。",
+            "需要确认性能目标和运行环境，例如本机、CI 或固定压测环境。",
+        ],
+        [
+            "Benchmark Sample Expansion",
+            "样本集扩展",
+            "新增 benchmark 样本集，覆盖多文档、多跳、相似干扰、冲突文档、无答案、中英文等场景。",
+            "需要确认业务优先级和期望样本规模。",
+        ],
+    ]
+    return _render_console_table(["area", "中文说明", "development item", "needs confirmation"], rows)
+
+
+def _build_failure_focus(results: list[dict[str, Any]]) -> str:
+    failed = [item for item in results if item.get("passed") is not True]
+    if not failed:
+        return "无失败样本。调试明细保留在同目录 `latest.json`。"
+    rows = [
+        [
+            item["sample_id"],
+            item.get("status", "-"),
+            _stream_status_label(item),
+            _answer_preview("; ".join(item.get("failure_reasons", [])), limit=100),
+        ]
+        for item in failed
+    ]
+    return _render_console_table(["sample_id", "status", "stream", "failure"], rows)
+
+
 def _citation_source_names(item: dict[str, Any]) -> list[str]:
     observed = item.get("observed", {})
     citations = observed.get("citations", [])
@@ -1220,68 +1489,254 @@ def _write_markdown_report(*, payload: dict[str, Any], output_path: Path) -> Pat
     lines = [
         "# Evaluation Harness 回放报告",
         "",
-        "## Executive Summary",
+        "## Conclusion",
         "",
         f"- run_id: `{payload['run_id']}`",
         f"- executed_at: `{payload['executed_at']}`",
         f"- base_url: `{payload['base_url']}`",
         f"- sample_set: `{payload['sample_set']}`",
-        f"- result: `{summary['passed_samples']}/{summary['total_samples']} samples passed`, `{summary['failed_samples']} failed`",
         "",
-        "本报告用于证明 `generic_assistant + documents` 主链的最小可信回归能力：知识命中样本应返回正确来源，no-hit 样本必须不返回伪引用。",
-        "报告中的 `pass` 来自脚本断言，不依赖 LLM-as-a-judge。",
+        _build_effect_conclusion(summary, results),
         "",
-        "## KPI Overview",
+        "报告中的 `pass` 来自固定断言，不依赖 LLM-as-a-judge。它适合作为最小回归门禁，不等同于完整 RAG benchmark。",
         "",
-        _build_kpi_table(summary),
+        "## Current Scorecard",
         "",
-        "## Count Comparison",
+        _build_effect_metrics_table(summary, results),
         "",
-        _build_count_comparison_table(summary),
+        "## Retrieval Quality",
         "",
-        "## Sample Evidence",
+        _current_retrieval_quality_table(summary, results),
         "",
-        _build_sample_evidence_table(results),
+        "## Retrieval Benchmark Metrics",
         "",
-        "## no-hit Fallback Boundary",
+        _build_retrieval_benchmark_section(payload),
+        "",
+        "## Retrieval Benchmark Samples",
+        "",
+        _build_retrieval_sample_metrics_table(results),
+        "",
+        "## Generation Quality",
+        "",
+        _current_generation_quality_table(summary, results),
+        "",
+        "## System Quality",
+        "",
+        _current_system_quality_table(summary),
+        "",
+        "## Sample Results",
+        "",
+        _build_compact_sample_results_table(results),
+        "",
+        "## no-hit Boundary",
         "",
         _build_no_hit_boundary_table(results),
         "",
-        "## SSE Stream Evidence",
+        "## SSE Evidence",
         "",
         _build_stream_evidence_table(results),
         "",
-        "## Assertion Matrix",
+        "## Failure Focus",
         "",
-        _build_assertion_matrix(results),
+        _build_failure_focus(results),
         "",
-        "## Field Guide",
+        "## Benchmark Gaps",
         "",
-        _build_metrics_table(summary),
+        _build_dimension_coverage_table(),
         "",
-        "## Raw Sample Table",
+        "## Pending Development Items",
         "",
-        _build_sample_table(results),
-        "",
-        "## How To Read",
-        "",
-        "1. 先看 `KPI Overview`，确认样本断言通过率、来源命中率、SSE 回放通过率和 no-hit 边界是否正常。",
-        "2. 再看 `no-hit Fallback Boundary`，确认 `knowledge_used=false`、`citations=[]` 和 fallback 语义同时成立。",
-        "3. 查看 `SSE Stream Evidence`，确认 stream=true 样本拿到 `done` 事件、`chunk` 事件和最终结构化字段。",
-        "4. 如果失败，直接看 `Assertion Matrix` 的 `expected`、`actual` 和 `pass` 列定位普通响应异常；看 `SSE Stream Evidence` 定位流式异常。",
-        "5. `Raw Sample Table` 保留原始逐样本视图，方便和 `latest.json` 交叉核对。",
-        "",
-        "## Demo Narrative",
-        "",
-        "这套 Evaluation Harness 不是做大而全 benchmark，而是先把通用文档 RAG 的最小可验证闭环固定下来。",
-        "本次回放覆盖 3 条文档命中样本和 1 条 no-hit fallback 边界样本，并对关键样本执行 stream=true SSE 回放。",
-        "文档命中样本证明引用来源、正文引用标记和答案关键词约束同时成立；no-hit 样本证明系统在没有可靠资料时不会返回伪引用。",
-        "SSE 回放以 `done` 事件作为最终权威结果，验证流式路径与普通响应路径在 `knowledge_used`、`citations` 和答案基础断言上的一致性。",
-        "后续如果调整 ReRank、query rewrite、检索阈值或 citation 组装逻辑，只要 no-hit 又返回 citations，`Assertion Matrix` 会直接暴露实际异常值，脚本也会失败退出。",
+        _build_pending_development_table(),
         "",
     ]
     report_path.write_text("\n".join(lines), encoding="utf-8")
     return report_path
+
+
+def _build_retrieval_benchmark_section(payload: dict[str, Any]) -> str:
+    benchmark = payload.get("retrieval_benchmark")
+    if not isinstance(benchmark, dict):
+        return "_No qrels-driven retrieval benchmark metrics for this run._"
+    aggregate = benchmark.get("aggregate_metrics", {})
+    if not isinstance(aggregate, dict):
+        return "_Retrieval benchmark metrics are unavailable._"
+    rows = [
+        ["hit_sample_count", str(aggregate.get("hit_sample_count", 0)), "参与核心 IR 平均的有答案样本数"],
+        ["no_hit_sample_count", str(aggregate.get("no_hit_sample_count", 0)), "仅参与误召回率统计的 no-hit 样本数"],
+        ["mrr", f"{float(aggregate.get('mrr', 0.0)):.4f}", "首个相关 chunk 的倒数排名均值"],
+        [
+            "expected_document_hit",
+            f"{float(aggregate.get('expected_document_hit', 0.0)):.4f}",
+            "是否命中任一预期文档的均值",
+        ],
+        [
+            "no_hit_false_positive_rate",
+            f"{float(aggregate.get('no_hit_false_positive_rate', 0.0)):.4f}",
+            "no-hit 样本仍返回 ranked chunk 的比例",
+        ],
+    ]
+    for metric_name in ("precision_at_k", "recall_at_k", "ndcg_at_k", "document_recall_at_k"):
+        metric = aggregate.get(metric_name, {})
+        if not isinstance(metric, dict):
+            continue
+        for key in sorted(metric, key=lambda value: int(value)):
+            rows.append([f"{metric_name}@{key}", f"{float(metric[key]):.4f}", "qrels 对齐后的聚合指标"])
+    return _render_console_table(["metric", "value", "meaning"], rows)
+
+
+def _build_retrieval_sample_metrics_table(results: list[dict[str, Any]]) -> str:
+    rows: list[list[str]] = []
+    for item in results:
+        retrieval = item.get("retrieval")
+        if not isinstance(retrieval, dict):
+            continue
+        metrics = retrieval.get("metrics", {})
+        if not isinstance(metrics, dict):
+            continue
+        rows.append(
+            [
+                item["sample_id"],
+                str(metrics.get("deduped_ranked_count", 0)),
+                str(metrics.get("is_no_hit")),
+                _metric_at(metrics, "recall_at_k", "5"),
+                _metric_at(metrics, "ndcg_at_k", "5"),
+                str(metrics.get("expected_document_hit")),
+                str(metrics.get("no_hit_false_positive")),
+                _answer_preview("; ".join(retrieval.get("failure_reasons", [])), limit=80),
+            ]
+        )
+    if not rows:
+        return "_No retrieval sample metrics for this run._"
+    return _render_console_table(
+        ["sample_id", "ranked", "no_hit", "recall@5", "ndcg@5", "doc_hit", "false_positive", "failure"],
+        rows,
+    )
+
+
+def _metric_at(metrics: dict[str, Any], metric_name: str, k: str) -> str:
+    value = metrics.get(metric_name, {}).get(k) if isinstance(metrics.get(metric_name), dict) else None
+    if value is None:
+        return "n/a"
+    return f"{float(value):.4f}"
+
+
+def _attach_retrieval_benchmark_results(
+    *,
+    sample_set: dict[str, Any],
+    qrels_payload: dict[str, Any] | None,
+    results: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    if qrels_payload is None:
+        return None
+    qrels_by_sample_id = qrels_list_to_mapping(qrels_payload)
+    allowed_source_docs = [
+        str(fixture["filename"])
+        for fixture in sample_set.get("fixtures", [])
+        if isinstance(fixture, dict) and fixture.get("filename") is not None
+    ]
+    probe_payload = run_retrieval_probe(
+        samples=sample_set["samples"],
+        allowed_source_docs=allowed_source_docs,
+    )
+    probe_by_sample_id = {
+        str(item.get("sample_id")): item
+        for item in probe_payload.get("samples", [])
+        if isinstance(item, dict) and item.get("sample_id") is not None
+    }
+    ranked_lists_by_sample_id = {
+        sample_id: probe_by_sample_id.get(sample_id, {}).get("ranked_list", [])
+        for sample_id in qrels_by_sample_id
+    }
+    metrics_payload = compute_retrieval_benchmark_metrics(
+        qrels_by_sample_id=qrels_by_sample_id,
+        ranked_lists_by_sample_id=ranked_lists_by_sample_id,
+    )
+    for item in results:
+        sample_id = str(item["sample_id"])
+        probe_sample = probe_by_sample_id.get(sample_id, {})
+        retrieval_failure_reasons = list(probe_sample.get("failure_reasons", []))
+        item["retrieval"] = {
+            "qrels": qrels_by_sample_id.get(sample_id, {}),
+            "ranked_list": list(probe_sample.get("ranked_list", [])),
+            "metrics": metrics_payload["samples"].get(sample_id, {}),
+            "failure_reasons": retrieval_failure_reasons,
+        }
+        if retrieval_failure_reasons:
+            item.setdefault("failure_reasons", []).extend(
+                f"retrieval_probe.{reason}" for reason in retrieval_failure_reasons
+            )
+            item["passed"] = False
+    return {
+        "qrels": qrels_payload,
+        "probe": probe_payload,
+        "sample_metrics": metrics_payload["samples"],
+        "aggregate_metrics": metrics_payload["aggregate"],
+    }
+
+
+def _write_eval_artifacts(*, payload: dict[str, Any], output_path: Path) -> None:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    latest_path = output_path.parent / "latest.json"
+    if output_path.resolve() != latest_path.resolve():
+        latest_path.parent.mkdir(parents=True, exist_ok=True)
+        latest_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    _write_run_artifact(payload, evals_dir=output_path.parent)
+
+
+def _write_run_artifact(payload: dict[str, Any], *, evals_dir: Path) -> None:
+    runs_dir = evals_dir / "runs"
+    runs_dir.mkdir(parents=True, exist_ok=True)
+    run_path = runs_dir / f"{payload['run_id']}.json"
+    run_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    _update_run_index(payload=payload, run_path=run_path)
+
+
+def _update_run_index(*, payload: dict[str, Any], run_path: Path) -> None:
+    index_path = run_path.parent / "index.json"
+    existing: dict[str, Any] = {"runs": []}
+    if index_path.exists():
+        try:
+            existing = _read_json(index_path)
+        except json.JSONDecodeError:
+            existing = {"runs": []}
+    runs = [
+        item
+        for item in existing.get("runs", [])
+        if isinstance(item, dict) and item.get("run_id") != payload.get("run_id")
+    ]
+    runs.insert(0, _build_run_index_entry(payload=payload, run_path=run_path))
+    index_path.write_text(
+        json.dumps({"runs": runs[:100]}, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
+def _build_run_index_entry(*, payload: dict[str, Any], run_path: Path) -> dict[str, Any]:
+    summary = payload.get("summary", {})
+    benchmark = payload.get("retrieval_benchmark", {})
+    aggregate = benchmark.get("aggregate_metrics", {}) if isinstance(benchmark, dict) else {}
+    return {
+        "run_id": payload.get("run_id"),
+        "sample_set": payload.get("sample_set"),
+        "status": "failed" if payload.get("error") else "succeeded",
+        "executed_at": payload.get("executed_at"),
+        "base_url": payload.get("base_url"),
+        "json_path": str(run_path),
+        "report_path": payload.get("report_path"),
+        "summary": {
+            "total_samples": summary.get("total_samples", 0),
+            "passed_samples": summary.get("passed_samples", 0),
+            "failed_samples": summary.get("failed_samples", 0),
+            "sample_pass_rate": summary.get("sample_pass_rate", 0.0),
+            "retrieval_mrr": aggregate.get("mrr") if isinstance(aggregate, dict) else None,
+            "no_hit_false_positive_rate": (
+                aggregate.get("no_hit_false_positive_rate")
+                if isinstance(aggregate, dict)
+                else None
+            ),
+        },
+    }
 
 
 def run_eval(
@@ -1290,12 +1745,14 @@ def run_eval(
     sample_set_name: str,
     output_path: Path,
     compare_to: Path | None = None,
+    run_id: str | None = None,
 ) -> dict[str, Any]:
     sample_path = SAMPLES_DIR / f"{sample_set_name}.json"
     if not sample_path.exists():
         raise EvalRuntimeError(f"Sample set not found: {sample_path}")
     sample_set = _read_json(sample_path)
     _validate_manifest(sample_set)
+    qrels_payload = _load_qrels(sample_set)
 
     _log(f"Checking health endpoint: {base_url}/health")
     health = _request_json(method="GET", url=f"{base_url}/health")
@@ -1364,17 +1821,24 @@ def run_eval(
             }
 
     results = [results_by_sample_id[sample["sample_id"]] for sample in sample_set["samples"]]
+    _log("Running qrels-driven retrieval probe") if qrels_payload is not None else None
+    retrieval_benchmark = _attach_retrieval_benchmark_results(
+        sample_set=sample_set,
+        qrels_payload=qrels_payload,
+        results=results,
+    )
 
     payload = {
-        "run_id": uuid4().hex,
+        "run_id": run_id or uuid4().hex,
         "executed_at": _now_iso(),
         "base_url": base_url,
         "sample_set": sample_set_name,
         "summary": _build_summary(results),
         "results": results,
     }
+    if retrieval_benchmark is not None:
+        payload["retrieval_benchmark"] = retrieval_benchmark
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     report_path = _write_markdown_report(payload=payload, output_path=output_path)
     payload["report_path"] = str(report_path)
     if compare_to is not None:
@@ -1383,6 +1847,7 @@ def run_eval(
             candidate_payload=payload,
             output_path=output_path,
         )
+    _write_eval_artifacts(payload=payload, output_path=output_path)
     return payload
 
 

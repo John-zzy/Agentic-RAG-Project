@@ -323,6 +323,12 @@ Evaluation Harness 基础版：
 backend\.venv\Scripts\python.exe backend\evals\run_http_eval.py --base-url http://127.0.0.1:8000 --sample-set minimal --output backend\data\evals\latest.json
 ```
 
+检索 benchmark：
+
+```powershell
+backend\.venv\Scripts\python.exe backend\evals\run_http_eval.py --base-url http://127.0.0.1:8000 --sample-set retrieval_benchmark --output backend\data\evals\latest.json
+```
+
 baseline / candidate 对比：
 
 ```powershell
@@ -336,6 +342,9 @@ backend\.venv\Scripts\python.exe backend\evals\run_http_eval.py --base-url http:
 - 该命令要求本地后端已启动，并且 `backend\.env` 中已配置真实模型 API Key
 - 评测结果会写入 `backend\data\evals\latest.json`
 - 同时会生成可直接展示的表格报告 `backend\data\evals\latest.md`
+- 每次运行会额外写入 `backend\data\evals\runs\<run_id>.json` 并更新 `backend\data\evals\runs\index.json`
+- `retrieval_benchmark` 会基于 qrels 和 safe ranked list 输出 Precision@k、Recall@k、MRR、NDCG@k、document recall 和 no-hit false positive rate
+- 后端提供 `/evals/latest`、`/evals/runs`、`/evals/runs/{run_id}`、`/evals/runs/{run_id}/status` 和 `POST /evals/runs`，供 UI 读取 artifact 或后台触发 allowlist 内的 eval
 - 传入 `--compare-to` 时会额外生成 `*.compare.json` 和 `*.compare.md`，按 `sample_id` 对比 pass 状态、`knowledge_used`、citation 数量、citation 来源、no-hit 空 citation 语义、SSE 结果和 policy evidence
 - `minimal` 样本集固定包含 `no_hit_fallback`，用于回归验证 no-hit 时必须返回 `knowledge_used=false` 且 `citations=[]`
 - `minimal` 样本集会对关键样本执行 `stream=true` SSE 回放，报告中的 `SSE Stream Evidence` 用于确认 `done` 事件、`chunk` 事件和最终引用语义

@@ -1,0 +1,223 @@
+{
+  "sample_set": "retrieval_benchmark",
+  "description": "Qrels-driven retrieval benchmark for generic_assistant + documents.",
+  "namespace": "documents",
+  "append_eval_anchors": false,
+  "qrels_path": "retrieval_benchmark.json",
+  "fixtures": [
+    {
+      "id": "benchmark_quickstart",
+      "filename": "eval-benchmark-quickstart.md"
+    },
+    {
+      "id": "benchmark_security_policy",
+      "filename": "eval-benchmark-security-policy.md"
+    },
+    {
+      "id": "benchmark_support_faq",
+      "filename": "eval-benchmark-support-faq.md"
+    },
+    {
+      "id": "benchmark_release_runbook",
+      "filename": "eval-benchmark-release-runbook.md"
+    },
+    {
+      "id": "benchmark_access_control",
+      "filename": "eval-benchmark-access-control.md"
+    }
+  ],
+  "samples": [
+    {
+      "sample_id": "quickstart_python_version",
+      "query": "开始使用前需要安装哪个 Python 版本？",
+      "source_doc": "eval-benchmark-quickstart.md",
+      "expected": {
+        "knowledge_used": true,
+        "answer_contains_all": ["Python 3.11"],
+        "min_citations": 1,
+        "citation_source_name": "eval-benchmark-quickstart.md",
+        "requires_visible_marker": true
+      }
+    },
+    {
+      "sample_id": "quickstart_env_file_steps",
+      "query": "首次运行前 env 文件应该怎么准备？",
+      "source_doc": "eval-benchmark-quickstart.md",
+      "expected": {
+        "knowledge_used": true,
+        "answer_contains_any": ["backend/.env", "backend/.env.example"],
+        "min_citations": 1,
+        "citation_source_name": "eval-benchmark-quickstart.md",
+        "requires_visible_marker": true
+      }
+    },
+    {
+      "sample_id": "quickstart_startup_chain",
+      "query": "本地启动服务并验证可用的步骤是什么？",
+      "source_doc": "eval-benchmark-quickstart.md",
+      "expected": {
+        "knowledge_used": true,
+        "answer_contains_any": ["backend/run.py", "/health"],
+        "min_citations": 1,
+        "citation_source_name": "eval-benchmark-quickstart.md",
+        "requires_visible_marker": true
+      }
+    },
+    {
+      "sample_id": "quickstart_python_version_en",
+      "query": "Which Python version is required before running the backend locally?",
+      "source_doc": "eval-benchmark-quickstart.md",
+      "expected": {
+        "knowledge_used": true,
+        "answer_contains_all": ["Python 3.11"],
+        "min_citations": 1,
+        "citation_source_name": "eval-benchmark-quickstart.md",
+        "requires_visible_marker": true
+      }
+    },
+    {
+      "sample_id": "security_mfa_requirement",
+      "query": "远程访问公司系统时每次登录需要什么认证要求？",
+      "source_doc": "eval-benchmark-security-policy.md",
+      "expected": {
+        "knowledge_used": true,
+        "answer_contains_any": ["MFA", "多因素"],
+        "min_citations": 1,
+        "citation_source_name": "eval-benchmark-security-policy.md",
+        "requires_visible_marker": true
+      }
+    },
+    {
+      "sample_id": "security_device_encryption",
+      "query": "公司数据可以存放在什么类型的设备上？",
+      "source_doc": "eval-benchmark-security-policy.md",
+      "expected": {
+        "knowledge_used": true,
+        "answer_contains_any": ["managed devices", "disk encryption"],
+        "min_citations": 1,
+        "citation_source_name": "eval-benchmark-security-policy.md",
+        "requires_visible_marker": true
+      }
+    },
+    {
+      "sample_id": "support_standard_sla",
+      "query": "普通支持请求通常多久会得到首次响应？",
+      "source_doc": "eval-benchmark-support-faq.md",
+      "expected": {
+        "knowledge_used": true,
+        "answer_contains_any": ["1 business day", "1 个工作日"],
+        "min_citations": 1,
+        "citation_source_name": "eval-benchmark-support-faq.md",
+        "requires_visible_marker": true
+      }
+    },
+    {
+      "sample_id": "support_urgent_triage",
+      "query": "紧急生产事故会如何分流？",
+      "source_doc": "eval-benchmark-support-faq.md",
+      "expected": {
+        "knowledge_used": true,
+        "answer_contains_any": ["triaged immediately", "立即"],
+        "min_citations": 1,
+        "citation_source_name": "eval-benchmark-support-faq.md",
+        "requires_visible_marker": true
+      }
+    },
+    {
+      "sample_id": "support_response_vs_escalation",
+      "query": "普通响应时间和升级工单需要提供的信息分别是什么？",
+      "source_doc": "eval-benchmark-support-faq.md",
+      "expected": {
+        "knowledge_used": true,
+        "answer_contains_any": ["1 business day", "affected system", "impact summary"],
+        "min_citations": 1,
+        "citation_source_name": "eval-benchmark-support-faq.md",
+        "requires_visible_marker": true
+      }
+    },
+    {
+      "sample_id": "release_precheck_tests",
+      "query": "发布前需要确认自动化测试和数据库迁移的哪些事项？",
+      "source_doc": "eval-benchmark-release-runbook.md",
+      "expected": {
+        "knowledge_used": true,
+        "answer_contains_any": ["automated tests", "rollback plan"],
+        "min_citations": 1,
+        "citation_source_name": "eval-benchmark-release-runbook.md",
+        "requires_visible_marker": true
+      }
+    },
+    {
+      "sample_id": "release_incident_chain",
+      "query": "发布阻塞关键用户流程时应该如何处理到回滚后验证？",
+      "source_doc": "eval-benchmark-release-runbook.md",
+      "expected": {
+        "knowledge_used": true,
+        "answer_contains_any": ["pause rollout", "rollback", "smoke tests"],
+        "min_citations": 1,
+        "citation_source_name": "eval-benchmark-release-runbook.md",
+        "requires_visible_marker": true
+      }
+    },
+    {
+      "sample_id": "release_smoke_test_targets",
+      "query": "发布后烟测需要覆盖哪些接口？",
+      "source_doc": "eval-benchmark-release-runbook.md",
+      "expected": {
+        "knowledge_used": true,
+        "answer_contains_any": ["/health", "/docs", "/chat"],
+        "min_citations": 1,
+        "citation_source_name": "eval-benchmark-release-runbook.md",
+        "requires_visible_marker": true
+      }
+    },
+    {
+      "sample_id": "access_auth_vs_permission",
+      "query": "内部工具认证要求和新权限审批要求有什么区别？",
+      "source_doc": "eval-benchmark-access-control.md",
+      "expected": {
+        "knowledge_used": true,
+        "answer_contains_any": ["SSO", "MFA", "manager approval", "system owner approval"],
+        "min_citations": 1,
+        "citation_source_name": "eval-benchmark-access-control.md",
+        "requires_visible_marker": true
+      }
+    },
+    {
+      "sample_id": "access_quarterly_review",
+      "query": "系统负责人多久复核一次访问列表？",
+      "source_doc": "eval-benchmark-access-control.md",
+      "expected": {
+        "knowledge_used": true,
+        "answer_contains_any": ["quarter", "季度"],
+        "min_citations": 1,
+        "citation_source_name": "eval-benchmark-access-control.md",
+        "requires_visible_marker": true
+      }
+    },
+    {
+      "sample_id": "no_hit_secret_token",
+      "query": "VOID-OMEGA-9911 secret token rotation rule?",
+      "source_doc": null,
+      "expected": {
+        "knowledge_used": false,
+        "answer_contains_any": ["无法找到", "未找到", "缺乏相关", "证据不足"],
+        "max_citations": 0,
+        "citations_empty": true,
+        "requires_visible_marker": false
+      }
+    },
+    {
+      "sample_id": "no_hit_store_shelf_count",
+      "query": "门店咖啡豆货架余量今天还有多少？",
+      "source_doc": null,
+      "expected": {
+        "knowledge_used": false,
+        "answer_contains_any": ["无法找到", "未找到", "缺乏相关", "证据不足"],
+        "max_citations": 0,
+        "citations_empty": true,
+        "requires_visible_marker": false
+      }
+    }
+  ]
+}

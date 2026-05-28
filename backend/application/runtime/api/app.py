@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from backend.application.runtime.api.chat.routes import router as api_router
+from backend.application.runtime.api.evals.routes import router as evals_router
 from backend.application.runtime.api.file.routes import router as file_router
 from backend.application.runtime.api.knowledge.routes import router as knowledge_document_router
 from backend.application.runtime.bootstrap import bootstrap_runtime
@@ -58,6 +59,7 @@ def create_app(
     app.include_router(api_router)
     app.include_router(knowledge_document_router)
     app.include_router(file_router)
+    app.include_router(evals_router)
     frontend_dir = Path(__file__).resolve().parents[4] / "frontend"
     if frontend_dir.exists():
         app.mount("/frontend", StaticFiles(directory=str(frontend_dir)), name="frontend")

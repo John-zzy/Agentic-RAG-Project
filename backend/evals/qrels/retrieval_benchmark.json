@@ -1,0 +1,155 @@
+{
+  "sample_set": "retrieval_benchmark",
+  "namespace": "documents",
+  "chunker": {
+    "type": "SlidingWindowTextSplitter",
+    "chunk_size": 500,
+    "chunk_overlap": 80
+  },
+  "relevance_scale": {
+    "1": "relevant",
+    "2": "strongly_relevant"
+  },
+  "qrels": [
+    {
+      "sample_id": "quickstart_python_version",
+      "documents": [
+        {"source_doc": "eval-benchmark-quickstart.md", "relevance": 2}
+      ],
+      "chunks": [
+        {"source_doc": "eval-benchmark-quickstart.md", "chunk_index": 0, "relevance": 2}
+      ]
+    },
+    {
+      "sample_id": "quickstart_env_file_steps",
+      "documents": [
+        {"source_doc": "eval-benchmark-quickstart.md", "relevance": 2}
+      ],
+      "chunks": [
+        {"source_doc": "eval-benchmark-quickstart.md", "chunk_index": 0, "relevance": 2}
+      ]
+    },
+    {
+      "sample_id": "quickstart_startup_chain",
+      "documents": [
+        {"source_doc": "eval-benchmark-quickstart.md", "relevance": 2}
+      ],
+      "chunks": [
+        {"source_doc": "eval-benchmark-quickstart.md", "chunk_index": 0, "relevance": 1},
+        {"source_doc": "eval-benchmark-quickstart.md", "chunk_index": 1, "relevance": 2}
+      ]
+    },
+    {
+      "sample_id": "quickstart_python_version_en",
+      "documents": [
+        {"source_doc": "eval-benchmark-quickstart.md", "relevance": 2}
+      ],
+      "chunks": [
+        {"source_doc": "eval-benchmark-quickstart.md", "chunk_index": 0, "relevance": 2}
+      ]
+    },
+    {
+      "sample_id": "security_mfa_requirement",
+      "documents": [
+        {"source_doc": "eval-benchmark-security-policy.md", "relevance": 2}
+      ],
+      "chunks": [
+        {"source_doc": "eval-benchmark-security-policy.md", "chunk_index": 0, "relevance": 2}
+      ]
+    },
+    {
+      "sample_id": "security_device_encryption",
+      "documents": [
+        {"source_doc": "eval-benchmark-security-policy.md", "relevance": 2}
+      ],
+      "chunks": [
+        {"source_doc": "eval-benchmark-security-policy.md", "chunk_index": 0, "relevance": 2}
+      ]
+    },
+    {
+      "sample_id": "support_standard_sla",
+      "documents": [
+        {"source_doc": "eval-benchmark-support-faq.md", "relevance": 2}
+      ],
+      "chunks": [
+        {"source_doc": "eval-benchmark-support-faq.md", "chunk_index": 0, "relevance": 2}
+      ]
+    },
+    {
+      "sample_id": "support_urgent_triage",
+      "documents": [
+        {"source_doc": "eval-benchmark-support-faq.md", "relevance": 2}
+      ],
+      "chunks": [
+        {"source_doc": "eval-benchmark-support-faq.md", "chunk_index": 0, "relevance": 2}
+      ]
+    },
+    {
+      "sample_id": "support_response_vs_escalation",
+      "documents": [
+        {"source_doc": "eval-benchmark-support-faq.md", "relevance": 2}
+      ],
+      "chunks": [
+        {"source_doc": "eval-benchmark-support-faq.md", "chunk_index": 0, "relevance": 2}
+      ]
+    },
+    {
+      "sample_id": "release_precheck_tests",
+      "documents": [
+        {"source_doc": "eval-benchmark-release-runbook.md", "relevance": 2}
+      ],
+      "chunks": [
+        {"source_doc": "eval-benchmark-release-runbook.md", "chunk_index": 0, "relevance": 2}
+      ]
+    },
+    {
+      "sample_id": "release_incident_chain",
+      "documents": [
+        {"source_doc": "eval-benchmark-release-runbook.md", "relevance": 2},
+        {"source_doc": "eval-benchmark-support-faq.md", "relevance": 1}
+      ],
+      "chunks": [
+        {"source_doc": "eval-benchmark-release-runbook.md", "chunk_index": 1, "relevance": 2},
+        {"source_doc": "eval-benchmark-support-faq.md", "chunk_index": 0, "relevance": 1}
+      ]
+    },
+    {
+      "sample_id": "release_smoke_test_targets",
+      "documents": [
+        {"source_doc": "eval-benchmark-release-runbook.md", "relevance": 2}
+      ],
+      "chunks": [
+        {"source_doc": "eval-benchmark-release-runbook.md", "chunk_index": 0, "relevance": 2}
+      ]
+    },
+    {
+      "sample_id": "access_auth_vs_permission",
+      "documents": [
+        {"source_doc": "eval-benchmark-access-control.md", "relevance": 2}
+      ],
+      "chunks": [
+        {"source_doc": "eval-benchmark-access-control.md", "chunk_index": 0, "relevance": 2}
+      ]
+    },
+    {
+      "sample_id": "access_quarterly_review",
+      "documents": [
+        {"source_doc": "eval-benchmark-access-control.md", "relevance": 2}
+      ],
+      "chunks": [
+        {"source_doc": "eval-benchmark-access-control.md", "chunk_index": 0, "relevance": 1},
+        {"source_doc": "eval-benchmark-access-control.md", "chunk_index": 1, "relevance": 2}
+      ]
+    },
+    {
+      "sample_id": "no_hit_secret_token",
+      "documents": [],
+      "chunks": []
+    },
+    {
+      "sample_id": "no_hit_store_shelf_count",
+      "documents": [],
+      "chunks": []
+    }
+  ]
+}

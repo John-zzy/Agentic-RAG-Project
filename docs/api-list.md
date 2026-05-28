@@ -102,6 +102,64 @@
   - `session_id`: 被删除的会话 ID。
   - `deleted_messages`: 被删除的消息数量。
 
+## Evals
+
+统一前缀：`/evals`
+
+### `GET /evals/latest`
+
+- 一句话说明：读取最新 eval artifact 的 UI 安全视图。
+- 主要入参：无。
+- 返回结构：
+  - `run`: sanitized eval run payload。
+- 常见错误：
+  - `404 EVAL_LATEST_NOT_FOUND`: 尚未生成 `backend/data/evals/latest.json`。
+
+### `GET /evals/runs`
+
+- 一句话说明：列出历史 eval run。
+- 主要入参：无。
+- 返回结构：
+  - `runs`: 历史 run 摘要列表；无 `runs/index.json` 时返回空列表。
+
+### `GET /evals/runs/{run_id}`
+
+- 一句话说明：读取指定历史 eval run 的 UI 安全视图。
+- 主要入参：
+  - Path `run_id`: run ID，仅允许普通文件名字符，不允许路径穿越。
+- 返回结构：
+  - `run`: sanitized eval run payload。
+- 常见错误：
+  - `404 EVAL_RUN_NOT_FOUND`: run 不存在或 `run_id` 非法。
+
+### `GET /evals/runs/{run_id}/status`
+
+- 一句话说明：查询后台 eval run 状态。
+- 主要入参：
+  - Path `run_id`: run ID。
+- 返回结构：
+  - `run_id`: run ID。
+  - `sample_set`: 样本集，可为空。
+  - `status`: `queued`、`running`、`succeeded`、`failed` 或 `not_found`。
+  - `started_at`、`finished_at`、`error`: 状态辅助字段。
+
+### `POST /evals/runs`
+
+- 一句话说明：后台触发 allowlist 内的 eval run，默认运行 `retrieval_benchmark`。
+- 主要入参：
+  - Body `sample_set`: 可选，仅允许 `minimal` 或 `retrieval_benchmark`。
+- 返回结构：
+  - 与 status 响应一致，HTTP 状态码为 `202`。
+- 常见错误：
+  - `422 EVAL_SAMPLE_SET_NOT_ALLOWED`: 样本集不在 allowlist。
+  - `409 EVAL_RUN_ALREADY_RUNNING`: 当前进程已有 eval run queued/running。
+
+补充说明：
+
+- `/evals` API 只读取 `backend/data/evals/latest.json`、`backend/data/evals/runs/index.json` 和 `backend/data/evals/runs/<run_id>.json`，不会读取任意路径。
+- API 响应会递归移除 `snippet`、`content`、`prompt`、`reason`、`rewrite_reason`、`raw_fixture_content`、完整 `answer` 等文本字段；CLI artifact 仍可保留完整调试信息。
+- `POST /evals/runs` 的 `base_url` 从当前请求推导，客户端不能传入任意外部 URL。
+
 ## File Management
 
 ### `POST /files/upload`

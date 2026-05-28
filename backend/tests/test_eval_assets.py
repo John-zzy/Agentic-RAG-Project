@@ -10,12 +10,15 @@ from backend.evals.run_http_eval import (
     _parse_sse_events,
     build_comparison_payload,
 )
+from backend.platform.knowledge.documents.chunker import SlidingWindowTextSplitter
+from backend.platform.knowledge.processing.config import DEFAULT_PROCESSING_CHUNK_CONFIG
 
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
 EVALS_DIR = ROOT_DIR / "backend" / "evals"
 SAMPLES_DIR = EVALS_DIR / "samples"
 FIXTURES_DIR = EVALS_DIR / "fixtures"
+QRELS_DIR = EVALS_DIR / "qrels"
 FORBIDDEN_TERMS = ("ecommerce", "product", "inventory", "sku", "商品", "订单", "库存")
 FORBIDDEN_ID_PATTERNS = (
     re.compile(r"\bP\d{3,}\b", re.IGNORECASE),
@@ -86,6 +89,85 @@ def test_minimal_eval_includes_stream_replay_boundaries() -> None:
     assert "no_hit_fallback" in stream_samples
     assert stream_samples["quickstart_setup_requirement"]["expected"]["knowledge_used"] is True
     assert stream_samples["no_hit_fallback"]["expected"]["knowledge_used"] is False
+
+
+def test_retrieval_benchmark_manifest_is_well_formed() -> None:
+    manifest = json.loads((SAMPLES_DIR / "retrieval_benchmark.json").read_text(encoding="utf-8"))
+
+    assert manifest["sample_set"] == "retrieval_benchmark"
+    assert manifest["namespace"] == "documents"
+    assert manifest["append_eval_anchors"] is False
+    assert manifest["qrels_path"] == "retrieval_benchmark.json"
+    assert len(manifest["fixtures"]) == 5
+    assert len(manifest["samples"]) == 16
+
+    fixture_ids = set()
+    fixture_filenames = set()
+    for fixture in manifest["fixtures"]:
+        assert set(fixture) == {"id", "filename"}
+        assert fixture["id"] not in fixture_ids
+        fixture_ids.add(fixture["id"])
+        fixture_filenames.add(fixture["filename"])
+        assert fixture["filename"].startswith("eval-benchmark-")
+        assert (FIXTURES_DIR / fixture["filename"]).exists()
+
+    sample_ids = set()
+    for sample in manifest["samples"]:
+        assert {"sample_id", "query", "source_doc", "expected"} <= set(sample)
+        assert sample["sample_id"] not in sample_ids
+        sample_ids.add(sample["sample_id"])
+        if sample["source_doc"] is not None:
+            assert sample["source_doc"] in fixture_filenames
+            assert sample["expected"]["knowledge_used"] is True
+            assert sample["expected"]["min_citations"] >= 1
+        else:
+            assert sample["expected"]["knowledge_used"] is False
+            assert sample["expected"]["max_citations"] == 0
+            assert sample["expected"]["citations_empty"] is True
+
+
+def test_retrieval_benchmark_qrels_align_with_manifest_and_fixtures() -> None:
+    manifest = json.loads((SAMPLES_DIR / "retrieval_benchmark.json").read_text(encoding="utf-8"))
+    qrels_payload = json.loads((QRELS_DIR / manifest["qrels_path"]).read_text(encoding="utf-8"))
+
+    assert qrels_payload["sample_set"] == manifest["sample_set"]
+    assert qrels_payload["namespace"] == manifest["namespace"]
+
+    fixture_filenames = {fixture["filename"] for fixture in manifest["fixtures"]}
+    sample_by_id = {sample["sample_id"]: sample for sample in manifest["samples"]}
+    qrels_by_sample_id = {item["sample_id"]: item for item in qrels_payload["qrels"]}
+
+    assert set(qrels_by_sample_id) == set(sample_by_id)
+
+    chunker = SlidingWindowTextSplitter(
+        chunk_size=DEFAULT_PROCESSING_CHUNK_CONFIG.chunk_size,
+        chunk_overlap=DEFAULT_PROCESSING_CHUNK_CONFIG.chunk_overlap,
+    )
+    chunk_counts = {
+        filename: len(chunker.split_text((FIXTURES_DIR / filename).read_text(encoding="utf-8").strip()))
+        for filename in fixture_filenames
+    }
+
+    for sample_id, sample in sample_by_id.items():
+        qrels = qrels_by_sample_id[sample_id]
+        documents = qrels["documents"]
+        chunks = qrels["chunks"]
+        if sample["source_doc"] is None:
+            assert documents == []
+            assert chunks == []
+            continue
+
+        assert documents
+        assert chunks
+        referenced_docs = {item["source_doc"] for item in documents}
+        assert sample["source_doc"] in referenced_docs
+        assert referenced_docs <= fixture_filenames
+        for item in documents:
+            assert item["relevance"] in {1, 2}
+        for item in chunks:
+            assert item["source_doc"] in fixture_filenames
+            assert item["relevance"] in {1, 2}
+            assert 0 <= item["chunk_index"] < chunk_counts[item["source_doc"]]
 
 
 def test_evaluation_harness_documents_scene_retrieval_policy_observability() -> None:
@@ -299,6 +381,11 @@ def test_eval_fixtures_remain_generic_document_assets() -> None:
     fixture_names = sorted(path.name for path in FIXTURES_DIR.glob("*.md"))
 
     assert fixture_names == [
+        "eval-benchmark-access-control.md",
+        "eval-benchmark-quickstart.md",
+        "eval-benchmark-release-runbook.md",
+        "eval-benchmark-security-policy.md",
+        "eval-benchmark-support-faq.md",
         "eval-harness-it-policy.md",
         "eval-harness-quickstart.md",
         "eval-harness-support-faq.md",
