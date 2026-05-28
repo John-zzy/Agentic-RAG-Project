@@ -85,6 +85,7 @@ def test_retrieval_probe_returns_only_safe_ranked_fields() -> None:
         "matched_by": ["vector"],
     }
     assert service.calls[-1]["top_k"] == 5
+    assert service.calls[-1]["namespace"] == "documents"
     assert service.calls[-1]["minimum_relevance"] == 0.8
     assert service.calls[-1]["recall_strategy"] == "hybrid"
 
@@ -147,3 +148,16 @@ def test_retrieval_probe_filters_to_allowed_source_docs() -> None:
     assert [item["source_doc"] for item in ranked_list] == ["eval-benchmark-quickstart.md"]
     assert ranked_list[0]["rank"] == 1
     assert payload["allowed_source_docs"] == ["eval-benchmark-quickstart.md"]
+
+
+def test_retrieval_probe_constrains_to_requested_namespace() -> None:
+    service = FakeDocumentRetrievalService([_result()])
+
+    payload = run_retrieval_probe(
+        samples=[{"sample_id": "sample-1", "query": "Python version docs"}],
+        namespace="faq",
+        document_retrieval_service=service,  # type: ignore[arg-type]
+    )
+
+    assert payload["namespace"] == "faq"
+    assert service.calls[-1]["namespace"] == "faq"

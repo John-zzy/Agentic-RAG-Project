@@ -1636,6 +1636,7 @@ def _attach_retrieval_benchmark_results(
     ]
     probe_payload = run_retrieval_probe(
         samples=sample_set["samples"],
+        namespace=str(sample_set.get("namespace", "documents")),
         allowed_source_docs=allowed_source_docs,
     )
     probe_by_sample_id = {

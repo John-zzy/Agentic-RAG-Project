@@ -5,7 +5,7 @@ import warnings
 from backend.application.runtime.service import build_default_scene_registry
 from backend.platform.config.settings import AppSettings
 from backend.platform.rag.retrieval.documents.filters import DOCUMENT_MINIMUM_RELEVANCE
-from backend.platform.rag.contracts import RetrievalContext
+from backend.platform.rag.contracts import RetrievalContext, RetrievalPlan, RetrievalResult
 from backend.platform.rag.orchestration.decisions import SufficiencyDecision
 from backend.platform.search_foundation import VectorSearchResult, VectorStoreDocument
 from backend.platform.rag.retrieval.documents import DocumentChunkRetrievalResult
@@ -14,6 +14,8 @@ from backend.scenes.ecommerce.retrieval_tools import build_semantic_retrieval_to
 from backend.scenes.generic_assistant.definition import (
     GENERIC_ASSISTANT_RETRIEVAL_POLICY,
     GenericAssistantBusinessExtension,
+    GenericAssistantSufficiencyJudge,
+    GenericAssistantQueryRewriter,
     build_generic_assistant_scene_definition,
 )
 from backend.scenes.base import SceneRetrievalPolicy
@@ -79,7 +81,7 @@ class FakeKnowledgeService:
                     metadata={
                         "document_id": document["document_id"],
                         "source_path": document.get("source_path", f'{document["document_id"]}.md'),
-                        "namespace": "documents",
+                        "namespace": document.get("namespace", "documents"),
                         "is_managed_document": True,
                     },
                 ),
@@ -116,10 +118,11 @@ class FakeDocumentRetrievalService:
         minimum_relevance: float | None = None,
         recall_strategy: str = "hybrid",
     ) -> list[DocumentChunkRetrievalResult]:
-        del query, namespace
+        del query
         self.calls.append(
             {
                 "top_k": top_k,
+                "namespace": namespace,
                 "minimum_relevance": minimum_relevance,
                 "recall_strategy": recall_strategy,
             }
@@ -318,6 +321,108 @@ def test_scene_definitions_declare_explicit_retrieval_policies() -> None:
         assert policy.no_hit_strategy == "ask_user"
         assert policy.rerank_enabled is False
         assert policy.rerank_top_n is None
+
+
+def test_generic_assistant_document_tool_searches_all_managed_document_namespaces() -> None:
+    app_settings, knowledge_service = _build_knowledge_service("generic-document-source-namespaces")
+    knowledge_service.upsert_documents(
+        [
+            {
+                "document_id": "DOC-FAQ",
+                "content": "sessions 表字段包括 session_id、scene、mounted_knowledge_sources、status、created_at。",
+                "source_path": "data-model.md",
+                "namespace": "faq",
+                "score": 0.96,
+            }
+        ]
+    )
+    document_service = FakeDocumentRetrievalService(knowledge_service)
+    definition = build_generic_assistant_scene_definition(
+        app_settings=app_settings,
+        document_retrieval_service=document_service,
+    )
+
+    outcome = definition.build_retriever().retrieve_with_trace(
+        "当前 session 表有哪些字段？",
+        candidate_tools=("knowledge_document_search",),
+    )
+
+    assert outcome.documents
+    assert document_service.calls[0]["namespace"] is None
+    assert outcome.documents[0].metadata["namespace"] == "faq"
+
+
+def test_generic_query_rewriter_expands_data_model_table_queries() -> None:
+    rewriter = GenericAssistantQueryRewriter()
+    rewrite = rewriter.invoke(
+        RetrievalContext(
+            plan=RetrievalPlan(
+                user_query="当前有哪些表",
+                active_query="当前有哪些表",
+                selected_tool="knowledge_document_search",
+            ),
+            results=[
+                RetrievalResult.ok(
+                    tool_name="knowledge_document_search",
+                    query="当前有哪些表",
+                    records=[],
+                    documents=[],
+                )
+            ],
+        )
+    )
+
+    assert "相关文档" in rewrite.query
+    assert "表结构" in rewrite.query
+    assert "字段" in rewrite.query
+
+
+def test_generic_sufficiency_judge_retries_arbitrary_no_hit_queries() -> None:
+    judge = GenericAssistantSufficiencyJudge()
+    decision = judge.invoke(
+        RetrievalContext(
+            plan=RetrievalPlan(
+                user_query="当前有哪些表",
+                active_query="当前有哪些表",
+                selected_tool="knowledge_document_search",
+                max_rounds=3,
+            ),
+            results=[
+                RetrievalResult.ok(
+                    tool_name="knowledge_document_search",
+                    query="当前有哪些表",
+                    records=[],
+                    documents=[],
+                )
+            ],
+        )
+    )
+
+    assert decision.next_action == "rewrite"
+
+
+def test_generic_sufficiency_judge_does_not_rewrite_greetings() -> None:
+    judge = GenericAssistantSufficiencyJudge()
+    decision = judge.invoke(
+        RetrievalContext(
+            plan=RetrievalPlan(
+                user_query="你好",
+                active_query="你好",
+                selected_tool="knowledge_document_search",
+                max_rounds=3,
+            ),
+            results=[
+                RetrievalResult.ok(
+                    tool_name="knowledge_document_search",
+                    query="你好",
+                    records=[],
+                    documents=[],
+                )
+            ],
+        )
+    )
+
+    assert decision.next_action == "ask_user"
 
 
 def test_scene_retrieval_policy_validates_allowed_values_and_rerank_top_n() -> None:

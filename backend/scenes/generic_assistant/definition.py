@@ -204,22 +204,17 @@ class GenericAssistantSufficiencyJudge(SufficiencyJudge):
         default_factory=tuple,
         exclude=True,
     )
-    document_intent_keywords: tuple[str, ...] = (
-        "文档",
-        "说明",
-        "手册",
-        "指南",
-        "faq",
-        "知识库",
-        "流程",
-        "制度",
-        "规则",
-        "条款",
-        "manual",
-        "document",
-        "docs",
-        "guide",
-        "policy",
+    non_retrieval_utterances: tuple[str, ...] = (
+        "你好",
+        "您好",
+        "hello",
+        "hi",
+        "hey",
+        "谢谢",
+        "thanks",
+        "thank you",
+        "在吗",
+        "你是谁",
     )
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -292,11 +287,11 @@ class GenericAssistantSufficiencyJudge(SufficiencyJudge):
         round_index: int,
         max_rounds: int,
     ) -> SufficiencyDecision:
-        if not self._has_document_intent(query):
+        if not self._should_retry_retrieval(query):
             return SufficiencyDecision(
                 is_sufficient=False,
                 next_action="ask_user",
-                reason="当前问题缺少明确的文档查询意图，不进行文档查询改写。",
+                reason="当前问题更像寒暄或非检索输入，不进行文档查询改写。",
                 follow_up_question="请补充更具体的文档主题、术语，或说明你希望查询的业务知识范围。",
             )
         if round_index >= max_rounds:
@@ -312,28 +307,17 @@ class GenericAssistantSufficiencyJudge(SufficiencyJudge):
             reason="当前证据不足，先改写查询继续检索。",
         )
 
-    def _has_document_intent(self, query: str) -> bool:
+    def _should_retry_retrieval(self, query: str) -> bool:
         normalized = query.strip().lower()
         if not normalized:
             return False
-        return any(keyword in normalized for keyword in self.document_intent_keywords)
+        if normalized in self.non_retrieval_utterances:
+            return False
+        return True
 
 
 class GenericAssistantQueryRewriter(QueryRewriter):
     """通用 docs-first 查询改写器。"""
-
-    document_hint_keywords: tuple[str, ...] = (
-        "文档",
-        "说明",
-        "手册",
-        "指南",
-        "faq",
-        "知识库",
-        "manual",
-        "document",
-        "docs",
-        "guide",
-    )
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
@@ -346,11 +330,10 @@ class GenericAssistantQueryRewriter(QueryRewriter):
         """把弱查询改写成更适合文档检索的中立表述。"""
         del config, kwargs
         query = input.plan.active_query.strip()
-        lowered = query.lower()
-        if any(keyword in lowered for keyword in self.document_hint_keywords):
-            rewritten = f"{query} 相关内容"
-        else:
-            rewritten = f"{query} 相关文档 说明 手册 FAQ"
+        rewritten = (
+            f"{query} 相关文档 定义 说明 字段 配置 流程 接口 规则 "
+            "数据模型 表结构 常见问题"
+        )
         return QueryRewrite(
             query=rewritten.strip(),
             reason="Broadened the query with generic document-oriented terms for the next retrieval round.",

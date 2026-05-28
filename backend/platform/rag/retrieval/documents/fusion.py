@@ -27,32 +27,30 @@ class HybridFusionRanker:
     ) -> list[DocumentChunkRetrievalResult]:
         merged: dict[str, DocumentChunkRetrievalResult] = {}
         fused_scores: dict[str, float] = {}
-        normalized_vector_scores = self._normalize_scores(
-            {result.document.id: result.vector_score for result in vector_results}
-        )
+        vector_scores = {
+            result.document.id: self._bounded_score(result.vector_score)
+            for result in vector_results
+        }
         normalized_keyword_scores = self._normalize_scores(
             {result.document.id: result.keyword_score for result in keyword_results}
         )
 
         for rank, result in enumerate(vector_results, start=1):
             chunk_id = result.document.id
-            fused_scores[chunk_id] = (
-                fused_scores.get(chunk_id, 0.0)
-                + self.vector_weight * normalized_vector_scores.get(chunk_id, 0.0)
-            )
+            fused_scores[chunk_id] = vector_scores.get(chunk_id, 0.0)
             merged[chunk_id] = result.model_copy(
                 update={
                     "vector_rank": rank,
-                    "vector_score": normalized_vector_scores.get(chunk_id, result.vector_score),
+                    "vector_score": vector_scores.get(chunk_id, result.vector_score),
                 }
             )
 
         for rank, result in enumerate(keyword_results, start=1):
             chunk_id = result.document.id
             keyword_score = normalized_keyword_scores.get(chunk_id, 0.0)
-            fused_scores[chunk_id] = fused_scores.get(chunk_id, 0.0) + self.keyword_weight * keyword_score
             existing = merged.get(chunk_id)
             if existing is None:
+                fused_scores[chunk_id] = keyword_score
                 merged[chunk_id] = result.model_copy(
                     update={
                         "keyword_score": keyword_score,
@@ -60,6 +58,12 @@ class HybridFusionRanker:
                     }
                 )
                 continue
+            vector_score = vector_scores.get(chunk_id, existing.vector_score)
+            blended_score = (
+                self.vector_weight * (vector_score or 0.0)
+                + self.keyword_weight * keyword_score
+            )
+            fused_scores[chunk_id] = max(vector_score or 0.0, keyword_score, blended_score)
             merged[chunk_id] = existing.model_copy(
                 update={
                     "keyword_score": keyword_score,
@@ -93,3 +97,8 @@ class HybridFusionRanker:
             key: (float(value) / max_score) if value is not None and float(value) > 0 else 0.0
             for key, value in scores.items()
         }
+
+    def _bounded_score(self, score: float | None) -> float:
+        if score is None:
+            return 0.0
+        return min(max(float(score), 0.0), 1.0)

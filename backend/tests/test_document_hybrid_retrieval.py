@@ -172,6 +172,31 @@ def test_document_retrieval_service_returns_documents_with_hybrid_metadata() -> 
     assert "keyword" in first.metadata["matched_by"]
 
 
+def test_document_retrieval_service_keeps_keyword_only_hybrid_hits_above_threshold() -> None:
+    runtime_dir = make_test_runtime_dir("document-hybrid-keyword-only-threshold")
+    app_settings = AppSettings(data_dir=runtime_dir, vector_store=VectorStoreConfig(provider="chroma"))
+    vector_chunk = _chunk("vector-hit", "不相关语义召回内容", document_id="doc-vector", vector_score=0.2)
+    keyword_chunk = _chunk(
+        "keyword-hit",
+        "sessions 表字段包括 session_id、scene、mounted_knowledge_sources、status。",
+        document_id="doc-keyword",
+        vector_score=0.0,
+    )
+    service = DocumentRetrievalService(
+        app_settings=app_settings,
+        vector_repository=FakeDocumentChunkVectorRepository([vector_chunk]),
+        chunk_source=FakeActiveDocumentChunkSource([keyword_chunk]),
+        fusion_ranker=HybridFusionRanker(),
+        minimum_relevance=0.8,
+    )
+
+    results = service.retrieve(query="sessions 表字段", top_k=2, recall_strategy="hybrid")
+
+    assert [result.document.id for result in results] == ["keyword-hit"]
+    assert results[0].score == results[0].keyword_score
+    assert results[0].matched_by == ["keyword"]
+
+
 def test_document_retrieval_service_uses_call_level_minimum_relevance() -> None:
     runtime_dir = make_test_runtime_dir("document-hybrid-call-level-minimum-relevance")
     app_settings = AppSettings(

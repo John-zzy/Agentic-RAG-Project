@@ -31,6 +31,7 @@ class RetrievalProbe:
 
     scene_definition: SceneDefinition
     retriever: AgenticRetriever
+    namespace: str = "documents"
 
     def run_sample(self, sample: Mapping[str, Any]) -> dict[str, Any]:
         query = str(sample.get("query") or "").strip()
@@ -62,16 +63,21 @@ class RetrievalProbe:
 
 def build_retrieval_probe(
     *,
+    namespace: str = "documents",
     app_settings: AppSettings | None = None,
     document_retrieval_service: DocumentRetrievalService | None = None,
     scene_definition: SceneDefinition | None = None,
 ) -> RetrievalProbe:
     """Build a generic_assistant + documents retrieval probe using runtime components."""
     resolved_settings = app_settings or settings
-    resolved_service = document_retrieval_service or DocumentRetrievalService(
+    base_service = document_retrieval_service or DocumentRetrievalService(
         app_settings=resolved_settings,
         vector_repository=VectorStoreFactory.create_document_chunk_vector_repository(resolved_settings),
         chunk_source=VectorStoreFactory.create_active_document_chunk_source(resolved_settings),
+    )
+    resolved_service = _NamespaceConstrainedDocumentRetrievalService(
+        service=base_service,
+        namespace=namespace,
     )
     resolved_scene = scene_definition or build_generic_assistant_scene_definition(
         app_settings=resolved_settings,
@@ -81,12 +87,13 @@ def build_retrieval_probe(
     if not isinstance(retriever, AgenticRetriever):
         raise TypeError("generic_assistant retrieval probe requires an AgenticRetriever.")
     retriever.attach_trace = False
-    return RetrievalProbe(scene_definition=resolved_scene, retriever=retriever)
+    return RetrievalProbe(scene_definition=resolved_scene, retriever=retriever, namespace=namespace)
 
 
 def run_retrieval_probe(
     *,
     samples: Sequence[Mapping[str, Any]],
+    namespace: str = "documents",
     allowed_source_docs: Sequence[str] | None = None,
     app_settings: AppSettings | None = None,
     document_retrieval_service: DocumentRetrievalService | None = None,
@@ -94,6 +101,7 @@ def run_retrieval_probe(
 ) -> dict[str, Any]:
     """Run the safe retrieval probe for all samples and keep per-sample failures local."""
     probe = build_retrieval_probe(
+        namespace=namespace,
         app_settings=app_settings,
         document_retrieval_service=document_retrieval_service,
         scene_definition=scene_definition,
@@ -127,11 +135,25 @@ def run_retrieval_probe(
             )
     return {
         "scene": probe.scene_definition.scene,
-        "namespace": "documents",
+        "namespace": probe.namespace,
         "allowed_source_docs": sorted(allowed_source_doc_set) if allowed_source_doc_set is not None else None,
         "ranked_item_fields": list(SAFE_RANKED_ITEM_FIELDS),
         "samples": results,
     }
+
+
+@dataclass(frozen=True)
+class _NamespaceConstrainedDocumentRetrievalService:
+    """Eval-only wrapper that constrains generic document retrieval to one namespace."""
+
+    service: Any
+    namespace: str
+
+    def retrieve(self, **kwargs: Any) -> list[Any]:
+        return self.service.retrieve(**{**kwargs, "namespace": self.namespace})
+
+    def search(self, **kwargs: Any) -> list[Document]:
+        return self.service.search(**{**kwargs, "namespace": self.namespace})
 
 
 def _safe_ranked_item(*, rank: int, document: Document) -> dict[str, Any]:
