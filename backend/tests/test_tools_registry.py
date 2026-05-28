@@ -2,8 +2,13 @@ import json
 import shutil
 
 from backend.platform.config.settings import AppSettings
+from backend.platform.rag.retrieval.documents.types import DocumentChunkRetrievalResult
+from backend.platform.search_foundation import VectorStoreDocument
 from backend.scenes.ecommerce.definition import build_ecommerce_scene_definition
-from backend.scenes.generic_assistant.definition import build_generic_assistant_scene_definition
+from backend.scenes.generic_assistant.definition import (
+    GenericKnowledgeDocumentSearchTool,
+    build_generic_assistant_scene_definition,
+)
 from backend.platform.tools import ToolContext
 from backend.tests.test_support import DATA_DIR, make_test_runtime_dir
 from backend.scenes.ecommerce.commerce_tools import SERVICE_TICKETS_FILE_NAME
@@ -139,6 +144,76 @@ def test_generic_scene_definition_exposes_only_generic_retrieval_tools() -> None
     assert tool_names == {"knowledge_document_search"}
 
 
+def test_generic_document_search_keeps_full_chunk_for_answer_context() -> None:
+    long_content = (
+        "前置说明。" * 40
+        + "| `session_id` | `TEXT` | PK | 会话主键。 | "
+        + "| `mounted_knowledge_sources` | `TEXT` | NOT NULL | 挂载知识源。 |"
+    )
+    document = VectorStoreDocument(
+        id="chunk-session-fields",
+        content=long_content,
+        metadata={
+            "namespace": "documents",
+            "source_path": "data-model.md",
+            "chunk_id": "chunk-session-fields",
+        },
+    )
+    tool = GenericKnowledgeDocumentSearchTool(
+        document_retrieval_service=_FakeDocumentRetrievalService(
+            [
+                DocumentChunkRetrievalResult(
+                    document=document,
+                    score=1.0,
+                    keyword_score=1.0,
+                    matched_by=["keyword"],
+                )
+            ]
+        )
+    )
+
+    result = tool.retrieve("sessions 表有哪些字段")
+
+    assert result.records[0]["snippet"].endswith("...")
+    assert result.records[0]["content"] == long_content
+    assert result.documents[0].page_content == long_content
+    assert result.citations[0].snippet == result.records[0]["snippet"]
+
+
+def test_generic_document_search_expands_adjacent_chunks_for_answer_context() -> None:
+    document_id = "doc-data-model"
+    chunks = [
+        VectorStoreDocument(
+            id="chunk-0",
+            content="### 1. `sessions`\n| `session_id` | `TEXT` | PK | 会话主键。 |",
+            metadata={"document_id": document_id, "chunk_id": "chunk-0", "chunk_index": 0},
+        ),
+        VectorStoreDocument(
+            id="chunk-1",
+            content="| `mounted_knowledge_sources` | `TEXT` | NOT NULL | 挂载知识源。 |",
+            metadata={"document_id": document_id, "chunk_id": "chunk-1", "chunk_index": 1},
+        ),
+    ]
+    tool = GenericKnowledgeDocumentSearchTool(
+        document_retrieval_service=_FakeDocumentRetrievalService(
+            [
+                DocumentChunkRetrievalResult(
+                    document=chunks[0],
+                    score=1.0,
+                    keyword_score=1.0,
+                    matched_by=["keyword"],
+                )
+            ],
+            active_chunks=chunks,
+        )
+    )
+
+    result = tool.retrieve("sessions 表有哪些内容")
+
+    assert result.documents[0].page_content == "\n\n".join(chunk.content for chunk in chunks)
+    assert result.citations[0].snippet == chunks[0].content.replace("\n", " ")
+
+
 class _Registration:
     def __init__(self, tool: object, allowed_agents: tuple[str, ...], expose_via_mcp: bool) -> None:
         self.tool = tool
@@ -169,6 +244,28 @@ class _SceneToolRegistry:
             for registration in self._registrations
             if registration.expose_via_mcp
         ]
+
+
+class _FakeDocumentRetrievalService:
+    def __init__(
+        self,
+        results: list[DocumentChunkRetrievalResult],
+        *,
+        active_chunks: list[VectorStoreDocument] | None = None,
+    ) -> None:
+        self._results = results
+        self.chunk_source = _FakeActiveDocumentChunkSource(active_chunks or [])
+
+    def retrieve(self, **kwargs: object) -> list[DocumentChunkRetrievalResult]:
+        return self._results
+
+
+class _FakeActiveDocumentChunkSource:
+    def __init__(self, chunks: list[VectorStoreDocument]) -> None:
+        self._chunks = chunks
+
+    def list_active_document_chunks(self, **kwargs: object) -> list[VectorStoreDocument]:
+        return self._chunks
 
 
 def _build_scene_tool_registry(app_settings: AppSettings) -> _SceneToolRegistry:

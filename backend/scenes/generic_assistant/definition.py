@@ -37,6 +37,7 @@ from backend.scenes.base import (
 
 GENERIC_DOCUMENT_TOOL_NAME = "knowledge_document_search"
 GENERIC_DOCUMENT_KNOWLEDGE_SOURCE = "documents"
+DOCUMENT_ANSWER_CONTEXT_NEIGHBOR_RADIUS = 1
 
 GENERIC_ASSISTANT_RETRIEVAL_POLICY = SceneRetrievalPolicy(
     top_k=5,
@@ -130,7 +131,10 @@ class GenericKnowledgeDocumentSearchTool(RetrievalTool):
                 minimum_relevance=min_relevance_score,
                 recall_strategy=recall_strategy,
             )
-        records = [_build_document_record(result) for result in retrieval_results]
+        records = _build_document_records(
+            retrieval_results,
+            document_retrieval_service=self.document_retrieval_service,
+        )
         citations = [
             RetrievalCitation(
                 citation_id=record["citation_id"],
@@ -150,7 +154,7 @@ class GenericKnowledgeDocumentSearchTool(RetrievalTool):
         ]
         documents = [
             Document(
-                page_content=record["snippet"],
+                page_content=record["content"],
                 metadata={
                     **record.get("metadata", {}),
                     "namespace": record["namespace"],
@@ -439,7 +443,10 @@ def build_generic_knowledge_document_tool(
                 minimum_relevance=retrieval_policy.min_relevance_score,
                 recall_strategy=retrieval_policy.recall_strategy,
             )
-        records = [_build_document_record(result) for result in retrieval_results]
+        records = _build_document_records(
+            retrieval_results,
+            document_retrieval_service=document_retrieval_service,
+        )
         return ToolResult.ok(
             tool_name=GENERIC_DOCUMENT_TOOL_NAME,
             records=records,
@@ -604,6 +611,7 @@ def _build_document_record(result: DocumentChunkRetrievalResult) -> dict[str, An
             or result.document.id
         ),
         "snippet": snippet,
+        "content": result.document.content,
         "score": float(result.score) if result.score is not None else None,
         "vector_score": float(result.vector_score) if result.vector_score is not None else None,
         "keyword_score": float(result.keyword_score) if result.keyword_score is not None else None,
@@ -614,12 +622,103 @@ def _build_document_record(result: DocumentChunkRetrievalResult) -> dict[str, An
     }
 
 
+def _build_document_records(
+    results: list[DocumentChunkRetrievalResult],
+    *,
+    document_retrieval_service: Any,
+) -> list[dict[str, Any]]:
+    """保留 citation 摘要，同时为回答上下文补齐相邻分块。"""
+    records = [_build_document_record(result) for result in results]
+    neighbor_context = _build_neighbor_context_by_chunk_id(
+        results,
+        document_retrieval_service=document_retrieval_service,
+    )
+    if not neighbor_context:
+        return records
+
+    for record in records:
+        citation_id = str(record.get("citation_id") or "")
+        expanded_content = neighbor_context.get(citation_id)
+        if expanded_content:
+            record["content"] = expanded_content
+    return records
+
+
+def _build_neighbor_context_by_chunk_id(
+    results: list[DocumentChunkRetrievalResult],
+    *,
+    document_retrieval_service: Any,
+) -> dict[str, str]:
+    chunk_source = getattr(document_retrieval_service, "chunk_source", None)
+    list_chunks = getattr(chunk_source, "list_active_document_chunks", None)
+    if not callable(list_chunks):
+        return {}
+
+    try:
+        chunks = list_chunks(limit=None)
+    except TypeError:
+        chunks = list_chunks()
+    if not chunks:
+        return {}
+
+    chunks_by_position: dict[tuple[str, int], Any] = {}
+    for chunk in chunks:
+        document_id = _resolve_document_id(chunk)
+        chunk_index = _resolve_chunk_index(chunk)
+        if document_id is None or chunk_index is None:
+            continue
+        chunks_by_position[(document_id, chunk_index)] = chunk
+
+    context_by_chunk_id: dict[str, str] = {}
+    for result in results:
+        document_id = _resolve_document_id(result.document)
+        chunk_index = _resolve_chunk_index(result.document)
+        citation_id = _resolve_document_citation_id(result.document)
+        if document_id is None or chunk_index is None:
+            continue
+        window: list[Any] = []
+        for neighbor_index in range(
+            chunk_index - DOCUMENT_ANSWER_CONTEXT_NEIGHBOR_RADIUS,
+            chunk_index + DOCUMENT_ANSWER_CONTEXT_NEIGHBOR_RADIUS + 1,
+        ):
+            neighbor = chunks_by_position.get((document_id, neighbor_index))
+            if neighbor is not None:
+                window.append(neighbor)
+        if len(window) <= 1:
+            continue
+        context_by_chunk_id[citation_id] = "\n\n".join(str(chunk.content) for chunk in window)
+    return context_by_chunk_id
+
+
 def _resolve_document_namespace(document: Any) -> str:
     """优先保留文档知识源自己的 namespace。"""
     namespace = document.metadata.get("namespace")
     if isinstance(namespace, str) and namespace:
         return namespace
     return "documents"
+
+
+def _resolve_document_id(document: Any) -> str | None:
+    document_id = document.metadata.get("document_id")
+    if isinstance(document_id, str) and document_id:
+        return document_id
+    return None
+
+
+def _resolve_chunk_index(document: Any) -> int | None:
+    chunk_index = document.metadata.get("chunk_index")
+    if isinstance(chunk_index, bool):
+        return None
+    if isinstance(chunk_index, int):
+        return chunk_index
+    if isinstance(chunk_index, float) and chunk_index.is_integer():
+        return int(chunk_index)
+    if isinstance(chunk_index, str):
+        try:
+            return int(chunk_index)
+        except ValueError:
+            return None
+    return None
 
 
 def _resolve_document_citation_id(document: Any) -> str:
