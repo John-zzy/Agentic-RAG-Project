@@ -240,6 +240,47 @@ def test_document_retrieval_service_uses_call_level_minimum_relevance() -> None:
     assert [result.document.id for result in strict_results] == ["chunk-high"]
 
 
+def test_document_retrieval_service_exposes_raw_and_filtered_trace_counts() -> None:
+    runtime_dir = make_test_runtime_dir("document-hybrid-trace-counts")
+    app_settings = AppSettings(
+        data_dir=runtime_dir,
+        vector_store=VectorStoreConfig(provider="chroma"),
+    )
+    high_chunk = _chunk("chunk-high", "高相关内容 specialtoken", document_id="doc-high", vector_score=0.9)
+    low_chunk = _chunk("chunk-low", "低相关内容 specialtoken", document_id="doc-low", vector_score=0.3)
+    service = DocumentRetrievalService(
+        app_settings=app_settings,
+        vector_repository=FakeDocumentChunkVectorRepository([high_chunk, low_chunk]),
+        chunk_source=FakeActiveDocumentChunkSource([high_chunk, low_chunk]),
+        fusion_ranker=FakeFusionRanker(
+            [
+                DocumentChunkRetrievalResult(
+                    document=high_chunk,
+                    score=0.9,
+                    vector_score=0.9,
+                    matched_by=["vector"],
+                ),
+                DocumentChunkRetrievalResult(
+                    document=low_chunk,
+                    score=0.3,
+                    vector_score=0.3,
+                    matched_by=["vector"],
+                ),
+            ]
+        ),
+        minimum_relevance=0.8,
+    )
+
+    traced = service.retrieve_with_trace(query="specialtoken", top_k=2, namespace="faq")
+
+    assert [result.document.id for result in traced.results] == ["chunk-high"]
+    assert traced.trace.raw_candidates_count == 2
+    assert traced.trace.filtered_candidates_count == 1
+    assert traced.trace.top_k_chunks[0].citation_id == "chunk-high"
+    assert traced.trace.top_k_chunks[0].document_id == "doc-high"
+    assert traced.trace.top_k_chunks[0].score == 0.9
+
+
 def test_document_retrieval_service_honors_semantic_recall_strategy() -> None:
     runtime_dir = make_test_runtime_dir("document-semantic-strategy")
     app_settings = AppSettings(data_dir=runtime_dir, vector_store=VectorStoreConfig(provider="chroma"))

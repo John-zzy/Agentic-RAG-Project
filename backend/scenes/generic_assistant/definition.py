@@ -113,12 +113,23 @@ class GenericKnowledgeDocumentSearchTool(RetrievalTool):
     ) -> RetrievalResult:
         """在上传文档分块中检索并返回标准化结果。"""
         del run_manager, rerank_enabled, rerank_top_n
-        retrieval_results = self.document_retrieval_service.retrieve(
-            query=query,
-            top_k=top_k or self.default_top_k,
-            minimum_relevance=min_relevance_score,
-            recall_strategy=recall_strategy,
-        )
+        retrieval_trace: dict[str, Any] | None = None
+        if hasattr(self.document_retrieval_service, "retrieve_with_trace"):
+            traced_result = self.document_retrieval_service.retrieve_with_trace(
+                query=query,
+                top_k=top_k or self.default_top_k,
+                minimum_relevance=min_relevance_score,
+                recall_strategy=recall_strategy,
+            )
+            retrieval_results = traced_result.results
+            retrieval_trace = traced_result.trace.model_dump()
+        else:
+            retrieval_results = self.document_retrieval_service.retrieve(
+                query=query,
+                top_k=top_k or self.default_top_k,
+                minimum_relevance=min_relevance_score,
+                recall_strategy=recall_strategy,
+            )
         records = [_build_document_record(result) for result in retrieval_results]
         citations = [
             RetrievalCitation(
@@ -162,7 +173,12 @@ class GenericKnowledgeDocumentSearchTool(RetrievalTool):
             documents=documents,
             citations=citations,
             confidence=confidence,
-            metadata={"namespace": "documents", "result_count": len(records), "scene": "generic_assistant"},
+            metadata={
+                "namespace": "documents",
+                "result_count": len(records),
+                "scene": "generic_assistant",
+                "document_retrieval_trace": retrieval_trace,
+            },
         )
 
 
@@ -406,12 +422,23 @@ def build_generic_knowledge_document_tool(
     """构建面向通用知识助手的文档检索工具。"""
 
     def knowledge_document_search(query: str, top_k: int = retrieval_policy.top_k) -> ToolResult:
-        retrieval_results = document_retrieval_service.retrieve(
-            query=query,
-            top_k=top_k,
-            minimum_relevance=retrieval_policy.min_relevance_score,
-            recall_strategy=retrieval_policy.recall_strategy,
-        )
+        retrieval_trace: dict[str, Any] | None = None
+        if hasattr(document_retrieval_service, "retrieve_with_trace"):
+            traced_result = document_retrieval_service.retrieve_with_trace(
+                query=query,
+                top_k=top_k,
+                minimum_relevance=retrieval_policy.min_relevance_score,
+                recall_strategy=retrieval_policy.recall_strategy,
+            )
+            retrieval_results = traced_result.results
+            retrieval_trace = traced_result.trace.model_dump()
+        else:
+            retrieval_results = document_retrieval_service.retrieve(
+                query=query,
+                top_k=top_k,
+                minimum_relevance=retrieval_policy.min_relevance_score,
+                recall_strategy=retrieval_policy.recall_strategy,
+            )
         records = [_build_document_record(result) for result in retrieval_results]
         return ToolResult.ok(
             tool_name=GENERIC_DOCUMENT_TOOL_NAME,
@@ -433,7 +460,12 @@ def build_generic_knowledge_document_tool(
                 for record in records
             ],
             confidence=_average_score(records),
-            metadata={"namespace": "documents", "result_count": len(records), "scene": "generic_assistant"},
+            metadata={
+                "namespace": "documents",
+                "result_count": len(records),
+                "scene": "generic_assistant",
+                "document_retrieval_trace": retrieval_trace,
+            },
         )
 
     return build_structured_tool(

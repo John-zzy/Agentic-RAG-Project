@@ -743,10 +743,17 @@
 
     .overlay-card.processing-card {
       width: min(1420px, calc(100vw - 48px));
+      height: min(860px, calc(100vh - 56px));
+      overflow: hidden;
     }
 
     .overlay-card.show {
       display: block;
+    }
+
+    .overlay-card.processing-card.show {
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr) auto;
     }
 
     .overlay-body {
@@ -871,9 +878,12 @@
       display: grid;
       grid-template-columns: minmax(320px, 0.88fr) minmax(420px, 1.2fr);
       gap: 24px;
+      min-height: 0;
+      overflow: auto;
     }
 
     .processing-column {
+      min-height: 0;
       display: grid;
       align-content: start;
       gap: 16px;
@@ -969,6 +979,9 @@
     .rule-list {
       display: grid;
       gap: 10px;
+      max-height: 320px;
+      overflow: auto;
+      padding-right: 4px;
     }
 
     .rule-option {
@@ -1053,7 +1066,7 @@
     .chunk-preview-list {
       display: grid;
       gap: 12px;
-      max-height: 700px;
+      max-height: 520px;
       overflow: auto;
       padding-right: 4px;
     }
@@ -1106,8 +1119,10 @@
       justify-content: flex-end;
       align-items: center;
       gap: 12px;
-      padding: 0 28px 24px;
+      padding: 16px 28px 24px;
       flex-wrap: wrap;
+      border-top: 1px solid rgba(216, 227, 235, 0.9);
+      background: rgba(255, 255, 255, 0.96);
     }
 
     .processing-actions-primary {
@@ -1425,14 +1440,9 @@
       </div>
 
       <nav class="nav" aria-label="管理导航">
+        <a class="nav-item" href="./api-tester.html">对话工作台</a>
         <a class="nav-item active" href="javascript:void(0)">知识库管理</a>
-        <a class="nav-item" href="./api-tester.html">返回对话工作台</a>
-        <a class="nav-item" href="javascript:void(0)">仪表盘</a>
-        <a class="nav-item" href="javascript:void(0)">文件资产</a>
-        <a class="nav-item" href="javascript:void(0)">索引任务</a>
-        <a class="nav-item" href="javascript:void(0)">命名空间</a>
-        <a class="nav-item" href="javascript:void(0)">版本审计</a>
-        <a class="nav-item" href="javascript:void(0)">权限与配置</a>
+        <a class="nav-item" href="./eval-dashboard.html">评测看板</a>
       </nav>
 
       <section class="support-card" aria-label="服务可用性">
@@ -1892,7 +1902,7 @@
       refs.createSpaceButton.disabled = isBusy;
       refs.manualIndexButton.disabled = isBusy;
       refs.refreshPreviewButton.disabled = isBusy;
-      refs.rechunkButton.disabled = isBusy || state.processing.mode !== "rechunk";
+      refs.rechunkButton.disabled = isBusy || state.processing.mode === "create";
       refs.submitProcessingButton.disabled = isBusy;
       refs.hideProcessingFooterButton.disabled = isBusy;
       refs.tableBody.querySelectorAll("button").forEach(function (button) {
@@ -2213,7 +2223,7 @@
       renderDocumentPreview(preview.original_samples);
       renderChunkPreview(preview.processed_samples);
       refs.submitProcessingButton.disabled = state.busy || preview.can_index === false;
-      refs.rechunkButton.disabled = state.busy || state.processing.mode !== "rechunk";
+      refs.rechunkButton.disabled = state.busy || state.processing.mode === "create";
       refs.refreshPreviewButton.textContent = "重新预览";
       refs.submitProcessingButton.textContent = state.processing.mode === "create" ? "确认清洗并入库" : "确认重处理";
     }
@@ -2273,7 +2283,7 @@
         ? "上传后先确认清洗规则，预览无误后再入库。"
         : "沿用或调整清洗规则后生成新版本，也可以仅使用当前规则重切块。";
       refs.refreshPreviewButton.textContent = "切分预览";
-      refs.rechunkButton.style.display = mode === "rechunk" ? "inline-flex" : "none";
+      refs.rechunkButton.style.display = mode === "create" ? "none" : "inline-flex";
       refs.chunkSizeInput.value = String(document && document.chunk_size ? document.chunk_size : 500);
       refs.chunkOverlapInput.value = String(document && document.chunk_overlap ? document.chunk_overlap : 80);
       showProcessingCard();
@@ -2359,7 +2369,6 @@
         if (canViewDetail) {
           actionButtons.push('<button class="knowledge-button secondary" type="button" data-action="detail" data-document-id="' + escapeHtml(item.document_id) + '">详情</button>');
           actionButtons.push('<button class="knowledge-button secondary" type="button" data-action="reprocess" data-document-id="' + escapeHtml(item.document_id) + '">重处理</button>');
-          actionButtons.push('<button class="knowledge-button secondary" type="button" data-action="rechunk" data-document-id="' + escapeHtml(item.document_id) + '">重切块</button>');
         } else if (canIndex) {
           actionButtons.push('<button class="knowledge-button secondary" type="button" data-action="index" data-source-path="' + escapeHtml(item.source_path) + '">预处理</button>');
         }
@@ -2694,8 +2703,6 @@
           loadDocumentDetail(button.dataset.documentId);
         } else if (action === "reprocess") {
           rebuildDocument(button.dataset.documentId, "reprocess");
-        } else if (action === "rechunk") {
-          rebuildDocument(button.dataset.documentId, "rechunk");
         } else if (action === "index") {
           indexFile(button.dataset.sourcePath);
         } else if (action === "delete-file") {

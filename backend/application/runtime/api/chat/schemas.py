@@ -54,6 +54,67 @@ class Citation(BaseModel):
     rank: int = Field(ge=1, description="原始检索排序位置，从 1 开始。")
 
 
+class RetrievalTraceTopChunk(BaseModel):
+    """检索 trace 中的安全分块摘要，不包含完整正文。"""
+
+    rank: int = Field(ge=1, description="最终候选排序位置，从 1 开始。")
+    citation_id: str = Field(description="可与 citations 对齐的引用 ID。")
+    document_id: str | None = Field(default=None, description="文档 ID。")
+    chunk_id: str | None = Field(default=None, description="分块 ID。")
+    chunk_index: int | None = Field(default=None, description="分块序号。")
+    source_name: str = Field(description="来源展示名称。")
+    source_path: str | None = Field(default=None, description="来源路径。")
+    score: float | None = Field(default=None, description="融合或当前召回得分。")
+    vector_score: float | None = Field(default=None, description="向量召回得分。")
+    keyword_score: float | None = Field(default=None, description="关键词召回得分。")
+    vector_rank: int | None = Field(default=None, description="向量召回排序。")
+    keyword_rank: int | None = Field(default=None, description="关键词召回排序。")
+    matched_by: list[str] = Field(default_factory=list, description="命中来源。")
+
+
+class RetrievalTraceRound(BaseModel):
+    """Agentic RAG 单轮检索 trace。"""
+
+    round_index: int = Field(ge=1, description="检索轮次，从 1 开始。")
+    tool_name: str = Field(description="本轮调用的 retrieval tool 名称。")
+    query: str = Field(description="本轮实际查询。")
+    rewritten_query: str | None = Field(default=None, description="本轮触发改写后的下一轮查询。")
+    decision: str = Field(description="本轮充分性判断动作。")
+    is_sufficient: bool = Field(description="本轮判断是否已有足够证据。")
+    reason: str | None = Field(default=None, description="本轮判断原因。")
+    result_count: int = Field(ge=0, description="本轮工具返回 record 数量。")
+    document_count: int = Field(ge=0, description="本轮工具返回 Document 数量。")
+    success: bool = Field(description="本轮工具调用是否成功。")
+    error: str | None = Field(default=None, description="本轮工具错误信息。")
+    raw_candidates_count: int | None = Field(default=None, ge=0, description="过滤前候选数。")
+    filtered_candidates_count: int | None = Field(default=None, ge=0, description="过滤后候选数。")
+    top_k_chunks: list[RetrievalTraceTopChunk] = Field(
+        default_factory=list,
+        description="本轮过滤后的安全 top-k 分块摘要。",
+    )
+    rerank: dict[str, Any] | None = Field(default=None, description="本轮 ReRank trace 摘要。")
+
+
+class RetrievalTrace(BaseModel):
+    """一次 `/chat` 请求的检索链路 trace。"""
+
+    original_query: str = Field(description="用户原始问题。")
+    final_query: str = Field(description="检索结束时使用的查询。")
+    rewritten_query: str | None = Field(default=None, description="最后一次 query rewrite 结果。")
+    tool_call_count: int = Field(ge=0, description="实际 retrieval tool 调用次数。")
+    candidate_tools: list[str] = Field(default_factory=list, description="本轮候选 retrieval tools。")
+    exit_reason: str | None = Field(default=None, description="Agentic RAG 退出原因。")
+    raw_candidates_count: int = Field(default=0, ge=0, description="聚合过滤前候选数。")
+    filtered_candidates_count: int = Field(default=0, ge=0, description="聚合过滤后候选数。")
+    top_k_chunks: list[RetrievalTraceTopChunk] = Field(
+        default_factory=list,
+        description="最终用于回答证据的安全 top-k 分块摘要。",
+    )
+    citations: list[Citation] = Field(default_factory=list, description="与响应一致的引用列表。")
+    knowledge_used: bool = Field(description="本轮最终是否使用知识。")
+    rounds: list[RetrievalTraceRound] = Field(default_factory=list, description="Agentic RAG 轮次 trace。")
+
+
 class ChatResponse(BaseModel):
     """聊天接口响应体。"""
 
@@ -64,6 +125,10 @@ class ChatResponse(BaseModel):
     scene: str = Field(description="本轮回答所属场景。")
     agent: str | None = Field(default=None, description="场景使用的代理标识，没有则为空。")
     citations: list[Citation] = Field(default_factory=list, description="结构化引用列表。")
+    retrieval_trace: RetrievalTrace | None = Field(
+        default=None,
+        description="本轮检索链路 trace；仅用于本地可观测，不参与回答语义判断。",
+    )
 
 
 class SessionCreateResponse(BaseModel):

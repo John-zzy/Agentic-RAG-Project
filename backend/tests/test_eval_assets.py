@@ -6,6 +6,7 @@ import re
 
 from backend.evals.run_http_eval import (
     _build_assertions,
+    _build_observed_from_chat_response,
     _extract_policy_evidence,
     _parse_sse_events,
     build_comparison_payload,
@@ -284,6 +285,107 @@ def test_no_hit_assertions_fail_when_pseudo_citations_are_returned() -> None:
     assert failures["knowledge_used"]["actual"] is True
     assert failures["max_citations"]["actual"] == 1
     assert failures["citations_empty"]["actual"] == [{"source_name": "eval-harness-quickstart.md"}]
+
+
+def test_eval_observed_payload_preserves_retrieval_trace_without_full_chunk_content() -> None:
+    observed = _build_observed_from_chat_response(
+        {
+            "answer": "hello [1]",
+            "knowledge_used": True,
+            "citations": [
+                {
+                    "citation_id": "chunk-1",
+                    "chunk_id": "chunk-1",
+                    "source_name": "doc.md",
+                    "snippet": "existing citation snippet",
+                }
+            ],
+            "retrieval_trace": {
+                "original_query": "hello",
+                "final_query": "hello",
+                "rewritten_query": None,
+                "tool_call_count": 1,
+                "candidate_tools": ["knowledge_document_search"],
+                "exit_reason": "sufficient",
+                "raw_candidates_count": 1,
+                "filtered_candidates_count": 1,
+                "knowledge_used": True,
+                "top_k_chunks": [
+                    {
+                        "rank": 1,
+                        "citation_id": "chunk-1",
+                        "chunk_id": "chunk-1",
+                        "source_name": "doc.md",
+                        "score": 0.9,
+                    }
+                ],
+                "citations": [],
+                "rounds": [],
+            },
+        }
+    )
+
+    assert observed["retrieval_trace"]["top_k_chunks"][0]["citation_id"] == "chunk-1"
+    assert "full source content" not in json.dumps(observed["retrieval_trace"], ensure_ascii=False)
+
+
+def test_eval_assertions_require_no_hit_trace_and_citation_match() -> None:
+    expected = {"knowledge_used": False, "citations_empty": True}
+    observed = {
+        "answer": "暂时没有检索到足够相关的文档知识",
+        "knowledge_used": False,
+        "citation_count": 0,
+        "citations": [],
+        "citation_sources": [],
+        "retrieval_trace": {
+            "knowledge_used": False,
+            "filtered_candidates_count": 0,
+            "top_k_chunks": [],
+        },
+    }
+    metrics = {
+        "answer_keyword_hit": True,
+        "expected_source_seen": False,
+        "expected_source_kind_seen": True,
+        "visible_marker_seen": False,
+        "fallback_like": True,
+    }
+
+    assertions = _build_assertions(expected=expected, observed=observed, metrics=metrics)
+    by_name = {assertion["name"]: assertion for assertion in assertions}
+
+    assert by_name["retrieval_trace_present"]["passed"] is True
+    assert by_name["retrieval_trace_no_hit"]["passed"] is True
+
+    hit_expected = {"knowledge_used": True}
+    hit_observed = {
+        "answer": "hello [1]",
+        "knowledge_used": True,
+        "citation_count": 1,
+        "citations": [{"citation_id": "chunk-1", "chunk_id": "chunk-1"}],
+        "citation_sources": ["doc.md"],
+        "retrieval_trace": {
+            "knowledge_used": True,
+            "filtered_candidates_count": 1,
+            "top_k_chunks": [{"citation_id": "chunk-1", "chunk_id": "chunk-1"}],
+        },
+    }
+    hit_metrics = {
+        "answer_keyword_hit": True,
+        "expected_source_seen": False,
+        "expected_source_kind_seen": True,
+        "visible_marker_seen": True,
+        "fallback_like": False,
+    }
+
+    hit_assertions = _build_assertions(
+        expected=hit_expected,
+        observed=hit_observed,
+        metrics=hit_metrics,
+    )
+    hit_by_name = {assertion["name"]: assertion for assertion in hit_assertions}
+
+    assert hit_by_name["retrieval_trace_citations_match_top_chunks"]["passed"] is True
 
 
 def test_eval_comparison_reports_policy_and_no_hit_regression() -> None:

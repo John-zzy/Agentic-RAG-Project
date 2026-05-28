@@ -327,6 +327,23 @@ def test_chat_api_success_path() -> None:
         "matched_by": ["vector"],
         "rank": 1,
     }
+    trace = payload["retrieval_trace"]
+    assert trace["original_query"] == "推荐续航好的手机"
+    assert trace["final_query"] == "推荐续航好的手机"
+    assert trace["rewritten_query"] is None
+    assert trace["tool_call_count"] == 1
+    assert trace["candidate_tools"] == ["knowledge_document_search"]
+    assert trace["exit_reason"] == "sufficient"
+    assert trace["knowledge_used"] is True
+    assert trace["raw_candidates_count"] == 1
+    assert trace["filtered_candidates_count"] == 1
+    assert trace["citations"] == payload["citations"]
+    assert trace["top_k_chunks"][0]["citation_id"] == "chunk-doc-1"
+    assert trace["top_k_chunks"][0]["chunk_id"] == "chunk-doc-1"
+    assert trace["top_k_chunks"][0]["score"] == 0.92
+    assert trace["rounds"][0]["tool_name"] == "knowledge_document_search"
+    assert trace["rounds"][0]["raw_candidates_count"] == 1
+    assert trace["rounds"][0]["filtered_candidates_count"] == 1
     saved_session = service.session_store.get_session(payload["session_id"])
     assert saved_session is not None
     assert saved_session.mounted_knowledge_sources == ("documents",)
@@ -389,6 +406,8 @@ def test_chat_api_sse_success_path_returns_structured_events() -> None:
     assert tool_payload["knowledge_used"] is True
     assert tool_payload["documents"] == 1
     assert tool_payload["rounds"][0]["tool_name"] == "knowledge_document_search"
+    assert tool_payload["retrieval_trace"]["tool_call_count"] == 1
+    assert tool_payload["retrieval_trace"]["top_k_chunks"][0]["citation_id"] == "chunk-doc-1"
     assert tool_payload["retrieval_policy"] == {
         "top_k": 5,
         "min_relevance_score": 0.8,
@@ -401,6 +420,8 @@ def test_chat_api_sse_success_path_returns_structured_events() -> None:
     assert done_payload["knowledge_used"] is True
     assert done_payload["scene"] == "generic_assistant"
     assert len(done_payload["citations"]) == 1
+    assert done_payload["retrieval_trace"] == tool_payload["retrieval_trace"]
+    assert done_payload["retrieval_trace"]["citations"] == done_payload["citations"]
     saved_turns, total_turns = service.session_store.get_session_detail(
         done_payload["session_id"],
         limit=10,
@@ -470,9 +491,12 @@ def test_chat_api_sse_no_hit_uses_fallback_without_model_streaming() -> None:
     assert history_payload["message_count"] == 0
     assert tool_payload["knowledge_used"] is False
     assert tool_payload["documents"] == 0
+    assert tool_payload["retrieval_trace"]["knowledge_used"] is False
+    assert tool_payload["retrieval_trace"]["filtered_candidates_count"] == 0
     assert "暂时没有检索到足够相关的文档知识" in chunk_payload["delta"]
     assert done_payload["knowledge_used"] is False
     assert done_payload["citations"] == []
+    assert done_payload["retrieval_trace"] == tool_payload["retrieval_trace"]
     assert model.get_runnable_calls == []
     assert model.stream_runnable_calls == []
     assert model.invoke_runnable_calls == []
@@ -1645,6 +1669,10 @@ def test_chat_api_real_runtime_greeting_does_not_rewrite_into_faq_hit() -> None:
     payload = response.json()
     assert payload["knowledge_used"] is False
     assert payload["citations"] == []
+    assert payload["retrieval_trace"]["knowledge_used"] is False
+    assert payload["retrieval_trace"]["filtered_candidates_count"] == 0
+    assert payload["retrieval_trace"]["top_k_chunks"] == []
+    assert payload["retrieval_trace"]["citations"] == []
     assert "暂时没有检索到足够相关的文档知识" in payload["answer"]
     assert model.get_runnable_calls == []
 

@@ -400,6 +400,47 @@ def _build_assertions(
         assertions.append(
             _make_assertion("fallback_like", True, metrics["fallback_like"], metrics["fallback_like"])
         )
+        retrieval_trace = observed.get("retrieval_trace")
+        assertions.append(
+            _make_assertion(
+                "retrieval_trace_present",
+                True,
+                isinstance(retrieval_trace, dict),
+                isinstance(retrieval_trace, dict),
+            )
+        )
+        assertions.append(
+            _make_assertion(
+                "retrieval_trace_no_hit",
+                {
+                    "knowledge_used": False,
+                    "filtered_candidates_count": 0,
+                },
+                {
+                    "knowledge_used": retrieval_trace.get("knowledge_used") if isinstance(retrieval_trace, dict) else None,
+                    "filtered_candidates_count": (
+                        retrieval_trace.get("filtered_candidates_count")
+                        if isinstance(retrieval_trace, dict)
+                        else None
+                    ),
+                },
+                (
+                    isinstance(retrieval_trace, dict)
+                    and retrieval_trace.get("knowledge_used") is False
+                    and retrieval_trace.get("filtered_candidates_count") == 0
+                ),
+            )
+        )
+
+    if observed.get("citations"):
+        assertions.append(
+            _make_assertion(
+                "retrieval_trace_citations_match_top_chunks",
+                True,
+                _citations_match_top_chunks(observed),
+                _citations_match_top_chunks(observed),
+            )
+        )
 
     return assertions
 
@@ -414,9 +455,40 @@ def _build_observed_from_chat_response(chat_response: dict[str, Any]) -> dict[st
         "citation_count": len(citations),
         "citation_sources": [citation.get("source_name") for citation in citations],
         "citations": citations,
+        "retrieval_trace": chat_response.get("retrieval_trace"),
         "session_id": chat_response.get("session_id"),
         "request_id": chat_response.get("request_id"),
     }
+
+
+def _citations_match_top_chunks(observed: dict[str, Any]) -> bool:
+    retrieval_trace = observed.get("retrieval_trace")
+    if not isinstance(retrieval_trace, dict):
+        return False
+    top_chunks = retrieval_trace.get("top_k_chunks")
+    if not isinstance(top_chunks, list):
+        return False
+    chunk_ids = {
+        str(item.get("chunk_id"))
+        for item in top_chunks
+        if isinstance(item, dict) and item.get("chunk_id") is not None
+    }
+    citation_ids = {
+        str(item.get("citation_id"))
+        for item in top_chunks
+        if isinstance(item, dict) and item.get("citation_id") is not None
+    }
+    for citation in observed.get("citations", []):
+        if not isinstance(citation, dict):
+            return False
+        chunk_id = citation.get("chunk_id")
+        citation_id = citation.get("citation_id")
+        if chunk_id is not None and str(chunk_id) in chunk_ids:
+            continue
+        if citation_id is not None and str(citation_id) in citation_ids:
+            continue
+        return False
+    return True
 
 
 def _build_metrics_from_observed(

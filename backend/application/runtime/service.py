@@ -15,7 +15,14 @@ from langchain_core.retrievers import BaseRetriever
 from langchain_core.runnables.history import RunnableWithMessageHistory
 
 from backend.application.runtime.api.chat.prompts import build_rag_answer_prompt_template
-from backend.application.runtime.api.chat.schemas import ChatRequest, ChatResponse, Citation
+from backend.application.runtime.api.chat.schemas import (
+    ChatRequest,
+    ChatResponse,
+    Citation,
+    RetrievalTrace,
+    RetrievalTraceRound,
+    RetrievalTraceTopChunk,
+)
 from backend.platform.config.settings import AppSettings, settings
 from backend.platform.knowledge.sources import (
     DEFAULT_MOUNTED_KNOWLEDGE_SOURCES,
@@ -98,6 +105,7 @@ class RetrievalExecutionResult:
 
     documents: list[Document]
     tool_event: dict[str, Any]
+    retrieval_trace: RetrievalTrace
 
 
 @dataclass(frozen=True)
@@ -110,6 +118,7 @@ class PreparedChatTurn:
     user_message: str
     documents: list[Document]
     tool_event: dict[str, Any]
+    retrieval_trace: RetrievalTrace
     citations: list[Citation]
     knowledge_used: bool
     scene_metadata: SceneMetadata
@@ -164,6 +173,16 @@ class RetrievalExecutor:
                 len(outcome.rounds),
                 len(outcome.documents),
             )
+            rounds = [self._build_agentic_round_trace(round_trace) for round_trace in outcome.rounds]
+            retrieval_trace = self._build_retrieval_trace(
+                original_query=message,
+                final_query=self._resolve_outcome_final_query(outcome, message),
+                rewritten_query=self._last_rewritten_query(rounds),
+                candidate_tools=candidate_tools,
+                exit_reason=outcome.exit_reason,
+                rounds=rounds,
+                documents=list(outcome.documents),
+            )
             return RetrievalExecutionResult(
                 documents=list(outcome.documents),
                 tool_event={
@@ -174,26 +193,9 @@ class RetrievalExecutor:
                     "documents": len(outcome.documents),
                     "exit_reason": outcome.exit_reason,
                     "success": outcome.success,
-                    "rounds": [
-                        {
-                            "round_index": round_trace.plan.round_index,
-                            "tool_name": round_trace.result.tool_name,
-                            "query": round_trace.result.query,
-                            "rewritten_query": (
-                                round_trace.rewrite.query if round_trace.rewrite is not None else None
-                            ),
-                            "decision": round_trace.decision.next_action,
-                            "is_sufficient": round_trace.decision.is_sufficient,
-                            "reason": round_trace.decision.reason,
-                            "result_count": len(round_trace.result.records),
-                            "document_count": len(round_trace.result.documents),
-                            "success": round_trace.result.success,
-                            "error": round_trace.result.error,
-                            "rerank": round_trace.result.metadata.get("rerank"),
-                        }
-                        for round_trace in outcome.rounds
-                    ],
+                    "rounds": [round_trace.model_dump() for round_trace in rounds],
                 },
+                retrieval_trace=retrieval_trace,
             )
         if hasattr(self._retriever, "search"):
             search = self._retriever.search
@@ -204,6 +206,13 @@ class RetrievalExecutor:
                 self._scene_definition.scene,
                 len(documents),
             )
+            round_trace = self._build_simple_round_trace(
+                round_index=1,
+                tool_name="search",
+                query=message,
+                reason="search completed",
+                documents=documents,
+            )
             return RetrievalExecutionResult(
                 documents=documents,
                 tool_event={
@@ -212,22 +221,17 @@ class RetrievalExecutor:
                     "retrieval_policy": policy_summary,
                     "candidate_tools": list(candidate_tools),
                     "documents": len(documents),
-                    "rounds": [
-                        {
-                            "round_index": 1,
-                            "tool_name": "search",
-                            "query": message,
-                            "rewritten_query": None,
-                            "decision": "finish",
-                            "is_sufficient": len(documents) > 0,
-                            "reason": "search completed",
-                            "result_count": len(documents),
-                            "document_count": len(documents),
-                            "success": True,
-                            "error": None,
-                        }
-                    ],
+                    "rounds": [round_trace.model_dump()],
                 },
+                retrieval_trace=self._build_retrieval_trace(
+                    original_query=message,
+                    final_query=message,
+                    rewritten_query=None,
+                    candidate_tools=candidate_tools,
+                    exit_reason="finished_by_search",
+                    rounds=[round_trace],
+                    documents=documents,
+                ),
             )
         if isinstance(self._retriever, BaseRetriever):
             documents = list(self._retriever.invoke(message))
@@ -235,6 +239,13 @@ class RetrievalExecutor:
                 "BaseRetriever invoke completed for scene=%s: documents=%s",
                 self._scene_definition.scene,
                 len(documents),
+            )
+            round_trace = self._build_simple_round_trace(
+                round_index=1,
+                tool_name=type(self._retriever).__name__,
+                query=message,
+                reason="retriever invoke completed",
+                documents=documents,
             )
             return RetrievalExecutionResult(
                 documents=documents,
@@ -244,24 +255,227 @@ class RetrievalExecutor:
                     "retrieval_policy": policy_summary,
                     "candidate_tools": list(candidate_tools),
                     "documents": len(documents),
-                    "rounds": [
-                        {
-                            "round_index": 1,
-                            "tool_name": type(self._retriever).__name__,
-                            "query": message,
-                            "rewritten_query": None,
-                            "decision": "finish",
-                            "is_sufficient": len(documents) > 0,
-                            "reason": "retriever invoke completed",
-                            "result_count": len(documents),
-                            "document_count": len(documents),
-                            "success": True,
-                            "error": None,
-                        }
-                    ],
+                    "rounds": [round_trace.model_dump()],
                 },
+                retrieval_trace=self._build_retrieval_trace(
+                    original_query=message,
+                    final_query=message,
+                    rewritten_query=None,
+                    candidate_tools=candidate_tools,
+                    exit_reason="finished_by_retriever",
+                    rounds=[round_trace],
+                    documents=documents,
+                ),
             )
         raise TypeError("Retriever does not support document retrieval.")
+
+    def _build_agentic_round_trace(self, round_trace: Any) -> RetrievalTraceRound:
+        document_trace = self._extract_document_retrieval_trace(round_trace.result.metadata)
+        raw_candidates_count = self._resolve_count(
+            document_trace.get("raw_candidates_count"),
+            fallback=len(round_trace.result.records),
+        )
+        filtered_candidates_count = self._resolve_count(
+            document_trace.get("filtered_candidates_count"),
+            fallback=len(round_trace.result.documents),
+        )
+        return RetrievalTraceRound(
+            round_index=round_trace.plan.round_index,
+            tool_name=round_trace.result.tool_name,
+            query=round_trace.result.query,
+            rewritten_query=round_trace.rewrite.query if round_trace.rewrite is not None else None,
+            decision=round_trace.decision.next_action,
+            is_sufficient=round_trace.decision.is_sufficient,
+            reason=round_trace.decision.reason,
+            result_count=len(round_trace.result.records),
+            document_count=len(round_trace.result.documents),
+            success=round_trace.result.success,
+            error=round_trace.result.error,
+            raw_candidates_count=raw_candidates_count,
+            filtered_candidates_count=filtered_candidates_count,
+            top_k_chunks=self._coerce_top_chunks(document_trace.get("top_k_chunks")),
+            rerank=round_trace.result.metadata.get("rerank"),
+        )
+
+    def _build_simple_round_trace(
+        self,
+        *,
+        round_index: int,
+        tool_name: str,
+        query: str,
+        reason: str,
+        documents: list[Document],
+    ) -> RetrievalTraceRound:
+        return RetrievalTraceRound(
+            round_index=round_index,
+            tool_name=tool_name,
+            query=query,
+            rewritten_query=None,
+            decision="finish",
+            is_sufficient=len(documents) > 0,
+            reason=reason,
+            result_count=len(documents),
+            document_count=len(documents),
+            success=True,
+            error=None,
+            raw_candidates_count=len(documents),
+            filtered_candidates_count=len(documents),
+            top_k_chunks=self._top_chunks_from_documents(documents),
+            rerank=None,
+        )
+
+    def _build_retrieval_trace(
+        self,
+        *,
+        original_query: str,
+        final_query: str,
+        rewritten_query: str | None,
+        candidate_tools: tuple[str, ...],
+        exit_reason: str | None,
+        rounds: list[RetrievalTraceRound],
+        documents: list[Document],
+    ) -> RetrievalTrace:
+        raw_candidates_count = sum(round_trace.raw_candidates_count or 0 for round_trace in rounds)
+        filtered_candidates_count = sum(
+            round_trace.filtered_candidates_count or 0 for round_trace in rounds
+        )
+        return RetrievalTrace(
+            original_query=original_query,
+            final_query=final_query,
+            rewritten_query=rewritten_query,
+            tool_call_count=len(rounds),
+            candidate_tools=list(candidate_tools),
+            exit_reason=exit_reason,
+            raw_candidates_count=raw_candidates_count,
+            filtered_candidates_count=filtered_candidates_count,
+            top_k_chunks=self._top_chunks_from_documents(documents),
+            citations=[],
+            knowledge_used=False,
+            rounds=rounds,
+        )
+
+    def _extract_document_retrieval_trace(self, metadata: dict[str, Any]) -> dict[str, Any]:
+        trace = metadata.get("document_retrieval_trace")
+        if isinstance(trace, dict):
+            return trace
+        return {}
+
+    def _coerce_top_chunks(self, value: Any) -> list[RetrievalTraceTopChunk]:
+        if not isinstance(value, list):
+            return []
+        chunks: list[RetrievalTraceTopChunk] = []
+        for item in value:
+            if not isinstance(item, dict):
+                continue
+            try:
+                chunks.append(RetrievalTraceTopChunk.model_validate(item))
+            except ValueError:
+                continue
+        return chunks
+
+    def _top_chunks_from_documents(self, documents: list[Document]) -> list[RetrievalTraceTopChunk]:
+        chunks: list[RetrievalTraceTopChunk] = []
+        for rank, document in enumerate(documents, start=1):
+            metadata = document.metadata
+            citation_id = str(metadata.get("citation_id") or metadata.get("chunk_id") or "unknown")
+            chunks.append(
+                RetrievalTraceTopChunk(
+                    rank=rank,
+                    citation_id=citation_id,
+                    document_id=self._resolve_optional_str(metadata.get("document_id")),
+                    chunk_id=self._resolve_optional_str(metadata.get("chunk_id")),
+                    chunk_index=self._resolve_int(metadata.get("chunk_index")),
+                    source_name=self._resolve_source_name(
+                        citation_id=citation_id,
+                        document_id=self._resolve_optional_str(metadata.get("document_id")),
+                        metadata=metadata,
+                    ),
+                    source_path=self._resolve_optional_str(metadata.get("source_path")),
+                    score=self._resolve_float(metadata.get("score")),
+                    vector_score=self._resolve_float(metadata.get("vector_score")),
+                    keyword_score=self._resolve_float(metadata.get("keyword_score")),
+                    vector_rank=self._resolve_int(metadata.get("vector_rank")),
+                    keyword_rank=self._resolve_int(metadata.get("keyword_rank")),
+                    matched_by=self._resolve_matched_by(metadata.get("matched_by")),
+                )
+            )
+        return chunks
+
+    def _last_rewritten_query(self, rounds: list[RetrievalTraceRound]) -> str | None:
+        for round_trace in reversed(rounds):
+            if round_trace.rewritten_query:
+                return round_trace.rewritten_query
+        return None
+
+    def _resolve_outcome_final_query(self, outcome: Any, fallback: str) -> str:
+        final_plan = getattr(outcome, "final_plan", None)
+        active_query = getattr(final_plan, "active_query", None)
+        if isinstance(active_query, str) and active_query:
+            return active_query
+        plan = getattr(outcome, "plan", None)
+        active_query = getattr(plan, "active_query", None)
+        if isinstance(active_query, str) and active_query:
+            return active_query
+        return fallback
+
+    def _resolve_source_name(
+        self,
+        *,
+        citation_id: str,
+        document_id: str | None,
+        metadata: dict[str, Any],
+    ) -> str:
+        source_path = self._resolve_optional_str(metadata.get("source_path"))
+        if source_path:
+            return Path(source_path).name
+        if document_id:
+            return document_id
+        for field_name in ("title", "name", "product_name", "order_id", "product_id", "review_id"):
+            resolved = self._resolve_optional_str(metadata.get(field_name))
+            if resolved:
+                return resolved
+        return citation_id
+
+    def _resolve_optional_str(self, value: Any) -> str | None:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            return value
+        if isinstance(value, int | float):
+            return str(value)
+        return None
+
+    def _resolve_float(self, value: Any) -> float | None:
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, int | float):
+            return float(value)
+        return None
+
+    def _resolve_int(self, value: Any) -> int | None:
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, int):
+            return value
+        if isinstance(value, float) and value.is_integer():
+            return int(value)
+        if isinstance(value, str):
+            try:
+                return int(value)
+            except ValueError:
+                return None
+        return None
+
+    def _resolve_count(self, value: Any, *, fallback: int) -> int:
+        resolved = self._resolve_int(value)
+        if resolved is None or resolved < 0:
+            return fallback
+        return resolved
+
+    def _resolve_matched_by(self, value: Any) -> list[str]:
+        if isinstance(value, list):
+            return [str(item) for item in value if isinstance(item, str)]
+        return []
 
     def _build_policy_summary(self, policy: SceneRetrievalPolicy) -> dict[str, Any]:
         """返回可暴露到事件流的 scene 检索策略摘要。"""
@@ -709,6 +923,17 @@ class ChatService:
         documents = retrieval_result.documents
         citations = self._citation_mapper.citations_from_documents(documents)
         knowledge_used = len(citations) > 0
+        retrieval_trace = retrieval_result.retrieval_trace.model_copy(
+            update={
+                "citations": citations,
+                "knowledge_used": knowledge_used,
+                "filtered_candidates_count": (
+                    retrieval_result.retrieval_trace.filtered_candidates_count
+                    if knowledge_used
+                    else 0
+                ),
+            }
+        )
         return PreparedChatTurn(
             session_id=session_id,
             request_id=request_id,
@@ -716,6 +941,7 @@ class ChatService:
             user_message=payload.message,
             documents=documents,
             tool_event=retrieval_result.tool_event,
+            retrieval_trace=retrieval_trace,
             citations=citations,
             knowledge_used=knowledge_used,
             scene_metadata=self._scene_metadata(),
@@ -892,6 +1118,7 @@ class ChatService:
             "request_id": prepared.request_id,
             "knowledge_used": prepared.knowledge_used,
             "citations": [citation.model_dump() for citation in prepared.citations],
+            "retrieval_trace": prepared.retrieval_trace.model_dump(),
         }
 
     def _persist_turn(
@@ -928,6 +1155,17 @@ class ChatService:
             scene=prepared.scene_metadata.scene,
             agent=prepared.scene_metadata.agent,
             citations=citations,
+            retrieval_trace=prepared.retrieval_trace.model_copy(
+                update={
+                    "citations": citations,
+                    "knowledge_used": len(citations) > 0,
+                    "filtered_candidates_count": (
+                        prepared.retrieval_trace.filtered_candidates_count
+                        if citations
+                        else 0
+                    ),
+                }
+            ),
         )
 
     def _serialize_history_message(self, message: BaseMessage) -> dict[str, Any]:

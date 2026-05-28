@@ -63,7 +63,7 @@
 
 - [x] 检索效果：scene retrieval policy 已控制 `top_k`、相关性阈值、文档 `recall_strategy`、no-hit 策略，并提供默认关闭的 identity ReRank 边界
 - [x] 评测体系：Evaluation Harness 已覆盖 no-hit / SSE 基础回放，并支持 baseline/candidate artifact 对比
-- [ ] 可观测性：在日志、接口或调试页中暴露每轮 retrieval trace、query rewrite、tool decision 和 citation score
+- [x] 可观测性：`/chat` 与 SSE 已暴露结构化 `retrieval_trace`，覆盖 query rewrite、tool decision、候选数量、top chunk score 和 citations 来源
 - [ ] 知识管理：支持批量重建索引、失败重试、文档版本对比、索引状态诊断和上传文件清理
 - [ ] 前端调试页：完善 SSE 流式展示、引用展开、检索过程查看和错误态展示，保持轻量定位能力
 
@@ -262,6 +262,13 @@ backend\.venv\Scripts\python.exe backend\run.py
 - 低于当前相关性阈值的文档片段会被丢弃，不会进入 prompt、citations 或最终回答
 - 如果过滤后没有可用文档，`/chat` 会返回 scene fallback，`knowledge_used=false` 且 `citations=[]`
 - 对 `你好` 这类没有明确文档查询意图的问题，`generic_assistant` 不再进入“相关文档 / FAQ / 手册”式查询改写，避免误召回不相关知识
+
+查看单次检索 trace：
+
+- 普通请求：查看 `/chat` JSON 响应里的 `retrieval_trace`
+- 流式请求：查看 SSE `tool.retrieval_trace`；最终 `done.retrieval_trace` 使用同一结构
+- 重点字段：`original_query` / `rewritten_query` / `final_query`、`tool_call_count`、`candidate_tools`、`raw_candidates_count`、`filtered_candidates_count`、`top_k_chunks[].score`、`citations`
+- Evaluation Harness：运行 minimal 回放后查看 `backend\data\evals\latest.json` 中的 `results[].observed.retrieval_trace`；如果样本启用了流式回放，同时查看 `results[].stream.observed.retrieval_trace`
 
 API 调试页当前交互：
 

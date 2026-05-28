@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from langchain_core.documents import Document
@@ -16,7 +17,12 @@ from backend.platform.rag.contracts import RecallStrategy
 from backend.platform.rag.retrieval.documents.fusion import HybridFusionRanker
 from backend.platform.rag.retrieval.documents.keyword import DocumentKeywordRetriever
 from backend.platform.rag.retrieval.documents.semantic import DocumentSemanticRetriever
-from backend.platform.rag.retrieval.documents.types import DocumentChunkRetrievalResult
+from backend.platform.rag.retrieval.documents.types import (
+    DocumentChunkRetrievalResult,
+    DocumentRetrievalTopChunkTrace,
+    DocumentRetrievalTrace,
+    DocumentRetrievalTraceResult,
+)
 from backend.platform.search_foundation import (
     ActiveDocumentChunkSource,
     DocumentChunkVectorRepository,
@@ -97,12 +103,30 @@ class DocumentRetrievalService:
         minimum_relevance: float | None = None,
         recall_strategy: RecallStrategy = "hybrid",
     ) -> list[DocumentChunkRetrievalResult]:
+        return self.retrieve_with_trace(
+            query=query,
+            top_k=top_k,
+            namespace=namespace,
+            minimum_relevance=minimum_relevance,
+            recall_strategy=recall_strategy,
+        ).results
+
+    def retrieve_with_trace(
+        self,
+        *,
+        query: str,
+        top_k: int = 5,
+        namespace: str | None = None,
+        minimum_relevance: float | None = None,
+        recall_strategy: RecallStrategy = "hybrid",
+    ) -> DocumentRetrievalTraceResult:
         results = self._retrieve_by_strategy(
             query=query,
             top_k=top_k,
             namespace=namespace,
             recall_strategy=recall_strategy,
         )
+        raw_candidates_count = len(results)
         filtered_results = filter_low_relevance_document_results(
             [VectorSearchResult(document=result.document, score=result.score) for result in results],
             minimum_relevance=(
@@ -111,7 +135,15 @@ class DocumentRetrievalService:
         )
         allowed_ids = {result.document.id for result in filtered_results}
         final_results = [result for result in results if result.document.id in allowed_ids]
-        return self._filter_managed_documents(final_results)
+        final_results = self._filter_managed_documents(final_results)
+        return DocumentRetrievalTraceResult(
+            results=final_results,
+            trace=DocumentRetrievalTrace(
+                raw_candidates_count=raw_candidates_count,
+                filtered_candidates_count=len(final_results),
+                top_k_chunks=self._build_top_chunk_trace(final_results),
+            ),
+        )
 
     def search(
         self,
@@ -239,6 +271,37 @@ class DocumentRetrievalService:
         }
         return Document(page_content=result.document.content, metadata=metadata)
 
+    def _build_top_chunk_trace(
+        self,
+        results: list[DocumentChunkRetrievalResult],
+    ) -> list[DocumentRetrievalTopChunkTrace]:
+        return [
+            DocumentRetrievalTopChunkTrace(
+                rank=rank,
+                citation_id=self._resolve_citation_id(result.document),
+                document_id=self._resolve_optional_str(result.document.metadata.get("document_id")),
+                chunk_id=self._resolve_optional_str(result.document.metadata.get("chunk_id")),
+                chunk_index=self._resolve_int(result.document.metadata.get("chunk_index")),
+                source_name=self._resolve_source_name(result.document),
+                source_path=self._resolve_optional_str(result.document.metadata.get("source_path")),
+                score=float(result.score) if isinstance(result.score, int | float) else None,
+                vector_score=(
+                    float(result.vector_score)
+                    if isinstance(result.vector_score, int | float)
+                    else None
+                ),
+                keyword_score=(
+                    float(result.keyword_score)
+                    if isinstance(result.keyword_score, int | float)
+                    else None
+                ),
+                vector_rank=result.vector_rank,
+                keyword_rank=result.keyword_rank,
+                matched_by=list(result.matched_by),
+            )
+            for rank, result in enumerate(results, start=1)
+        ]
+
     def _resolve_namespace(self, metadata: dict[str, Any]) -> str:
         namespace = metadata.get("namespace")
         if isinstance(namespace, str) and namespace:
@@ -254,3 +317,37 @@ class DocumentRetrievalService:
             or metadata.get("id")
             or document.id
         )
+
+    def _resolve_source_name(self, document: VectorStoreDocument) -> str:
+        metadata = document.metadata
+        source_path = self._resolve_optional_str(metadata.get("source_path"))
+        if source_path:
+            return Path(source_path).name
+        for field_name in ("title", "name", "document_id", "chunk_id", "id"):
+            value = self._resolve_optional_str(metadata.get(field_name))
+            if value:
+                return value
+        return document.id
+
+    def _resolve_optional_str(self, value: Any) -> str | None:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            return value
+        if isinstance(value, int | float):
+            return str(value)
+        return None
+
+    def _resolve_int(self, value: Any) -> int | None:
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, int):
+            return value
+        if isinstance(value, float) and value.is_integer():
+            return int(value)
+        if isinstance(value, str):
+            try:
+                return int(value)
+            except ValueError:
+                return None
+        return None
