@@ -627,6 +627,294 @@
       background: rgba(15, 109, 116, 0.12);
     }
 
+    .trace-toggle {
+      width: auto;
+      min-height: 38px;
+      padding: 0 13px;
+      border-radius: 14px;
+      border: 1px solid rgba(47, 88, 112, 0.18);
+      background: rgba(17, 43, 55, 0.06);
+      color: #23485d;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 12px;
+      font-weight: 800;
+    }
+
+    .trace-toggle:hover {
+      background: rgba(15, 109, 116, 0.1);
+      color: var(--teal);
+    }
+
+    .trace-toggle.is-empty {
+      opacity: 0.76;
+    }
+
+    .trace-toggle-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--text-faint);
+      box-shadow: 0 0 0 4px rgba(137, 161, 180, 0.12);
+    }
+
+    .trace-toggle.has-trace .trace-toggle-dot {
+      background: var(--teal);
+      box-shadow: 0 0 0 4px rgba(15, 109, 116, 0.12);
+    }
+
+    .conversation-board {
+      position: relative;
+    }
+
+    .trace-backdrop {
+      position: absolute;
+      inset: 18px 28px 22px;
+      z-index: 12;
+      display: none;
+      border-radius: 24px;
+      background: rgba(7, 40, 64, 0.18);
+      backdrop-filter: blur(2px);
+    }
+
+    .conversation-board.trace-open .trace-backdrop {
+      display: block;
+    }
+
+    .trace-drawer {
+      position: absolute;
+      top: 18px;
+      right: 28px;
+      bottom: 22px;
+      z-index: 13;
+      width: min(500px, calc(100% - 56px));
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
+      border: 1px solid rgba(181, 201, 213, 0.95);
+      border-radius: 24px;
+      background: rgba(251, 253, 254, 0.98);
+      box-shadow: 0 28px 70px rgba(9, 34, 52, 0.2);
+      transform: translateX(calc(100% + 36px));
+      transition: transform 180ms ease;
+      overflow: hidden;
+    }
+
+    .conversation-board.trace-open .trace-drawer {
+      transform: translateX(0);
+    }
+
+    .trace-drawer-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 14px;
+      padding: 18px 18px 14px;
+      border-bottom: 1px solid rgba(215, 226, 233, 0.92);
+      background: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(244, 248, 251, 0.96));
+    }
+
+    .trace-drawer-title {
+      min-width: 0;
+    }
+
+    .trace-drawer-title strong {
+      display: block;
+      color: var(--text);
+      font-size: 16px;
+      font-weight: 800;
+    }
+
+    .trace-drawer-title span {
+      display: block;
+      margin-top: 5px;
+      color: var(--text-muted);
+      font-size: 12px;
+      line-height: 1.5;
+      word-break: break-word;
+    }
+
+    .trace-close {
+      width: 36px;
+      height: 36px;
+      flex: 0 0 36px;
+      border-radius: 12px;
+      background: rgba(17, 43, 55, 0.07);
+      color: var(--text);
+      font-size: 20px;
+      font-weight: 700;
+    }
+
+    .trace-body {
+      min-height: 0;
+      overflow-y: auto;
+      padding: 16px 18px 18px;
+      display: grid;
+      align-content: start;
+      gap: 14px;
+    }
+
+    .trace-empty {
+      display: grid;
+      place-items: center;
+      min-height: 260px;
+      padding: 28px;
+      color: var(--text-muted);
+      text-align: center;
+      border: 1px dashed rgba(181, 201, 213, 0.95);
+      border-radius: 20px;
+      background: rgba(244, 248, 251, 0.78);
+      font-size: 13px;
+      line-height: 1.7;
+    }
+
+    .trace-section .trace-empty {
+      min-height: 88px;
+      padding: 18px;
+    }
+
+    .trace-summary-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .trace-metric,
+    .trace-query,
+    .trace-round,
+    .trace-chunk,
+    .trace-json {
+      border: 1px solid rgba(214, 225, 232, 0.92);
+      border-radius: 16px;
+      background: rgba(255, 255, 255, 0.9);
+    }
+
+    .trace-metric {
+      min-height: 82px;
+      padding: 12px;
+      display: grid;
+      align-content: space-between;
+      gap: 8px;
+    }
+
+    .trace-metric strong,
+    .trace-query strong,
+    .trace-section-title {
+      color: var(--text-muted);
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+
+    .trace-metric span {
+      color: var(--text);
+      font-size: 20px;
+      font-weight: 800;
+      line-height: 1;
+    }
+
+    .trace-query {
+      padding: 12px 14px;
+      display: grid;
+      gap: 7px;
+    }
+
+    .trace-query span {
+      color: #13374f;
+      font-size: 13px;
+      line-height: 1.6;
+      word-break: break-word;
+    }
+
+    .trace-section {
+      display: grid;
+      gap: 10px;
+    }
+
+    .trace-round,
+    .trace-chunk {
+      padding: 12px 14px;
+      display: grid;
+      gap: 9px;
+    }
+
+    .trace-row-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .trace-row-head strong {
+      color: var(--text);
+      font-size: 13px;
+      font-weight: 800;
+      word-break: break-word;
+    }
+
+    .trace-row-head span {
+      flex: 0 0 auto;
+      color: var(--teal);
+      font-size: 12px;
+      font-weight: 800;
+    }
+
+    .trace-tags {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 7px;
+    }
+
+    .trace-tag {
+      min-height: 25px;
+      padding: 0 9px;
+      border-radius: 999px;
+      background: rgba(20, 32, 51, 0.06);
+      color: var(--text-muted);
+      display: inline-flex;
+      align-items: center;
+      font-size: 11px;
+      font-weight: 800;
+    }
+
+    .trace-tag.ok {
+      color: var(--green);
+      background: var(--green-soft);
+    }
+
+    .trace-tag.warn {
+      color: var(--amber);
+      background: var(--amber-soft);
+    }
+
+    .trace-row-text {
+      color: var(--text-muted);
+      font-size: 12px;
+      line-height: 1.6;
+      word-break: break-word;
+    }
+
+    .trace-json summary {
+      padding: 12px 14px;
+      color: var(--text);
+      cursor: pointer;
+      font-size: 13px;
+      font-weight: 800;
+    }
+
+    .trace-json pre {
+      max-height: 300px;
+      margin: 0;
+      overflow: auto;
+      padding: 0 14px 14px;
+      color: #17384d;
+      font-size: 12px;
+      line-height: 1.55;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
     .support-card-inline {
       width: min(760px, calc(100% - 52px));
       margin-left: 52px;
@@ -1116,6 +1404,21 @@
         width: 100%;
       }
 
+      .trace-backdrop {
+        inset: 0;
+        border-radius: 0;
+      }
+
+      .trace-drawer {
+        inset: 0;
+        width: 100%;
+        border-radius: 0;
+      }
+
+      .trace-summary-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
       .detail-grid {
         grid-template-columns: 1fr;
       }
@@ -1175,11 +1478,15 @@
         </div>
       </header>
 
-      <section class="conversation-board">
+      <section id="conversationBoard" class="conversation-board">
         <div class="board-panel">
           <div class="board-head">
             <h2 id="sceneHeadline">对话主线程</h2>
             <div class="board-head-actions">
+              <button id="traceToggle" class="trace-toggle is-empty" type="button">
+                <span class="trace-toggle-dot"></span>
+                <span>检索 Trace</span>
+              </button>
               <div id="mountDropdown" class="mount-dropdown">
                 <button id="mountTrigger" class="mount-trigger" type="button" aria-haspopup="true" aria-expanded="false">
                   <span class="mount-trigger-copy">
@@ -1221,6 +1528,17 @@
             <div id="chatFeed" class="chat-feed"></div>
           </div>
         </div>
+        <button id="traceBackdrop" class="trace-backdrop" type="button" aria-label="关闭检索 Trace"></button>
+        <aside id="traceDrawer" class="trace-drawer" aria-label="检索 Trace 面板" aria-hidden="true">
+          <div class="trace-drawer-head">
+            <div class="trace-drawer-title">
+              <strong id="traceTitle">检索 Trace</strong>
+              <span id="traceSubtitle">选择一次助手回答查看检索过程。</span>
+            </div>
+            <button id="traceClose" class="trace-close" type="button" aria-label="关闭检索 Trace">×</button>
+          </div>
+          <div id="traceBody" class="trace-body"></div>
+        </aside>
       </section>
 
       <footer class="composer">
@@ -1264,14 +1582,24 @@
       activeScene: "",
       sceneLoading: false,
       mountedKnowledgeSources: ["documents"],
-      streamAnimation: null
+      streamAnimation: null,
+      activeTraceMessageId: "",
+      traceDrawerOpen: false
     };
 
     const refs = {
       serviceStatus: document.getElementById("serviceStatus"),
+      conversationBoard: document.getElementById("conversationBoard"),
       sceneHeadline: document.getElementById("sceneHeadline"),
       sessionIdBadge: document.getElementById("sessionIdBadge"),
       chatFeed: document.getElementById("chatFeed"),
+      traceToggle: document.getElementById("traceToggle"),
+      traceBackdrop: document.getElementById("traceBackdrop"),
+      traceDrawer: document.getElementById("traceDrawer"),
+      traceClose: document.getElementById("traceClose"),
+      traceTitle: document.getElementById("traceTitle"),
+      traceSubtitle: document.getElementById("traceSubtitle"),
+      traceBody: document.getElementById("traceBody"),
       sceneSelect: document.getElementById("sceneSelect"),
       mountDropdown: document.getElementById("mountDropdown"),
       mountTrigger: document.getElementById("mountTrigger"),
@@ -1407,6 +1735,7 @@
         role: role,
         text: text,
         citations: Array.isArray(meta.citations) ? meta.citations.slice(0, 4) : [],
+        retrievalTrace: meta.retrievalTrace || null,
         knowledgeUsed: meta.knowledgeUsed,
         scene: meta.scene || state.activeScene,
         sourcePrompt: meta.sourcePrompt || "",
@@ -1427,6 +1756,9 @@
       Object.assign(target, patch || {});
       if (Array.isArray(target.citations)) {
         target.citations = target.citations.slice(0, 4);
+      }
+      if (patch && Object.prototype.hasOwnProperty.call(patch, "retrievalTrace")) {
+        target.retrievalTrace = patch.retrievalTrace || null;
       }
       renderMessages();
     }
@@ -1707,12 +2039,189 @@
       const first = message.citations[0];
       const expanded = !!state.expandedKnowledge[message.id];
       return (
-        '<div class="bubble-actions">' +
-          '<button class="knowledge-toggle' + (expanded ? " is-open" : "") + '" type="button" data-knowledge-toggle="' + escapeHtml(message.id) + '">' +
-            '<strong>' + (expanded ? "收起知识命中详情" : "展开知识命中详情") + '</strong>' +
-            '<span>[' + escapeHtml(first.index || 1) + '] ' + escapeHtml(formatCitationSource(first)) + ' · ' + escapeHtml(summarizeSnippet(first.snippet, 56)) + '</span>' +
-          '</button>' +
+        '<button class="knowledge-toggle' + (expanded ? " is-open" : "") + '" type="button" data-knowledge-toggle="' + escapeHtml(message.id) + '">' +
+          '<strong>' + (expanded ? "收起知识命中详情" : "展开知识命中详情") + '</strong>' +
+          '<span>[' + escapeHtml(first.index || 1) + '] ' + escapeHtml(formatCitationSource(first)) + ' · ' + escapeHtml(summarizeSnippet(first.snippet, 56)) + '</span>' +
+        '</button>'
+      );
+    }
+
+    function renderTraceAction(message) {
+      if (message.role !== "assistant" || !message.retrievalTrace) {
+        return "";
+      }
+      return (
+        '<button class="trace-toggle has-trace" type="button" data-trace-open="' + escapeHtml(message.id) + '">' +
+          '<span class="trace-toggle-dot"></span>' +
+          '<span>查看检索 Trace</span>' +
+        '</button>'
+      );
+    }
+
+    function renderMessageActions(message) {
+      const knowledge = renderKnowledgeSummary(message);
+      const trace = renderTraceAction(message);
+      if (!knowledge && !trace) {
+        return "";
+      }
+      return '<div class="bubble-actions">' + knowledge + trace + '</div>';
+    }
+
+    function getLatestTraceMessage() {
+      for (let index = state.messages.length - 1; index >= 0; index -= 1) {
+        if (state.messages[index].role === "assistant" && state.messages[index].retrievalTrace) {
+          return state.messages[index];
+        }
+      }
+      return null;
+    }
+
+    function getActiveTraceMessage() {
+      const active = state.messages.find(function (message) {
+        return message.id === state.activeTraceMessageId && message.retrievalTrace;
+      });
+      return active || getLatestTraceMessage();
+    }
+
+    function updateTraceToggleState() {
+      const hasTrace = !!getLatestTraceMessage();
+      refs.traceToggle.classList.toggle("has-trace", hasTrace);
+      refs.traceToggle.classList.toggle("is-empty", !hasTrace);
+    }
+
+    function setTraceDrawerOpen(open) {
+      state.traceDrawerOpen = !!open;
+      refs.conversationBoard.classList.toggle("trace-open", state.traceDrawerOpen);
+      refs.traceDrawer.setAttribute("aria-hidden", state.traceDrawerOpen ? "false" : "true");
+      renderTraceDrawer();
+    }
+
+    function openTraceForMessage(messageId) {
+      state.activeTraceMessageId = messageId || (getLatestTraceMessage() || {}).id || "";
+      setTraceDrawerOpen(true);
+    }
+
+    function formatTraceNumber(value) {
+      if (typeof value === "number" && Number.isFinite(value)) {
+        return String(value);
+      }
+      return "0";
+    }
+
+    function formatTraceText(value, fallback) {
+      if (value === null || typeof value === "undefined" || value === "") {
+        return fallback || "-";
+      }
+      return String(value);
+    }
+
+    function formatTraceScore(value) {
+      if (typeof value !== "number" || !Number.isFinite(value)) {
+        return "-";
+      }
+      return value.toFixed(3).replace(/0+$/, "").replace(/\.$/, "");
+    }
+
+    function renderTraceMetric(label, value) {
+      return (
+        '<div class="trace-metric">' +
+          '<strong>' + escapeHtml(label) + '</strong>' +
+          '<span>' + escapeHtml(formatTraceText(value, "0")) + '</span>' +
         '</div>'
+      );
+    }
+
+    function renderTraceQuery(label, value) {
+      return (
+        '<div class="trace-query">' +
+          '<strong>' + escapeHtml(label) + '</strong>' +
+          '<span>' + escapeHtml(formatTraceText(value, "-")) + '</span>' +
+        '</div>'
+      );
+    }
+
+    function renderTraceRound(round) {
+      const raw = formatTraceNumber(round && round.raw_candidates_count);
+      const filtered = formatTraceNumber(round && round.filtered_candidates_count);
+      const success = !!(round && round.success);
+      return (
+        '<div class="trace-round">' +
+          '<div class="trace-row-head">' +
+            '<strong>#' + escapeHtml((round && round.round_index) || 1) + ' ' + escapeHtml(formatTraceText(round && round.tool_name, "unknown_tool")) + '</strong>' +
+            '<span>' + escapeHtml(formatTraceText(round && round.decision, "-")) + '</span>' +
+          '</div>' +
+          '<div class="trace-tags">' +
+            '<span class="trace-tag ' + (success ? "ok" : "warn") + '">' + (success ? "success" : "failed") + '</span>' +
+            '<span class="trace-tag">raw ' + escapeHtml(raw) + '</span>' +
+            '<span class="trace-tag">filtered ' + escapeHtml(filtered) + '</span>' +
+            '<span class="trace-tag">docs ' + escapeHtml(formatTraceNumber(round && round.document_count)) + '</span>' +
+          '</div>' +
+          '<div class="trace-row-text">Query：' + escapeHtml(formatTraceText(round && round.query, "-")) + '</div>' +
+          ((round && round.rewritten_query) ? '<div class="trace-row-text">Rewrite：' + escapeHtml(round.rewritten_query) + '</div>' : '') +
+          ((round && round.reason) ? '<div class="trace-row-text">Reason：' + escapeHtml(round.reason) + '</div>' : '') +
+        '</div>'
+      );
+    }
+
+    function renderTraceChunk(chunk) {
+      const score = formatTraceScore(chunk && chunk.score);
+      const source = formatTraceText(chunk && chunk.source_name, "unknown source");
+      const chunkId = formatTraceText(chunk && (chunk.chunk_id || chunk.citation_id), "-");
+      const matchedBy = Array.isArray(chunk && chunk.matched_by) ? chunk.matched_by.join(" + ") : "";
+      return (
+        '<div class="trace-chunk">' +
+          '<div class="trace-row-head">' +
+            '<strong>#' + escapeHtml((chunk && chunk.rank) || 1) + ' ' + escapeHtml(source) + '</strong>' +
+            '<span>' + escapeHtml(score) + '</span>' +
+          '</div>' +
+          '<div class="trace-tags">' +
+            '<span class="trace-tag">chunk ' + escapeHtml(chunkId) + '</span>' +
+            '<span class="trace-tag">citation ' + escapeHtml(formatTraceText(chunk && chunk.citation_id, "-")) + '</span>' +
+            (matchedBy ? '<span class="trace-tag">' + escapeHtml(matchedBy) + '</span>' : '') +
+          '</div>' +
+        '</div>'
+      );
+    }
+
+    function renderTraceDrawer() {
+      updateTraceToggleState();
+      const message = getActiveTraceMessage();
+      if (!message || !message.retrievalTrace) {
+        refs.traceTitle.textContent = "检索 Trace";
+        refs.traceSubtitle.textContent = "发送一次问题后，可以在这里查看检索过程。";
+        refs.traceBody.innerHTML = '<div class="trace-empty">暂无可查看的检索 Trace。</div>';
+        return;
+      }
+
+      const trace = message.retrievalTrace;
+      const rounds = Array.isArray(trace.rounds) ? trace.rounds : [];
+      const chunks = Array.isArray(trace.top_k_chunks) ? trace.top_k_chunks : [];
+      const citations = Array.isArray(trace.citations) ? trace.citations : [];
+      refs.traceTitle.textContent = trace.knowledge_used ? "检索 Trace · 命中知识" : "检索 Trace · 未命中";
+      refs.traceSubtitle.textContent = summarizeSnippet(message.sourcePrompt || trace.original_query || "最近一次助手回答", 78);
+      refs.traceBody.innerHTML = (
+        '<div class="trace-summary-grid">' +
+          renderTraceMetric("Tool Calls", formatTraceNumber(trace.tool_call_count)) +
+          renderTraceMetric("Raw", formatTraceNumber(trace.raw_candidates_count)) +
+          renderTraceMetric("Filtered", formatTraceNumber(trace.filtered_candidates_count)) +
+          renderTraceMetric("Top Chunks", String(chunks.length)) +
+          renderTraceMetric("Citations", String(citations.length)) +
+          renderTraceMetric("Knowledge", trace.knowledge_used ? "Yes" : "No") +
+        '</div>' +
+        renderTraceQuery("Original Query", trace.original_query) +
+        renderTraceQuery("Rewritten Query", trace.rewritten_query || trace.final_query) +
+        '<section class="trace-section">' +
+          '<div class="trace-section-title">Agentic Rounds</div>' +
+          (rounds.length ? rounds.map(renderTraceRound).join("") : '<div class="trace-empty">没有记录 Agentic 轮次。</div>') +
+        '</section>' +
+        '<section class="trace-section">' +
+          '<div class="trace-section-title">Top Chunks</div>' +
+          (chunks.length ? chunks.slice(0, 6).map(renderTraceChunk).join("") : '<div class="trace-empty">没有进入最终证据的分块。</div>') +
+        '</section>' +
+        '<details class="trace-json">' +
+          '<summary>查看原始 JSON</summary>' +
+          '<pre>' + escapeHtml(JSON.stringify(trace, null, 2)) + '</pre>' +
+        '</details>'
       );
     }
 
@@ -1720,6 +2229,7 @@
       if (!state.messages.length) {
         refs.chatFeed.innerHTML = renderWelcome();
         scrollToBottom();
+        renderTraceDrawer();
         return;
       }
 
@@ -1764,7 +2274,7 @@
               '<div class="bubble">' +
                 '<div class="message-meta">' + metaChips.join("") + '</div>' +
                 '<p data-message-text="' + escapeHtml(message.id) + '">' + escapeHtml(message.text || (message.streaming ? "正在生成回答..." : "")) + '</p>' +
-                renderKnowledgeSummary(message) +
+                renderMessageActions(message) +
               '</div>' +
             '</article>' +
             renderSupportBlocks(message) +
@@ -1776,6 +2286,8 @@
         message.rendered = true;
       });
       bindKnowledgeToggles();
+      bindTraceButtons();
+      renderTraceDrawer();
       scrollToBottom();
     }
 
@@ -1783,6 +2295,14 @@
       document.querySelectorAll("[data-knowledge-toggle]").forEach(function (button) {
         button.addEventListener("click", function () {
           toggleKnowledgeDetails(button.getAttribute("data-knowledge-toggle"));
+        });
+      });
+    }
+
+    function bindTraceButtons() {
+      document.querySelectorAll("[data-trace-open]").forEach(function (button) {
+        button.addEventListener("click", function () {
+          openTraceForMessage(button.getAttribute("data-trace-open"));
         });
       });
     }
@@ -1926,6 +2446,10 @@
         handlers.onChunk(event.data || {});
         return;
       }
+      if (event.event === "tool" && handlers && handlers.onTool) {
+        handlers.onTool(event.data || {});
+        return;
+      }
       if (event.event === "done" && handlers && handlers.onDone) {
         handlers.onDone(event.data || {});
         return;
@@ -2001,6 +2525,8 @@
       clearError();
       if (!keepMessages) {
         state.messages = [];
+        state.activeTraceMessageId = "";
+        setTraceDrawerOpen(false);
         renderMessages();
       }
       setInteractiveState();
@@ -2088,6 +2614,19 @@
             }
             queueStreamDelta(assistantMessageId, data.delta || "");
           },
+          onTool: function (data) {
+            if (!data || !data.retrieval_trace) {
+              return;
+            }
+            if (assistantMessageId) {
+              updateMessage(assistantMessageId, {
+                retrievalTrace: data.retrieval_trace,
+                citations: data.citations || [],
+                knowledgeUsed: data.knowledge_used
+              });
+              state.activeTraceMessageId = assistantMessageId;
+            }
+          },
           onDone: async function (data) {
             streamCompleted = true;
             state.sessionId = data.session_id || state.sessionId;
@@ -2097,21 +2636,27 @@
             if (!assistantMessageId) {
               assistantMessageId = addMessage("assistant", data.answer || "当前没有生成可展示的回答。", {
                 citations: data.citations,
+                retrievalTrace: data.retrieval_trace || null,
                 knowledgeUsed: data.knowledge_used,
                 scene: data.scene || state.activeScene,
                 sourcePrompt: text,
                 streaming: false
               });
             } else {
+              const existingAssistantMessage = state.messages.find(function (message) {
+                return message.id === assistantMessageId;
+              }) || {};
               updateMessage(assistantMessageId, {
                 text: data.answer || "当前没有生成可展示的回答。",
                 citations: data.citations,
+                retrievalTrace: data.retrieval_trace || existingAssistantMessage.retrievalTrace || null,
                 knowledgeUsed: data.knowledge_used,
                 scene: data.scene || state.activeScene,
                 sourcePrompt: text,
                 streaming: false
               });
             }
+            state.activeTraceMessageId = assistantMessageId || state.activeTraceMessageId;
             resetStreamAnimation();
             setServiceStatus(true);
             setComposerStatus(data.knowledge_used ? "回复完成，已命中知识" : "回复完成");
@@ -2172,6 +2717,15 @@
       refs.newChat.addEventListener("click", function () {
         newConversation();
       });
+      refs.traceToggle.addEventListener("click", function () {
+        openTraceForMessage();
+      });
+      refs.traceClose.addEventListener("click", function () {
+        setTraceDrawerOpen(false);
+      });
+      refs.traceBackdrop.addEventListener("click", function () {
+        setTraceDrawerOpen(false);
+      });
       refs.mountTrigger.addEventListener("click", function () {
         if (refs.mountTrigger.disabled) {
           return;
@@ -2201,6 +2755,7 @@
       document.addEventListener("keydown", function (event) {
         if (event.key === "Escape") {
           setMountMenuOpen(false);
+          setTraceDrawerOpen(false);
         }
       });
     }
