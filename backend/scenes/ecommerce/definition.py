@@ -19,13 +19,13 @@ from backend.scenes.base import (
 from backend.platform.rag.contracts import RetrievalContext
 from backend.platform.rag.orchestration.decisions import SufficiencyDecision
 from backend.platform.models.base.router import TaskComplexity
-from backend.scenes.ecommerce.commerce_tools import build_commerce_tools
 from backend.scenes.ecommerce.knowledge_service import KnowledgeService, create_knowledge_service
 from backend.scenes.ecommerce.loader import preload_knowledge_base
-from backend.scenes.ecommerce.retrieval_tools import (
+from backend.scenes.ecommerce.tools import (
     ProductCatalogStore,
+    build_ecommerce_action_tools,
     build_ecommerce_agentic_retrieval_tools,
-    build_retrieval_tools,
+    build_ecommerce_structured_retrieval_tools,
 )
 from backend.scenes.generic_assistant.definition import (
     GenericAssistantBusinessExtension,
@@ -444,12 +444,12 @@ def build_ecommerce_scene_definition(
         description="Scene with product, review, order, and document retrieval for ecommerce support.",
         build_retriever=generic_definition.build_retriever,
         build_tools=lambda: (
-            *build_retrieval_tools(
+            *build_ecommerce_structured_retrieval_tools(
                 app_settings=current_settings,
                 knowledge_service=resolved_knowledge_service,
                 product_store=resolved_product_store,
             ),
-            *build_commerce_tools(app_settings=current_settings),
+            *build_ecommerce_action_tools(app_settings=current_settings),
         ),
         candidate_retrieval_tools_resolver=generic_definition.candidate_retrieval_tools_resolver,
         system_prompt=ECOMMERCE_SYSTEM_PROMPT,

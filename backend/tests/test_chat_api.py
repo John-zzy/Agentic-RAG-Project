@@ -79,9 +79,10 @@ class FakeDocumentRetrievalService:
         minimum_relevance: float | None = None,
         recall_strategy: str = "hybrid",
     ) -> list[DocumentChunkRetrievalResult]:
-        del query, namespace
+        del namespace
         self.calls.append(
             {
+                "query": query,
                 "top_k": top_k,
                 "minimum_relevance": minimum_relevance,
                 "recall_strategy": recall_strategy,
@@ -104,6 +105,45 @@ class FakeDocumentRetrievalService:
             )
             for index, result in enumerate(documents[:top_k], start=1)
         ]
+
+
+class QueryFilteredFakeDocumentRetrievalService(FakeDocumentRetrievalService):
+    def __init__(
+        self,
+        documents: list[VectorSearchResult] | None = None,
+        *,
+        allowed_query_terms: tuple[str, ...] = (),
+    ) -> None:
+        super().__init__(documents=documents)
+        self._allowed_query_terms = allowed_query_terms
+
+    def retrieve(
+        self,
+        *,
+        query: str,
+        top_k: int = 5,
+        namespace: str | None = None,
+        minimum_relevance: float | None = None,
+        recall_strategy: str = "hybrid",
+    ) -> list[DocumentChunkRetrievalResult]:
+        normalized_query = query.lower()
+        if not any(term.lower() in normalized_query for term in self._allowed_query_terms):
+            self.calls.append(
+                {
+                    "query": query,
+                    "top_k": top_k,
+                    "minimum_relevance": minimum_relevance,
+                    "recall_strategy": recall_strategy,
+                }
+            )
+            return []
+        return super().retrieve(
+            query=query,
+            top_k=top_k,
+            namespace=namespace,
+            minimum_relevance=minimum_relevance,
+            recall_strategy=recall_strategy,
+        )
 
 
 class FakeModel:
@@ -166,6 +206,28 @@ class FakeModel:
         complexity: str = "simple",
     ):
         raise AssertionError("runtime should use stream_runnable instead of stream_template")
+
+
+class FakeRewriteModel:
+    def __init__(self, output: str) -> None:
+        self.output = output
+        self.get_runnable_calls: list[str] = []
+        self.invoke_runnable_calls: list[dict[str, Any]] = []
+
+    def get_runnable(
+        self,
+        complexity: str = "simple",
+        prompt_template: Any | None = None,
+        *,
+        output_parser: Any | None = None,
+    ) -> object:
+        del prompt_template, output_parser
+        self.get_runnable_calls.append(complexity)
+        return object()
+
+    def invoke_runnable(self, runnable: Any, input: Any, *, config: Any | None = None) -> str:
+        self.invoke_runnable_calls.append({"runnable": runnable, "input": input, "config": config})
+        return self.output
 
 
 class FakeAnswerRunnable(RunnableSerializable[Any, str]):
@@ -465,6 +527,63 @@ def test_chat_api_no_hit_fallback_sets_knowledge_used_false() -> None:
     assert model.invoke_runnable_calls == []
 
 
+def test_chat_api_no_hit_with_unrelated_docs_keeps_knowledge_unused(monkeypatch) -> None:
+    rewrite_model = FakeRewriteModel(
+        '{"query":"VOID-ALPHA-7788 secret handshake 数据模型","reason":"尝试添加泛词"}'
+    )
+    monkeypatch.setattr(
+        "backend.scenes.generic_assistant.definition.default_model_client",
+        rewrite_model,
+    )
+    model = FakeModel(answer="unused")
+    document_retrieval_service = QueryFilteredFakeDocumentRetrievalService(
+        documents=[
+            _result(
+                doc_id="doc-unrelated",
+                content="员工手册：远程访问需要开启 MFA，并遵守信息安全要求。",
+                score=0.95,
+                metadata={
+                    "document_id": "doc-unrelated",
+                    "source_path": "it-policy.md",
+                    "namespace": "documents",
+                    "is_managed_document": True,
+                    "chunk_id": "chunk-unrelated",
+                    "chunk_index": 0,
+                },
+            )
+        ],
+        allowed_query_terms=("MFA",),
+    )
+    service = _build_chat_service(
+        "chat-api-no-hit-unrelated-docs",
+        FakeKnowledgeService(),
+        document_retrieval_service,
+        model,
+    )
+    app = create_app(chat_service=service)
+
+    with TestClient(app) as client:
+        response = client.post("/chat", json={"message": "VOID-ALPHA-7788 secret handshake?"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["knowledge_used"] is False
+    assert payload["citations"] == []
+    assert "暂时没有检索到足够相关的文档知识" in payload["answer"]
+    assert payload["retrieval_trace"]["knowledge_used"] is False
+    assert payload["retrieval_trace"]["citations"] == []
+    assert payload["retrieval_trace"]["filtered_candidates_count"] == 0
+    assert payload["retrieval_trace"]["rewritten_query"] == "VOID-ALPHA-7788 secret handshake?"
+    assert [call["query"] for call in document_retrieval_service.calls] == [
+        "VOID-ALPHA-7788 secret handshake?",
+        "VOID-ALPHA-7788 secret handshake?",
+    ]
+    assert rewrite_model.get_runnable_calls == ["simple"]
+    assert len(rewrite_model.invoke_runnable_calls) == 1
+    assert model.get_runnable_calls == []
+    assert model.invoke_runnable_calls == []
+
+
 def test_chat_api_sse_no_hit_uses_fallback_without_model_streaming() -> None:
     model = FakeModel(answer="unused", stream_chunks=["unused"])
     service = _build_chat_service(
@@ -497,6 +616,75 @@ def test_chat_api_sse_no_hit_uses_fallback_without_model_streaming() -> None:
     assert done_payload["knowledge_used"] is False
     assert done_payload["citations"] == []
     assert done_payload["retrieval_trace"] == tool_payload["retrieval_trace"]
+    assert model.get_runnable_calls == []
+    assert model.stream_runnable_calls == []
+    assert model.invoke_runnable_calls == []
+
+
+def test_chat_api_sse_no_hit_with_unrelated_docs_keeps_done_without_citations(monkeypatch) -> None:
+    rewrite_model = FakeRewriteModel(
+        '{"query":"VOID-ALPHA-7788 secret handshake 常见问题","reason":"尝试添加泛词"}'
+    )
+    monkeypatch.setattr(
+        "backend.scenes.generic_assistant.definition.default_model_client",
+        rewrite_model,
+    )
+    model = FakeModel(answer="unused", stream_chunks=["unused"])
+    document_retrieval_service = QueryFilteredFakeDocumentRetrievalService(
+        documents=[
+            _result(
+                doc_id="doc-unrelated",
+                content="Support FAQ：普通支持请求通常会在 1 个工作日内得到首次响应。",
+                score=0.95,
+                metadata={
+                    "document_id": "doc-unrelated",
+                    "source_path": "support-faq.md",
+                    "namespace": "documents",
+                    "is_managed_document": True,
+                    "chunk_id": "chunk-unrelated",
+                    "chunk_index": 0,
+                },
+            )
+        ],
+        allowed_query_terms=("普通支持请求",),
+    )
+    service = _build_chat_service(
+        "chat-api-sse-no-hit-unrelated-docs",
+        FakeKnowledgeService(),
+        document_retrieval_service,
+        model,
+    )
+    app = create_app(chat_service=service)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/chat",
+            json={"message": "VOID-ALPHA-7788 secret handshake?", "stream": True},
+        )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    events = _parse_sse_events(response.text)
+    assert [event["event"] for event in events] == ["start", "history", "tool", "chunk", "done"]
+
+    tool_payload = json.loads(events[2]["data"])
+    chunk_payload = json.loads(events[3]["data"])
+    done_payload = json.loads(events[4]["data"])
+    assert tool_payload["knowledge_used"] is False
+    assert tool_payload["documents"] == 0
+    assert tool_payload["retrieval_trace"]["knowledge_used"] is False
+    assert tool_payload["retrieval_trace"]["filtered_candidates_count"] == 0
+    assert tool_payload["retrieval_trace"]["citations"] == []
+    assert "暂时没有检索到足够相关的文档知识" in chunk_payload["delta"]
+    assert done_payload["knowledge_used"] is False
+    assert done_payload["citations"] == []
+    assert done_payload["retrieval_trace"] == tool_payload["retrieval_trace"]
+    assert [call["query"] for call in document_retrieval_service.calls] == [
+        "VOID-ALPHA-7788 secret handshake?",
+        "VOID-ALPHA-7788 secret handshake?",
+    ]
+    assert rewrite_model.get_runnable_calls == ["simple"]
+    assert len(rewrite_model.invoke_runnable_calls) == 1
     assert model.get_runnable_calls == []
     assert model.stream_runnable_calls == []
     assert model.invoke_runnable_calls == []

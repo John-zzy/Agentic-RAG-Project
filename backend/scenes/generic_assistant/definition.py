@@ -1,43 +1,40 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any
+import json
+import re
+from typing import Any, Protocol, runtime_checkable
 
-from langchain_core.documents import Document
-from langchain_core.retrievers import BaseRetriever
+from langchain_core.prompts import PromptTemplate
 from langchain_core.runnables import RunnableConfig
-from langchain_core.tools import BaseTool
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import ConfigDict, Field
 
 from backend.platform.config.settings import AppSettings, settings
-from backend.platform.knowledge.base.text import truncate_snippet
 from backend.platform.knowledge.repositories import VectorStoreFactory
+from backend.platform.models.llm.client import model_client as default_model_client
 from backend.platform.rag.orchestration.agentic import AgenticRetriever
 from backend.platform.rag.contracts import (
-    RetrievalCitation,
     RetrievalContext,
-    RetrievalResult,
     RetrievalTool,
 )
 from backend.platform.rag.orchestration.decisions import SufficiencyDecision, SufficiencyJudge
 from backend.platform.rag.pre_retrieval.query_rewrite import QueryRewrite, QueryRewriter
-from backend.platform.rag.retrieval.documents import (
-    DocumentChunkRetrievalResult,
-    DocumentRetrievalService,
-)
+from backend.platform.rag.pre_retrieval.query_rewrite_validator import QueryRewriteValidator
+from backend.platform.rag.retrieval.documents import DocumentRetrievalService
 from backend.platform.rag.retrieval.documents.filters import DOCUMENT_MINIMUM_RELEVANCE
-from backend.platform.tools import ToolResult, build_structured_tool
+from backend.platform.tools import build_retrieval_tool, build_scene_structured_tool
 from backend.scenes.base import (
     SceneBootstrapResult,
     SceneDefinition,
     SceneFallbackPolicy,
     SceneRetrievalPolicy,
 )
+from backend.scenes.generic_assistant.tools import (
+    GENERIC_DOCUMENT_KNOWLEDGE_SOURCE,
+    GENERIC_DOCUMENT_TOOL_NAME,
+    KnowledgeDocumentSearchTool,
+)
 
-
-GENERIC_DOCUMENT_TOOL_NAME = "knowledge_document_search"
-GENERIC_DOCUMENT_KNOWLEDGE_SOURCE = "documents"
-DOCUMENT_ANSWER_CONTEXT_NEIGHBOR_RADIUS = 1
 
 GENERIC_ASSISTANT_RETRIEVAL_POLICY = SceneRetrievalPolicy(
     top_k=5,
@@ -56,134 +53,51 @@ GENERIC_ASSISTANT_SYSTEM_PROMPT = (
 )
 
 
-class GenericKnowledgeDocumentSearchInput(BaseModel):
-    """通用知识文档检索工具输入。"""
+GENERIC_ASSISTANT_QUERY_REWRITE_PROMPT = PromptTemplate.from_template(
+    """你是检索 query 改写器，只为下一轮知识库检索生成 query。
 
-    query: str = Field(min_length=1)
-    top_k: int = Field(default=5, ge=1, le=10)
+规则：
+- 不要回答用户问题，不要输出解释性正文。
+- 只输出一行 JSON，格式必须是：{{"query":"...","reason":"..."}}
+- query 必须适合文档检索，保持中立、简洁、可搜索。
+- 保留原问题中的实体名、版本号、错误码、英文缩写、数字 ID 和代码型 token。
+- 如果原问题没有表达明确领域概念，不要添加无依据的通用文档词或业务概念。
+
+用户原问题：
+{original_query}
+
+当前检索 query：
+{active_query}
+
+最近一轮检索结果摘要：
+{retrieval_summary}
+"""
+)
 
 
-class GenericKnowledgeDocumentRetriever(BaseRetriever):
-    """通用助手默认 retriever，只依赖文档知识库。"""
+@runtime_checkable
+class QueryRewriteModelClient(Protocol):
+    """定义 query rewrite 只需要依赖的模型客户端最小协议。"""
 
-    document_retrieval_service: Any = Field(exclude=True)
-    default_top_k: int = 5
-
-    model_config = ConfigDict(arbitrary_types_allowed=True)
-
-    def _get_relevant_documents(self, query: str, *, run_manager: Any = None) -> list[Document]:
-        """适配 LangChain retriever 协议。"""
-        return self.search(query=query, top_k=self.default_top_k)
-
-    def search(
+    def get_runnable(
         self,
-        query: str,
-        top_k: int | None = None,
-        min_relevance_score: float | None = None,
-        recall_strategy: str = "hybrid",
-    ) -> list[Document]:
-        """仅在已上传文档知识中检索证据。"""
-        return self.document_retrieval_service.search(
-            query=query,
-            top_k=top_k or self.default_top_k,
-            minimum_relevance=min_relevance_score,
-            recall_strategy=recall_strategy,
-        )
-
-
-class GenericKnowledgeDocumentSearchTool(RetrievalTool):
-    """通用知识文档检索工具，供 scene runtime 直接挂载。"""
-
-    name: str = GENERIC_DOCUMENT_TOOL_NAME
-    description: str = "Search semantically relevant uploaded knowledge documents."
-    document_retrieval_service: Any = Field(exclude=True)
-    default_top_k: int = 5
-
-    model_config = ConfigDict(arbitrary_types_allowed=True)
-
-    def retrieve(
-        self,
-        query: str,
+        complexity: str = "simple",
+        prompt_template: Any | None = None,
         *,
-        run_manager: Any | None = None,
-        top_k: int | None = None,
-        min_relevance_score: float | None = None,
-        recall_strategy: str = "hybrid",
-        rerank_enabled: bool = False,
-        rerank_top_n: int | None = None,
-    ) -> RetrievalResult:
-        """在上传文档分块中检索并返回标准化结果。"""
-        del run_manager, rerank_enabled, rerank_top_n
-        retrieval_trace: dict[str, Any] | None = None
-        if hasattr(self.document_retrieval_service, "retrieve_with_trace"):
-            traced_result = self.document_retrieval_service.retrieve_with_trace(
-                query=query,
-                top_k=top_k or self.default_top_k,
-                minimum_relevance=min_relevance_score,
-                recall_strategy=recall_strategy,
-            )
-            retrieval_results = traced_result.results
-            retrieval_trace = traced_result.trace.model_dump()
-        else:
-            retrieval_results = self.document_retrieval_service.retrieve(
-                query=query,
-                top_k=top_k or self.default_top_k,
-                minimum_relevance=min_relevance_score,
-                recall_strategy=recall_strategy,
-            )
-        records = _build_document_records(
-            retrieval_results,
-            document_retrieval_service=self.document_retrieval_service,
-        )
-        citations = [
-            RetrievalCitation(
-                citation_id=record["citation_id"],
-                snippet=record["snippet"],
-                source_type=record["namespace"],
-                metadata={
-                    **record.get("metadata", {}),
-                    "score": record.get("score"),
-                    "vector_score": record.get("vector_score"),
-                    "keyword_score": record.get("keyword_score"),
-                    "vector_rank": record.get("vector_rank"),
-                    "keyword_rank": record.get("keyword_rank"),
-                    "matched_by": record.get("matched_by", []),
-                },
-            )
-            for record in records
-        ]
-        documents = [
-            Document(
-                page_content=record["content"],
-                metadata={
-                    **record.get("metadata", {}),
-                    "namespace": record["namespace"],
-                    "citation_id": record["citation_id"],
-                    "score": record.get("score"),
-                    "vector_score": record.get("vector_score"),
-                    "keyword_score": record.get("keyword_score"),
-                    "vector_rank": record.get("vector_rank"),
-                    "keyword_rank": record.get("keyword_rank"),
-                    "matched_by": record.get("matched_by", []),
-                },
-            )
-            for record in records
-        ]
-        confidence = _average_score(records)
-        return RetrievalResult.ok(
-            tool_name=self.name,
-            query=query,
-            records=records,
-            documents=documents,
-            citations=citations,
-            confidence=confidence,
-            metadata={
-                "namespace": "documents",
-                "result_count": len(records),
-                "scene": "generic_assistant",
-                "document_retrieval_trace": retrieval_trace,
-            },
-        )
+        output_parser: Any | None = None,
+    ) -> Any:
+        """返回可执行的模型 runnable。"""
+        ...
+
+    def invoke_runnable(
+        self,
+        runnable: Any,
+        input: Any,
+        *,
+        config: Any | None = None,
+    ) -> Any:
+        """同步执行模型 runnable。"""
+        ...
 
 
 class GenericAssistantBusinessExtension(ABC):
@@ -339,6 +253,15 @@ class GenericAssistantSufficiencyJudge(SufficiencyJudge):
 class GenericAssistantQueryRewriter(QueryRewriter):
     """通用 docs-first 查询改写器。"""
 
+    model_client: QueryRewriteModelClient = Field(
+        default_factory=lambda: default_model_client,
+        exclude=True,
+    )
+    query_rewrite_validator: QueryRewriteValidator = Field(
+        default_factory=QueryRewriteValidator,
+        exclude=True,
+    )
+
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     def invoke(
@@ -347,18 +270,168 @@ class GenericAssistantQueryRewriter(QueryRewriter):
         config: RunnableConfig | None = None,
         **kwargs: Any,
     ) -> QueryRewrite:
-        """把弱查询改写成更适合文档检索的中立表述。"""
-        del config, kwargs
-        query = input.plan.active_query.strip()
-        rewritten = (
-            f"{query} 相关文档 定义 说明 字段 配置 流程 接口 规则 "
-            "数据模型 表结构 常见问题"
+        """用 LLM 生成下一轮检索 query，失败时保守回退到归一化原 query。"""
+        del kwargs
+        original_query = self._normalize_original_query(input.plan.active_query)
+        preserved_tokens = self.query_rewrite_validator.extract_preserved_tokens(
+            input.plan.user_query,
+            input.plan.active_query,
         )
+        try:
+            runnable = self.model_client.get_runnable(
+                complexity="simple",
+                prompt_template=GENERIC_ASSISTANT_QUERY_REWRITE_PROMPT,
+            )
+            raw_output = self.model_client.invoke_runnable(
+                runnable,
+                self._build_prompt_variables(input, original_query=original_query),
+                config=config,
+            )
+            parsed = self._parse_model_output(raw_output)
+        except Exception as exc:
+            return self._fallback_rewrite(
+                original_query,
+                reason="LLM query rewrite failed; using normalized original query.",
+                fallback_reason=type(exc).__name__,
+                preserved_tokens=preserved_tokens,
+            )
+
+        if parsed is None:
+            return self._fallback_rewrite(
+                original_query,
+                reason="LLM query rewrite returned invalid JSON; using normalized original query.",
+                fallback_reason="invalid_json_or_empty_query",
+                preserved_tokens=preserved_tokens,
+            )
+
+        rewritten_query = self._normalize_rewritten_query(parsed["query"])
+        if not rewritten_query:
+            return self._fallback_rewrite(
+                original_query,
+                reason="LLM query rewrite returned an empty query; using normalized original query.",
+                fallback_reason="empty_query",
+                preserved_tokens=preserved_tokens,
+            )
+
+        unsafe_reason = self.query_rewrite_validator.resolve_unsafe_reason(
+            original_query=original_query,
+            rewritten_query=rewritten_query,
+            preserved_tokens=preserved_tokens,
+        )
+        if unsafe_reason is not None:
+            return self._fallback_rewrite(
+                original_query,
+                reason="LLM query rewrite was unsafe; using normalized original query.",
+                fallback_reason=unsafe_reason,
+                preserved_tokens=preserved_tokens,
+            )
+
         return QueryRewrite(
-            query=rewritten.strip(),
-            reason="Broadened the query with generic document-oriented terms for the next retrieval round.",
-            metadata={"original_query": query},
+            query=rewritten_query,
+            reason=parsed.get("reason") or "LLM generated a focused retrieval query.",
+            metadata={
+                **self._build_metadata(
+                    original_query=original_query,
+                    fallback=False,
+                    fallback_reason=None,
+                    preserved_tokens=preserved_tokens,
+                ),
+            },
         )
+
+    def _build_prompt_variables(
+        self,
+        context: RetrievalContext,
+        *,
+        original_query: str,
+    ) -> dict[str, str]:
+        """构造 prompt 变量，避免 prompt 模板直接感知 RetrievalContext 结构。"""
+        return {
+            "original_query": self._normalize_original_query(context.plan.user_query),
+            "active_query": original_query,
+            "retrieval_summary": self._summarize_latest_result(context),
+        }
+
+    def _summarize_latest_result(self, context: RetrievalContext) -> str:
+        """压缩最近一轮检索结果，只给模型必要的改写背景。"""
+        if not context.results:
+            return "尚未执行检索。"
+        result = context.results[-1]
+        return (
+            f"tool={result.tool_name}; "
+            f"query={result.query}; "
+            f"record_count={len(result.records)}; "
+            f"document_count={len(result.documents)}; "
+            f"success={result.success}; "
+            f"error={result.error or 'none'}"
+        )
+
+    def _parse_model_output(self, raw_output: Any) -> dict[str, str] | None:
+        """只接受包含非空 query 的 JSON 对象。"""
+        text = str(raw_output).strip() if raw_output is not None else ""
+        if not text:
+            return None
+        try:
+            payload = json.loads(text)
+        except json.JSONDecodeError:
+            return None
+        if not isinstance(payload, dict):
+            return None
+
+        # 只允许结构化 JSON 进入后续流程，避免解释性文本被当作检索 query。
+        query = payload.get("query")
+        if not isinstance(query, str) or not query.strip():
+            return None
+        reason = payload.get("reason")
+        return {
+            "query": query,
+            "reason": reason.strip() if isinstance(reason, str) else "",
+        }
+
+    def _fallback_rewrite(
+        self,
+        original_query: str,
+        *,
+        reason: str,
+        fallback_reason: str,
+        preserved_tokens: tuple[str, ...],
+    ) -> QueryRewrite:
+        """构造保守 fallback，保证 query rewrite 失败不会中断聊天链路。"""
+        return QueryRewrite(
+            query=original_query,
+            reason=reason,
+            metadata=self._build_metadata(
+                original_query=original_query,
+                fallback=True,
+                fallback_reason=fallback_reason,
+                preserved_tokens=preserved_tokens,
+            ),
+        )
+
+    def _build_metadata(
+        self,
+        *,
+        original_query: str,
+        fallback: bool,
+        fallback_reason: str | None,
+        preserved_tokens: tuple[str, ...],
+    ) -> dict[str, Any]:
+        """统一输出 rewrite 诊断 metadata，保持 trace 可解释。"""
+        return {
+            "original_query": original_query,
+            "strategy": "llm_json",
+            "fallback": fallback,
+            "fallback_reason": fallback_reason,
+            "preserved_tokens": list(preserved_tokens),
+        }
+
+    def _normalize_original_query(self, query: str) -> str:
+        """归一化原始 query，作为 LLM 失败或不安全输出时的唯一 fallback。"""
+        return re.sub(r"\s+", " ", query).strip()
+
+    def _normalize_rewritten_query(self, query: str) -> str:
+        """归一化模型输出 query，保持与原 query fallback 相同的空白处理。"""
+        return re.sub(r"\s+", " ", query).strip()
 
 
 def build_generic_assistant_scene_definition(
@@ -389,9 +462,11 @@ def build_generic_assistant_scene_definition(
             max_rounds=max_rounds,
         ),
         build_tools=lambda: (
-            build_generic_knowledge_document_tool(
-                resolved_document_retrieval_service,
-                retrieval_policy=resolved_retrieval_policy,
+            build_scene_structured_tool(
+                _build_knowledge_document_search_tool(
+                    document_retrieval_service=resolved_document_retrieval_service,
+                    retrieval_policy=resolved_retrieval_policy,
+                )
             ),
         ),
         candidate_retrieval_tools_resolver=lambda mounted_knowledge_sources: (
@@ -416,71 +491,6 @@ def build_generic_assistant_scene_definition(
             "default_agent": None,
             "prompt_style": "generic_knowledge_assistant",
         },
-    )
-
-
-def build_generic_knowledge_document_tool(
-    document_retrieval_service: DocumentRetrievalService,
-    retrieval_policy: SceneRetrievalPolicy = GENERIC_ASSISTANT_RETRIEVAL_POLICY,
-) -> BaseTool:
-    """构建面向通用知识助手的文档检索工具。"""
-
-    def knowledge_document_search(query: str, top_k: int = retrieval_policy.top_k) -> ToolResult:
-        retrieval_trace: dict[str, Any] | None = None
-        if hasattr(document_retrieval_service, "retrieve_with_trace"):
-            traced_result = document_retrieval_service.retrieve_with_trace(
-                query=query,
-                top_k=top_k,
-                minimum_relevance=retrieval_policy.min_relevance_score,
-                recall_strategy=retrieval_policy.recall_strategy,
-            )
-            retrieval_results = traced_result.results
-            retrieval_trace = traced_result.trace.model_dump()
-        else:
-            retrieval_results = document_retrieval_service.retrieve(
-                query=query,
-                top_k=top_k,
-                minimum_relevance=retrieval_policy.min_relevance_score,
-                recall_strategy=retrieval_policy.recall_strategy,
-            )
-        records = _build_document_records(
-            retrieval_results,
-            document_retrieval_service=document_retrieval_service,
-        )
-        return ToolResult.ok(
-            tool_name=GENERIC_DOCUMENT_TOOL_NAME,
-            records=records,
-            citations=[
-                {
-                    "citation_id": record["citation_id"],
-                    "namespace": record["namespace"],
-                    "snippet": record["snippet"],
-                    "metadata": {
-                        "score": record.get("score"),
-                        "vector_score": record.get("vector_score"),
-                        "keyword_score": record.get("keyword_score"),
-                        "vector_rank": record.get("vector_rank"),
-                        "keyword_rank": record.get("keyword_rank"),
-                        "matched_by": record.get("matched_by", []),
-                    },
-                }
-                for record in records
-            ],
-            confidence=_average_score(records),
-            metadata={
-                "namespace": "documents",
-                "result_count": len(records),
-                "scene": "generic_assistant",
-                "document_retrieval_trace": retrieval_trace,
-            },
-        )
-
-    return build_structured_tool(
-        name=GENERIC_DOCUMENT_TOOL_NAME,
-        description="Search semantically relevant uploaded knowledge documents.",
-        capability_type="retrieval",
-        args_schema=GenericKnowledgeDocumentSearchInput,
-        func=knowledge_document_search,
     )
 
 
@@ -529,9 +539,11 @@ def _build_docs_first_retrieval_tools(
 ) -> tuple[RetrievalTool, ...]:
     """按 docs-only 默认边界组装主链工具，再按扩展顺序附加业务工具。"""
     tools: list[RetrievalTool] = [
-        GenericKnowledgeDocumentSearchTool(
-            document_retrieval_service=document_retrieval_service,
-            default_top_k=retrieval_policy.top_k,
+        build_retrieval_tool(
+            _build_knowledge_document_search_tool(
+                document_retrieval_service=document_retrieval_service,
+                retrieval_policy=retrieval_policy,
+            )
         )
     ]
     seen = {GENERIC_DOCUMENT_TOOL_NAME}
@@ -542,6 +554,20 @@ def _build_docs_first_retrieval_tools(
             tools.append(tool)
             seen.add(tool.name)
     return tuple(tools)
+
+
+def _build_knowledge_document_search_tool(
+    *,
+    document_retrieval_service: DocumentRetrievalService,
+    retrieval_policy: SceneRetrievalPolicy,
+) -> KnowledgeDocumentSearchTool:
+    """构建文档检索工具实例；scene 只注入策略，不承载工具业务逻辑。"""
+    return KnowledgeDocumentSearchTool(
+        document_retrieval_service=document_retrieval_service,
+        default_top_k=retrieval_policy.top_k,
+        default_min_relevance_score=retrieval_policy.min_relevance_score,
+        default_recall_strategy=retrieval_policy.recall_strategy,
+    )
 
 
 def _resolve_candidate_retrieval_tools(
@@ -595,147 +621,3 @@ def _bootstrap_generic_scene(
         for metric_name, value in result.metrics.items():
             metrics[metric_name] = metrics.get(metric_name, 0) + value
     return SceneBootstrapResult(metrics=metrics)
-
-
-def _build_document_record(result: DocumentChunkRetrievalResult) -> dict[str, Any]:
-    """将文档知识检索结果映射为统一 record。"""
-    snippet = truncate_snippet(result.document.content)
-    return {
-        "record_type": "document_chunk",
-        "namespace": _resolve_document_namespace(result.document),
-        "citation_id": _resolve_document_citation_id(result.document),
-        "title": str(
-            result.document.metadata.get("title")
-            or result.document.metadata.get("source_path")
-            or result.document.metadata.get("document_id")
-            or result.document.id
-        ),
-        "snippet": snippet,
-        "content": result.document.content,
-        "score": float(result.score) if result.score is not None else None,
-        "vector_score": float(result.vector_score) if result.vector_score is not None else None,
-        "keyword_score": float(result.keyword_score) if result.keyword_score is not None else None,
-        "vector_rank": result.vector_rank,
-        "keyword_rank": result.keyword_rank,
-        "matched_by": list(result.matched_by),
-        "metadata": result.document.metadata,
-    }
-
-
-def _build_document_records(
-    results: list[DocumentChunkRetrievalResult],
-    *,
-    document_retrieval_service: Any,
-) -> list[dict[str, Any]]:
-    """保留 citation 摘要，同时为回答上下文补齐相邻分块。"""
-    records = [_build_document_record(result) for result in results]
-    neighbor_context = _build_neighbor_context_by_chunk_id(
-        results,
-        document_retrieval_service=document_retrieval_service,
-    )
-    if not neighbor_context:
-        return records
-
-    for record in records:
-        citation_id = str(record.get("citation_id") or "")
-        expanded_content = neighbor_context.get(citation_id)
-        if expanded_content:
-            record["content"] = expanded_content
-    return records
-
-
-def _build_neighbor_context_by_chunk_id(
-    results: list[DocumentChunkRetrievalResult],
-    *,
-    document_retrieval_service: Any,
-) -> dict[str, str]:
-    chunk_source = getattr(document_retrieval_service, "chunk_source", None)
-    list_chunks = getattr(chunk_source, "list_active_document_chunks", None)
-    if not callable(list_chunks):
-        return {}
-
-    try:
-        chunks = list_chunks(limit=None)
-    except TypeError:
-        chunks = list_chunks()
-    if not chunks:
-        return {}
-
-    chunks_by_position: dict[tuple[str, int], Any] = {}
-    for chunk in chunks:
-        document_id = _resolve_document_id(chunk)
-        chunk_index = _resolve_chunk_index(chunk)
-        if document_id is None or chunk_index is None:
-            continue
-        chunks_by_position[(document_id, chunk_index)] = chunk
-
-    context_by_chunk_id: dict[str, str] = {}
-    for result in results:
-        document_id = _resolve_document_id(result.document)
-        chunk_index = _resolve_chunk_index(result.document)
-        citation_id = _resolve_document_citation_id(result.document)
-        if document_id is None or chunk_index is None:
-            continue
-        window: list[Any] = []
-        for neighbor_index in range(
-            chunk_index - DOCUMENT_ANSWER_CONTEXT_NEIGHBOR_RADIUS,
-            chunk_index + DOCUMENT_ANSWER_CONTEXT_NEIGHBOR_RADIUS + 1,
-        ):
-            neighbor = chunks_by_position.get((document_id, neighbor_index))
-            if neighbor is not None:
-                window.append(neighbor)
-        if len(window) <= 1:
-            continue
-        context_by_chunk_id[citation_id] = "\n\n".join(str(chunk.content) for chunk in window)
-    return context_by_chunk_id
-
-
-def _resolve_document_namespace(document: Any) -> str:
-    """优先保留文档知识源自己的 namespace。"""
-    namespace = document.metadata.get("namespace")
-    if isinstance(namespace, str) and namespace:
-        return namespace
-    return "documents"
-
-
-def _resolve_document_id(document: Any) -> str | None:
-    document_id = document.metadata.get("document_id")
-    if isinstance(document_id, str) and document_id:
-        return document_id
-    return None
-
-
-def _resolve_chunk_index(document: Any) -> int | None:
-    chunk_index = document.metadata.get("chunk_index")
-    if isinstance(chunk_index, bool):
-        return None
-    if isinstance(chunk_index, int):
-        return chunk_index
-    if isinstance(chunk_index, float) and chunk_index.is_integer():
-        return int(chunk_index)
-    if isinstance(chunk_index, str):
-        try:
-            return int(chunk_index)
-        except ValueError:
-            return None
-    return None
-
-
-def _resolve_document_citation_id(document: Any) -> str:
-    """推导文档知识引用 ID。"""
-    metadata = document.metadata
-    return str(
-        metadata.get("chunk_id")
-        or metadata.get("document_id")
-        or metadata.get("source_path")
-        or metadata.get("id")
-        or document.id
-    )
-
-
-def _average_score(records: list[dict[str, Any]]) -> float | None:
-    """计算结果平均分，供工具和 retriever 元数据复用。"""
-    scores = [float(score) for score in (record.get("score") for record in records) if isinstance(score, int | float)]
-    if not scores:
-        return None
-    return sum(scores) / len(scores)

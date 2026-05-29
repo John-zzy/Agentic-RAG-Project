@@ -268,6 +268,41 @@ class AgenticRetriever(BaseRetriever):
                 )
 
             if decision.next_action == "rewrite":
+                if self._rewrite_already_attempted(current_plan):
+                    limited_decision = self._build_rewrite_limit_decision(decision)
+                    limited_round = RetrievalRound(
+                        plan=current_plan,
+                        results=list(results),
+                        documents=list(documents),
+                        result=result,
+                        decision=limited_decision,
+                    )
+                    rounds.append(limited_round)
+                    decision_log.append(
+                        self._build_decision_log_entry(
+                            limited_round,
+                            rewritten_query=None,
+                            exit_reason="ask_user",
+                        )
+                    )
+                    logger.info(
+                        "Agentic retrieval stopped after one query rewrite: rounds=%s, total_documents=%s",
+                        len(rounds),
+                        len(documents),
+                    )
+                    return AgenticRetrievalOutcome(
+                        plan=current_plan,
+                        results=results,
+                        documents=self._finalize_documents(documents, rounds, "ask_user"),
+                        success=False,
+                        rounds=rounds,
+                        decision_log=decision_log,
+                        final_plan=current_plan,
+                        final_decision=limited_decision,
+                        exit_reason="ask_user",
+                        follow_up_question=limited_decision.follow_up_question,
+                    )
+
                 rewrite = self._rewrite_query(context, run_manager)
                 round_trace.rewrite = rewrite
                 logger.info(
@@ -287,6 +322,7 @@ class AgenticRetriever(BaseRetriever):
                 next_plan = current_plan.create_followup(
                     active_query=rewrite.query,
                     metadata={
+                        "rewrite_attempted": True,
                         "rewrite_reason": rewrite.reason,
                         "rewrite_metadata": rewrite.metadata,
                     },
@@ -390,6 +426,23 @@ class AgenticRetriever(BaseRetriever):
             rewrite.metadata,
         )
         return rewrite
+
+    def _rewrite_already_attempted(self, plan: RetrievalPlan) -> bool:
+        """判断本次检索会话是否已经执行过 query rewrite。"""
+        return bool(plan.metadata.get("rewrite_attempted"))
+
+    def _build_rewrite_limit_decision(self, decision: SufficiencyDecision) -> SufficiencyDecision:
+        """将重复 rewrite 请求收口为 ask_user，避免 LLM 改写循环。"""
+        return decision.model_copy(
+            update={
+                "is_sufficient": False,
+                "next_action": "ask_user",
+                "reason": (
+                    f"{decision.reason} Query rewrite already attempted once; "
+                    "stopping retrieval rewrite loop."
+                ),
+            }
+        )
 
     def _judge(
         self,

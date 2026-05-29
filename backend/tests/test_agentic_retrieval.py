@@ -9,8 +9,9 @@ from backend.platform.rag.contracts import RetrievalContext, RetrievalPlan, Retr
 from backend.platform.rag.orchestration.decisions import SufficiencyDecision
 from backend.platform.search_foundation import VectorSearchResult, VectorStoreDocument
 from backend.platform.rag.retrieval.documents import DocumentChunkRetrievalResult
+from backend.platform.tools import build_retrieval_tool
 from backend.scenes.ecommerce.definition import create_agentic_knowledge_retriever
-from backend.scenes.ecommerce.retrieval_tools import build_semantic_retrieval_tool
+from backend.scenes.ecommerce.tools import OrderSemanticSearchTool, ProductCatalogStore, ProductSemanticSearchTool
 from backend.scenes.generic_assistant.definition import (
     GENERIC_ASSISTANT_RETRIEVAL_POLICY,
     GenericAssistantBusinessExtension,
@@ -90,17 +91,32 @@ class FakeKnowledgeService:
             for document in documents
         ]
 
-    def search_products(self, query: str, top_k: int | None = None):
-        del top_k
+    def search_products(
+        self,
+        query: str,
+        top_k: int | None = None,
+        filters: dict[str, object] | None = None,
+    ):
+        del top_k, filters
         query_lower = query.lower()
         return [item for item in self._products if str(item.document.id).lower() in query_lower or "aerophone x" in query_lower]
 
-    def search_reviews(self, query: str, top_k: int | None = None):
-        del query, top_k
+    def search_reviews(
+        self,
+        query: str,
+        top_k: int | None = None,
+        filters: dict[str, object] | None = None,
+    ):
+        del query, top_k, filters
         return list(self._reviews)
 
-    def search_orders(self, query: str, top_k: int | None = None):
-        del query, top_k
+    def search_orders(
+        self,
+        query: str,
+        top_k: int | None = None,
+        filters: dict[str, object] | None = None,
+    ):
+        del query, top_k, filters
         return list(self._orders)
 
 
@@ -118,9 +134,9 @@ class FakeDocumentRetrievalService:
         minimum_relevance: float | None = None,
         recall_strategy: str = "hybrid",
     ) -> list[DocumentChunkRetrievalResult]:
-        del query
         self.calls.append(
             {
+                "query": query,
                 "top_k": top_k,
                 "namespace": namespace,
                 "minimum_relevance": minimum_relevance,
@@ -146,6 +162,87 @@ class FakeDocumentRetrievalService:
         ]
 
 
+class QueryMatchingFakeDocumentRetrievalService(FakeDocumentRetrievalService):
+    def __init__(self, knowledge_service: FakeKnowledgeService, *, matching_query: str) -> None:
+        super().__init__(knowledge_service)
+        self._matching_query = matching_query
+
+    def retrieve(
+        self,
+        *,
+        query: str,
+        top_k: int = 5,
+        namespace: str | None = None,
+        minimum_relevance: float | None = None,
+        recall_strategy: str = "hybrid",
+    ) -> list[DocumentChunkRetrievalResult]:
+        if query != self._matching_query:
+            self.calls.append(
+                {
+                    "query": query,
+                    "top_k": top_k,
+                    "namespace": namespace,
+                    "minimum_relevance": minimum_relevance,
+                    "recall_strategy": recall_strategy,
+                }
+            )
+            return []
+        return super().retrieve(
+            query=query,
+            top_k=top_k,
+            namespace=namespace,
+            minimum_relevance=minimum_relevance,
+            recall_strategy=recall_strategy,
+        )
+
+
+class FakeQueryRewriteModelClient:
+    def __init__(self, output: str) -> None:
+        self.output = output
+        self.get_runnable_calls: list[str] = []
+        self.invoke_runnable_calls: list[dict[str, object]] = []
+
+    def get_runnable(
+        self,
+        complexity: str = "simple",
+        prompt_template: object | None = None,
+        *,
+        output_parser: object | None = None,
+    ) -> object:
+        del prompt_template, output_parser
+        self.get_runnable_calls.append(complexity)
+        return object()
+
+    def invoke_runnable(
+        self,
+        runnable: object,
+        input: object,
+        *,
+        config: object | None = None,
+    ) -> str:
+        self.invoke_runnable_calls.append(
+            {"runnable": runnable, "input": input, "config": config}
+        )
+        return self.output
+
+
+class FailingQueryRewriteModelClient(FakeQueryRewriteModelClient):
+    def __init__(self) -> None:
+        super().__init__("")
+
+    def invoke_runnable(
+        self,
+        runnable: object,
+        input: object,
+        *,
+        config: object | None = None,
+    ) -> str:
+        self.invoke_runnable_calls.append(
+            {"runnable": runnable, "input": input, "config": config}
+        )
+        raise RuntimeError("rewrite model unavailable")
+
+
 class FakeOrderRoutingExtension(GenericAssistantBusinessExtension):
     knowledge_source = "ecommerce"
 
@@ -158,12 +255,7 @@ class FakeOrderRoutingExtension(GenericAssistantBusinessExtension):
 
     def build_retrieval_tools(self):
         return (
-            build_semantic_retrieval_tool(
-                self._knowledge_service,
-                namespace="orders",
-                tool_name="order_semantic_search",
-                description="Search order information semantically for tracking queries.",
-            ),
+            build_retrieval_tool(OrderSemanticSearchTool(knowledge_service=self._knowledge_service)),
         )
 
     def should_handoff(self, context: RetrievalContext) -> SufficiencyDecision | None:
@@ -352,8 +444,11 @@ def test_generic_assistant_document_tool_searches_all_managed_document_namespace
     assert outcome.documents[0].metadata["namespace"] == "faq"
 
 
-def test_generic_query_rewriter_expands_data_model_table_queries() -> None:
-    rewriter = GenericAssistantQueryRewriter()
+def test_generic_query_rewriter_uses_llm_json_query() -> None:
+    model = FakeQueryRewriteModelClient(
+        '{"query":"session 表字段","reason":"保留 session 实体并聚焦字段检索"}'
+    )
+    rewriter = GenericAssistantQueryRewriter(model_client=model)
     rewrite = rewriter.invoke(
         RetrievalContext(
             plan=RetrievalPlan(
@@ -372,9 +467,190 @@ def test_generic_query_rewriter_expands_data_model_table_queries() -> None:
         )
     )
 
-    assert "相关文档" in rewrite.query
-    assert "表结构" in rewrite.query
-    assert "字段" in rewrite.query
+    assert rewrite.query == "session 表字段"
+    assert rewrite.reason == "保留 session 实体并聚焦字段检索"
+    assert rewrite.metadata == {
+        "original_query": "当前有哪些表",
+        "strategy": "llm_json",
+        "fallback": False,
+        "fallback_reason": None,
+        "preserved_tokens": [],
+    }
+    assert model.get_runnable_calls == ["simple"]
+    assert model.invoke_runnable_calls[0]["input"] == {
+        "original_query": "当前有哪些表",
+        "active_query": "当前有哪些表",
+        "retrieval_summary": (
+            "tool=knowledge_document_search; query=当前有哪些表; record_count=0; "
+            "document_count=0; success=True; error=none"
+        ),
+    }
+
+
+def test_agentic_retriever_uses_accepted_llm_rewritten_query_for_next_round() -> None:
+    app_settings, knowledge_service = _build_knowledge_service("agentic-llm-rewrite-next-query")
+    knowledge_service.upsert_documents(
+        [
+            {
+                "document_id": "DOC-SESSION",
+                "content": "session 表字段包括 session_id、scene、mounted_knowledge_sources。",
+                "source_path": "data-model.md",
+                "namespace": "documents",
+                "score": 0.94,
+            }
+        ]
+    )
+    document_service = QueryMatchingFakeDocumentRetrievalService(
+        knowledge_service,
+        matching_query="session 表字段",
+    )
+    definition = build_generic_assistant_scene_definition(
+        app_settings=app_settings,
+        document_retrieval_service=document_service,
+    )
+    retriever = definition.build_retriever()
+    retriever.query_rewriter = GenericAssistantQueryRewriter(
+        model_client=FakeQueryRewriteModelClient(
+            '{"query":"session 表字段","reason":"聚焦 session 表字段"}'
+        )
+    )
+
+    outcome = retriever.retrieve_with_trace(
+        "当前有哪些表",
+        candidate_tools=("knowledge_document_search",),
+    )
+
+    assert outcome.documents
+    assert outcome.exit_reason == "sufficient"
+    assert [call["query"] for call in document_service.calls] == [
+        "当前有哪些表",
+        "session 表字段",
+    ]
+    assert outcome.decision_log[0].rewritten_query == "session 表字段"
+    assert outcome.rounds[0].rewrite is not None
+    assert outcome.rounds[0].rewrite.metadata["fallback"] is False
+
+
+def test_generic_query_rewriter_falls_back_for_invalid_json_empty_query_and_model_error() -> None:
+    context = RetrievalContext(
+        plan=RetrievalPlan(
+            user_query="  当前   有哪些表  ",
+            active_query="  当前   有哪些表  ",
+            selected_tool="knowledge_document_search",
+        ),
+        results=[
+            RetrievalResult.ok(
+                tool_name="knowledge_document_search",
+                query="当前有哪些表",
+                records=[],
+                documents=[],
+            )
+        ],
+    )
+
+    for model in (
+        FakeQueryRewriteModelClient("这不是 JSON"),
+        FakeQueryRewriteModelClient('{"query":"   ","reason":"empty"}'),
+        FailingQueryRewriteModelClient(),
+    ):
+        rewrite = GenericAssistantQueryRewriter(model_client=model).invoke(context)
+
+        assert rewrite.query == "当前 有哪些表"
+        assert rewrite.metadata["fallback"] is True
+        assert rewrite.metadata["original_query"] == "当前 有哪些表"
+        assert rewrite.metadata["strategy"] == "llm_json"
+        assert rewrite.metadata["preserved_tokens"] == []
+        assert rewrite.metadata["fallback_reason"] in {
+            "invalid_json_or_empty_query",
+            "RuntimeError",
+        }
+        if isinstance(model, FailingQueryRewriteModelClient):
+            assert rewrite.metadata["fallback_reason"] == "RuntimeError"
+        else:
+            assert rewrite.metadata["fallback_reason"] == "invalid_json_or_empty_query"
+        assert model.get_runnable_calls == ["simple"]
+        assert len(model.invoke_runnable_calls) == 1
+
+
+def test_generic_query_rewriter_falls_back_when_llm_drops_preserved_tokens() -> None:
+    cases = [
+        (
+            "VOID-ALPHA-7788 secret handshake?",
+            '{"query":"secret handshake 排查","reason":"删除了错误码"}',
+            "missing_preserved_token:VOID-ALPHA-7788",
+        ),
+        (
+            "Python 3.11 安装要求是什么？",
+            '{"query":"Python 安装要求","reason":"删除了版本号"}',
+            "missing_preserved_token:3.11",
+        ),
+        (
+            "MFA 策略要求是什么？",
+            '{"query":"策略要求","reason":"删除了缩写"}',
+            "missing_preserved_token:MFA",
+        ),
+    ]
+
+    for original_query, model_output, fallback_reason in cases:
+        context = RetrievalContext(
+            plan=RetrievalPlan(
+                user_query=original_query,
+                active_query=original_query,
+                selected_tool="knowledge_document_search",
+            ),
+            results=[
+                RetrievalResult.ok(
+                    tool_name="knowledge_document_search",
+                    query=original_query,
+                    records=[],
+                    documents=[],
+                )
+            ],
+        )
+
+        rewrite = GenericAssistantQueryRewriter(
+            model_client=FakeQueryRewriteModelClient(model_output)
+        ).invoke(context)
+
+        assert rewrite.query == original_query
+        assert rewrite.metadata["fallback"] is True
+        assert rewrite.metadata["fallback_reason"] == fallback_reason
+
+
+def test_generic_query_rewriter_falls_back_for_unsupported_generic_expansion() -> None:
+    cases = [
+        '{"query":"火星基地 快递 数据模型","reason":"添加数据模型"}',
+        '{"query":"火星基地 快递 表结构","reason":"添加表结构"}',
+        '{"query":"火星基地 快递 常见问题","reason":"添加常见问题"}',
+    ]
+
+    for model_output in cases:
+        original_query = "火星基地快递多久到"
+        context = RetrievalContext(
+            plan=RetrievalPlan(
+                user_query=original_query,
+                active_query=original_query,
+                selected_tool="knowledge_document_search",
+            ),
+            results=[
+                RetrievalResult.ok(
+                    tool_name="knowledge_document_search",
+                    query=original_query,
+                    records=[],
+                    documents=[],
+                )
+            ],
+        )
+
+        rewrite = GenericAssistantQueryRewriter(
+            model_client=FakeQueryRewriteModelClient(model_output)
+        ).invoke(context)
+
+        assert rewrite.query == original_query
+        assert rewrite.metadata["fallback"] is True
+        assert str(rewrite.metadata["fallback_reason"]).startswith(
+            "unsupported_generic_expansion:"
+        )
 
 
 def test_generic_sufficiency_judge_retries_arbitrary_no_hit_queries() -> None:
@@ -455,11 +731,12 @@ def test_ecommerce_semantic_tool_filters_low_relevance_results() -> None:
             score=0.5,
         )
     ]
-    tool = build_semantic_retrieval_tool(
-        knowledge_service,
-        namespace="products",
-        tool_name="product_semantic_search",
-        description="Search products.",
+    product_store = ProductCatalogStore(
+        data_dir=make_test_runtime_dir("agentic-low-relevance-product-store")
+    )
+    tool = ProductSemanticSearchTool(
+        knowledge_service=knowledge_service,
+        product_store=product_store,
     )
 
     result = tool.retrieve("aerophone x", min_relevance_score=DOCUMENT_MINIMUM_RELEVANCE)

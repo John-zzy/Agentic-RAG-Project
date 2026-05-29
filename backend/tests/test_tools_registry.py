@@ -1,17 +1,20 @@
 import json
 import shutil
 
+import pytest
+
 from backend.platform.config.settings import AppSettings
 from backend.platform.rag.retrieval.documents.types import DocumentChunkRetrievalResult
 from backend.platform.search_foundation import VectorStoreDocument
 from backend.scenes.ecommerce.definition import build_ecommerce_scene_definition
+from backend.scenes.ecommerce.registry import build_default_tool_registry
 from backend.scenes.generic_assistant.definition import (
-    GenericKnowledgeDocumentSearchTool,
     build_generic_assistant_scene_definition,
 )
-from backend.platform.tools import ToolContext
+from backend.scenes.generic_assistant.tools import KnowledgeDocumentSearchTool
+from backend.scenes.ecommerce.tools import SERVICE_TICKETS_FILE_NAME
+from backend.platform.tools import ToolContext, ToolRegistration, ToolRegistry
 from backend.tests.test_support import DATA_DIR, make_test_runtime_dir
-from backend.scenes.ecommerce.commerce_tools import SERVICE_TICKETS_FILE_NAME
 
 
 def _build_test_settings(test_name: str) -> AppSettings:
@@ -112,6 +115,112 @@ def test_registry_enforces_agent_whitelists_and_mcp_exposure_metadata() -> None:
     }
 
 
+def test_ecommerce_default_registry_uses_platform_registry_and_new_tool_classes() -> None:
+    app_settings = _build_test_settings("tools-default-registry")
+    registry = build_default_tool_registry(app_settings)
+
+    registrations = registry.list_tools()
+    tool_names = {registration.tool.name for registration in registrations}
+    tool_classes = {
+        registration.tool.name: (registration.tool.metadata or {}).get("tool_class")
+        for registration in registrations
+    }
+
+    assert isinstance(registry, ToolRegistry)
+    assert tool_names == {
+        "product_semantic_search",
+        "review_semantic_search",
+        "order_semantic_search",
+        "inventory_lookup",
+        "product_detail_lookup",
+        "order_status_lookup",
+        "order_address_update",
+        "return_ticket_create",
+        "complaint_ticket_create",
+    }
+    assert tool_classes == {
+        "product_semantic_search": "ProductSemanticSearchTool",
+        "review_semantic_search": "ReviewSemanticSearchTool",
+        "order_semantic_search": "OrderSemanticSearchTool",
+        "inventory_lookup": "InventoryLookupTool",
+        "product_detail_lookup": "ProductDetailLookupTool",
+        "order_status_lookup": "OrderStatusLookupTool",
+        "order_address_update": "OrderAddressUpdateTool",
+        "return_ticket_create": "ReturnTicketCreateTool",
+        "complaint_ticket_create": "ComplaintTicketCreateTool",
+    }
+
+
+def test_all_scene_tools_are_backed_by_dedicated_tool_classes() -> None:
+    app_settings = _build_test_settings("tools-dedicated-classes")
+    definitions = (
+        build_generic_assistant_scene_definition(app_settings=app_settings),
+        build_ecommerce_scene_definition(app_settings=app_settings),
+    )
+    tool_classes = {
+        tool.name: (tool.metadata or {}).get("tool_class")
+        for definition in definitions
+        for tool in definition.build_tools()
+    }
+
+    assert tool_classes == {
+        "knowledge_document_search": "KnowledgeDocumentSearchTool",
+        "product_semantic_search": "ProductSemanticSearchTool",
+        "review_semantic_search": "ReviewSemanticSearchTool",
+        "order_semantic_search": "OrderSemanticSearchTool",
+        "inventory_lookup": "InventoryLookupTool",
+        "product_detail_lookup": "ProductDetailLookupTool",
+        "order_status_lookup": "OrderStatusLookupTool",
+        "order_address_update": "OrderAddressUpdateTool",
+        "return_ticket_create": "ReturnTicketCreateTool",
+        "complaint_ticket_create": "ComplaintTicketCreateTool",
+    }
+
+
+def test_tool_registry_rejects_duplicate_tool_names() -> None:
+    app_settings = _build_test_settings("tools-duplicate-name")
+    tool = build_generic_assistant_scene_definition(app_settings=app_settings).build_tools()[0]
+    registry = ToolRegistry()
+    registration = ToolRegistration(
+        tool=tool,
+        group="retrieval",
+        allowed_agents=(),
+    )
+
+    registry.register(registration)
+
+    with pytest.raises(ValueError, match="Duplicate tool registration"):
+        registry.register(registration)
+
+
+def test_scene_tool_scope_respects_mounts_and_agent_whitelists() -> None:
+    app_settings = _build_test_settings("tools-scene-scope")
+    generic_definition = build_generic_assistant_scene_definition(app_settings=app_settings)
+    ecommerce_definition = build_ecommerce_scene_definition(app_settings=app_settings)
+    registry = build_default_tool_registry(app_settings)
+
+    assert generic_definition.resolve_candidate_retrieval_tools(("documents",)) == (
+        "knowledge_document_search",
+    )
+    assert ecommerce_definition.resolve_candidate_retrieval_tools(("documents",)) == (
+        "knowledge_document_search",
+    )
+    assert ecommerce_definition.resolve_candidate_retrieval_tools(("documents", "ecommerce")) == (
+        "knowledge_document_search",
+        "product_semantic_search",
+        "review_semantic_search",
+        "order_semantic_search",
+        "inventory_lookup",
+        "product_detail_lookup",
+    )
+    assert {registration.tool.name for registration in registry.list_tools_for_agent("shopping_agent")} == {
+        "product_semantic_search",
+        "review_semantic_search",
+        "inventory_lookup",
+        "product_detail_lookup",
+    }
+
+
 def test_retrieval_tools_return_standardized_records() -> None:
     app_settings = _build_test_settings("tools-retrieval")
     registry = _build_scene_tool_registry(app_settings)
@@ -159,7 +268,7 @@ def test_generic_document_search_keeps_full_chunk_for_answer_context() -> None:
             "chunk_id": "chunk-session-fields",
         },
     )
-    tool = GenericKnowledgeDocumentSearchTool(
+    tool = KnowledgeDocumentSearchTool(
         document_retrieval_service=_FakeDocumentRetrievalService(
             [
                 DocumentChunkRetrievalResult(
@@ -194,7 +303,7 @@ def test_generic_document_search_expands_adjacent_chunks_for_answer_context() ->
             metadata={"document_id": document_id, "chunk_id": "chunk-1", "chunk_index": 1},
         ),
     ]
-    tool = GenericKnowledgeDocumentSearchTool(
+    tool = KnowledgeDocumentSearchTool(
         document_retrieval_service=_FakeDocumentRetrievalService(
             [
                 DocumentChunkRetrievalResult(

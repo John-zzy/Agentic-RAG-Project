@@ -280,6 +280,20 @@ no-hit 样本 qrels 为空，只参与 `no_hit_false_positive_rate`，不参与�
 - `results[].observed.knowledge_used`
 - `results[].observed.citations`
 
+## LLM query rewrite 诊断口径
+
+`generic_assistant` 在第一轮文档证据不足时会尝试一次 LLM query rewrite。rewrite 只生成下一轮检索 query，不生成最终答案；如果模型输出非法 JSON、空 query、删除关键 token，或追加无依据的泛词，会回退到归一化后的原 query。
+
+定位 rewrite 行为时优先看：
+
+- `/chat` 响应中的 `retrieval_trace.rewritten_query`：这里展示第二轮实际使用的 query；fallback 时应等于归一化后的原 query。
+- `/chat` 响应中的 `retrieval_trace.final_query`：用于确认最终停留在哪个检索 query。
+- `/chat` 响应中的 `retrieval_trace.rounds[]`：第一轮的 `rewritten_query` 可判断是否发生过 rewrite，第二轮可判断 fallback 后是否仍然 no-hit。
+- SSE `tool` 事件中的 `retrieval_trace`：流式路径应与非流式路径保持同样的 rewritten query、`knowledge_used` 和 citations 语义。
+- `backend/tests/test_agentic_retrieval.py` 中的 rewriter 单测：覆盖合法 JSON、非法 JSON、空 query、模型异常、关键 token 缺失和无依据泛词扩展。
+
+`VOID-ALPHA-7788 secret handshake?` 是当前 no-hit 边界样本。若 rewrite fallback 生效，期望最终仍为 `knowledge_used=false`、`citations=[]`、`retrieval_trace.filtered_candidates_count=0`，且不会因为 `数据模型`、`表结构`、`常见问题` 等泛词误召回无关文档。
+
 ## SSE stream=true 回归口径
 
 `minimal` 样本集当前固定对 `quickstart_setup_requirement` 和 `no_hit_fallback` 启用流式回放。

@@ -29,6 +29,12 @@
   - `backend/platform/rag/contracts.py`
   - `backend/platform/rag/pre_retrieval/query_rewrite.py`
   - `backend/platform/rag/retrieval/documents/service.py`
+- 工具协议与工具实现：
+  - `backend/platform/tools/base.py`（工具基础协议、上下文、结果结构）
+  - `backend/platform/tools/adapters.py`（StructuredTool / RetrievalTool adapter）
+  - `backend/platform/tools/registry.py`（工具注册元数据、Agent 白名单、MCP 暴露标记）
+  - `backend/scenes/generic_assistant/tools/`（通用知识助手具体工具）
+  - `backend/scenes/ecommerce/tools/`（电商具体工具）
 - 文档 Hybrid Search：
   - `backend/platform/rag/retrieval/documents/service.py`
   - `backend/platform/rag/retrieval/documents/semantic.py`
@@ -116,6 +122,7 @@
 - 演示场景看 `backend/scenes/ecommerce/definition.py`
 - 默认场景组合装配看 `backend/scenes/registry.py`
 - 抽象定义在 `backend/scenes/base.py`
+- 具体工具实现放在对应 scene 的 `tools/` 包；一个逻辑工具一个类。
 
 ## 架构边界
 
@@ -143,6 +150,14 @@
 - `scene` 负责 prompt 与运行时风格，知识源是否可用由会话挂载配置决定，不要再把二者视为同一个开关。
 - candidate retrieval tools 由 `SceneDefinition` 根据 `mounted_knowledge_sources` 解析；不要再在 runtime 中硬编码 knowledge source 到 tool name 的映射。
 - `generic_assistant` 持有默认 docs-first 主链；`ecommerce` 等业务场景通过 business extension 接入，不要再让 generic 反向依赖业务默认 judge / rewriter / tool builder。
+
+### Tools 边界
+
+- `backend/platform/tools` 只放中立协议、adapter 和 registry，不引入具体业务工具。
+- 具体工具按 scene 维护，例如 `backend/scenes/generic_assistant/tools/` 和 `backend/scenes/ecommerce/tools/`。
+- 每个逻辑工具对应一个独立类，例如 `KnowledgeDocumentSearchTool`、`ProductSemanticSearchTool`、`OrderStatusLookupTool`。
+- scene definition 负责工具装配和范围控制；runtime 不从全局工具池自由选择业务工具。
+- `ToolRegistry` 只存工具实例、分组、Agent 白名单和 MCP 暴露标记，不承载工具业务逻辑。
 
 ### 数据位置
 
