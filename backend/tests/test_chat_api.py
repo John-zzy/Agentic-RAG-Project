@@ -386,6 +386,7 @@ def test_chat_api_success_path() -> None:
         "keyword_score": None,
         "vector_rank": 1,
         "keyword_rank": None,
+        "rerank_score": None,
         "matched_by": ["vector"],
         "rank": 1,
     }
@@ -406,6 +407,17 @@ def test_chat_api_success_path() -> None:
     assert trace["rounds"][0]["tool_name"] == "knowledge_document_search"
     assert trace["rounds"][0]["raw_candidates_count"] == 1
     assert trace["rounds"][0]["filtered_candidates_count"] == 1
+    assert trace["rounds"][0]["rerank"] == {
+        "enabled": False,
+        "provider": None,
+        "model": None,
+        "applied": False,
+        "input_count": 1,
+        "output_count": 1,
+        "top_n": None,
+        "fallback_reason": None,
+        "error": None,
+    }
     saved_session = service.session_store.get_session(payload["session_id"])
     assert saved_session is not None
     assert saved_session.mounted_knowledge_sources == ("documents",)
@@ -470,6 +482,7 @@ def test_chat_api_sse_success_path_returns_structured_events() -> None:
     assert tool_payload["rounds"][0]["tool_name"] == "knowledge_document_search"
     assert tool_payload["retrieval_trace"]["tool_call_count"] == 1
     assert tool_payload["retrieval_trace"]["top_k_chunks"][0]["citation_id"] == "chunk-doc-1"
+    assert tool_payload["rounds"][0]["rerank"] == tool_payload["retrieval_trace"]["rounds"][0]["rerank"]
     assert tool_payload["retrieval_policy"] == {
         "top_k": 5,
         "min_relevance_score": 0.8,
@@ -1653,6 +1666,7 @@ def test_session_detail_normalizes_legacy_retrieval_snippets() -> None:
             "keyword_score": None,
             "vector_rank": None,
             "keyword_rank": None,
+            "rerank_score": None,
             "matched_by": [],
             "rank": 1,
         }

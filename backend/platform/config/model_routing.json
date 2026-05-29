@@ -4,6 +4,7 @@
       "provider": "dashscope",
       "model_name": "qwen3.6-plus",
       "api_base": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      "api_key_env": "AI_RAG_MODELS__SIMPLE__API_KEY",
       "task_types": ["greeting", "sentiment", "faq"],
       "supports_streaming": true,
       "fallback": "moderate"
@@ -12,6 +13,7 @@
       "provider": "dashscope",
       "model_name": "qwen3.6-plus",
       "api_base": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      "api_key_env": "AI_RAG_MODELS__MODERATE__API_KEY",
       "task_types": ["retrieval", "order_lookup", "product_recommendation"],
       "supports_streaming": true,
       "fallback": "complex"
@@ -20,9 +22,27 @@
       "provider": "dashscope",
       "model_name": "qwen3.6-plus",
       "api_base": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      "api_key_env": "AI_RAG_MODELS__COMPLEX__API_KEY",
       "task_types": ["multi_agent_reasoning", "escalation", "policy_decision"],
       "supports_streaming": true,
       "fallback": null
+    },
+    "embedding": {
+      "provider": "dashscope",
+      "model_name": "text-embedding-v4",
+      "api_base": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      "api_key_env": "AI_RAG_MODELS__EMBEDDING__API_KEY",
+      "dimensions": 256,
+      "timeout_seconds": 30,
+      "max_retries": 3
+    },
+    "rerank": {
+      "provider": "dashscope",
+      "model_name": "gte-rerank-v2",
+      "api_base": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      "api_key_env": "AI_RAG_MODELS__RERANK__API_KEY",
+      "top_n": 3,
+      "timeout_seconds": 30
     }
   }
 }

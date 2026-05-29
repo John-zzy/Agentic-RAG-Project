@@ -279,6 +279,12 @@ class RetrievalExecutor:
             document_trace.get("filtered_candidates_count"),
             fallback=len(round_trace.result.documents),
         )
+        rerank_trace = round_trace.result.metadata.get("rerank")
+        top_k_chunks = self._round_top_chunks(
+            document_trace=document_trace,
+            rerank_trace=rerank_trace,
+            documents=round_trace.result.documents,
+        )
         return RetrievalTraceRound(
             round_index=round_trace.plan.round_index,
             tool_name=round_trace.result.tool_name,
@@ -293,8 +299,8 @@ class RetrievalExecutor:
             error=round_trace.result.error,
             raw_candidates_count=raw_candidates_count,
             filtered_candidates_count=filtered_candidates_count,
-            top_k_chunks=self._coerce_top_chunks(document_trace.get("top_k_chunks")),
-            rerank=round_trace.result.metadata.get("rerank"),
+            top_k_chunks=top_k_chunks,
+            rerank=rerank_trace,
         )
 
     def _build_simple_round_trace(
@@ -373,6 +379,18 @@ class RetrievalExecutor:
                 continue
         return chunks
 
+    def _round_top_chunks(
+        self,
+        *,
+        document_trace: dict[str, Any],
+        rerank_trace: Any,
+        documents: list[Document],
+    ) -> list[RetrievalTraceTopChunk]:
+        if isinstance(rerank_trace, dict) and rerank_trace.get("enabled") is True:
+            # 步骤 1：ReRank 边界开启后，轮次 trace 使用重排/截断后的最终证据顺序。
+            return self._top_chunks_from_documents(documents)
+        return self._coerce_top_chunks(document_trace.get("top_k_chunks"))
+
     def _top_chunks_from_documents(self, documents: list[Document]) -> list[RetrievalTraceTopChunk]:
         chunks: list[RetrievalTraceTopChunk] = []
         for rank, document in enumerate(documents, start=1):
@@ -396,6 +414,7 @@ class RetrievalExecutor:
                     keyword_score=self._resolve_float(metadata.get("keyword_score")),
                     vector_rank=self._resolve_int(metadata.get("vector_rank")),
                     keyword_rank=self._resolve_int(metadata.get("keyword_rank")),
+                    rerank_score=self._resolve_float(metadata.get("rerank_score")),
                     matched_by=self._resolve_matched_by(metadata.get("matched_by")),
                 )
             )
@@ -641,6 +660,7 @@ class CitationMapper:
             keyword_score=self._resolve_float(metadata.get("keyword_score")),
             vector_rank=self._resolve_int(metadata.get("vector_rank")),
             keyword_rank=self._resolve_int(metadata.get("keyword_rank")),
+            rerank_score=self._resolve_float(metadata.get("rerank_score")),
             matched_by=self._resolve_matched_by(metadata.get("matched_by")),
             rank=rank,
         )
@@ -1114,6 +1134,7 @@ class ChatService:
         """构造 retrieval/tool 阶段的结构化事件。"""
         return {
             **prepared.tool_event,
+            "rounds": [round_trace.model_dump() for round_trace in prepared.retrieval_trace.rounds],
             "session_id": prepared.session_id,
             "request_id": prepared.request_id,
             "knowledge_used": prepared.knowledge_used,

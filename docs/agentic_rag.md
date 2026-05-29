@@ -105,7 +105,9 @@
 
 `no_hit_strategy` 只控制无有效证据时的兜底文案选择，不会放宽 citation 可信边界。无论是 `ask_user` 还是 `fallback_answer`，只要没有可用证据，`/chat` 都必须返回 `knowledge_used=false` 和 `citations=[]`，并且不会调用 evidence-backed answer chain。
 
-ReRank 通过平台级 `RetrievalReranker` 协议接入。默认 `rerank_enabled=false` 时不改变任何排序、citation 顺序或 no-hit 行为；启用但未接入真实 provider 时使用 identity reranker，保留原排序，并在配置 `rerank_top_n` 时对 records、documents 和 citations 做一致截断。SSE `tool.rounds[].rerank` 与 Eval policy evidence 会标明 identity trace，避免把它误认为真实模型 rerank。
+ReRank 通过平台级 `RetrievalReranker` 协议接入。默认 `rerank_enabled=false` 时不调用第三方重排模型，也不改变排序、citation 顺序或 no-hit 行为；显式开启后会通过模型层创建 LangChain `DashScopeRerank` wrapper，对过滤后的 records、documents 和 citations 使用同一组模型索引同步重排。配置 `rerank_top_n` 时，最终证据和 citations 只保留重排后的前 N 条。SSE `tool` 与 `done` 事件的 `retrieval_trace.rounds[].rerank` 会暴露 provider、model、输入/输出数量、top_n、fallback reason 和 error 摘要。
+
+真实 embedding 已接入统一模型路由。切换到真实 embedding 模型后，已有 Chroma 或 Elasticsearch 中的旧向量不能与新模型向量混用；需要重新发布文档或重建向量索引，保证入库向量与查询向量来自同一 embedding strategy。
 
 ## 5. 首轮为什么默认先查文档
 

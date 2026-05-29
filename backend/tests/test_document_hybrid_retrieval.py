@@ -11,12 +11,13 @@ from backend.platform.rag.retrieval.documents import (
     DocumentSemanticRetriever,
     HybridFusionRanker,
 )
-from backend.tests.test_support import make_test_runtime_dir
+from backend.tests.test_support import FakeEmbeddingStrategy, make_test_runtime_dir
 
 
 class FakeDocumentChunkVectorRepository:
     def __init__(self, results: list[VectorStoreDocument]) -> None:
         self._results = results
+        self.query_embeddings: list[list[float]] = []
 
     def search_document_chunk_vectors(
         self,
@@ -24,7 +25,8 @@ class FakeDocumentChunkVectorRepository:
         top_k: int | None = None,
         namespace: str | None = None,
     ) -> list[object]:
-        del query_embedding, namespace
+        del namespace
+        self.query_embeddings.append(query_embedding)
         return [
             VectorSearchResult(document=document, score=score)
             for document, score in [
@@ -308,6 +310,23 @@ def test_document_retrieval_service_honors_semantic_recall_strategy() -> None:
     assert [result.document.id for result in results] == ["semantic-hit"]
     assert results[0].score == 0.91
     assert results[0].matched_by == ["vector"]
+
+
+def test_document_semantic_retrieval_uses_injected_embedding_strategy() -> None:
+    vector_repository = FakeDocumentChunkVectorRepository(
+        [_chunk("semantic-hit", "语义召回内容", document_id="doc-semantic", vector_score=0.91)]
+    )
+    embedding_strategy = FakeEmbeddingStrategy(dimensions=3)
+    retriever = DocumentSemanticRetriever(
+        vector_repository=vector_repository,
+        embedding_strategy=embedding_strategy,
+    )
+
+    results = retriever.retrieve(query="语义召回", top_k=1, namespace="faq")
+
+    assert results[0].document.id == "semantic-hit"
+    assert embedding_strategy.calls == ["语义召回"]
+    assert len(vector_repository.query_embeddings[0]) == 3
 
 
 def test_document_retrieval_service_honors_keyword_recall_strategy() -> None:

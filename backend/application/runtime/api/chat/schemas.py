@@ -50,6 +50,7 @@ class Citation(BaseModel):
     keyword_score: float | None = Field(default=None, description="关键词召回分数。")
     vector_rank: int | None = Field(default=None, description="语义召回原始排序位置，从 1 开始。")
     keyword_rank: int | None = Field(default=None, description="关键词召回原始排序位置，从 1 开始。")
+    rerank_score: float | None = Field(default=None, description="真实 ReRank 成功应用后的重排分数。")
     matched_by: list[str] = Field(default_factory=list, description="命中来源，例如 vector、keyword。")
     rank: int = Field(ge=1, description="原始检索排序位置，从 1 开始。")
 
@@ -69,6 +70,7 @@ class RetrievalTraceTopChunk(BaseModel):
     keyword_score: float | None = Field(default=None, description="关键词召回得分。")
     vector_rank: int | None = Field(default=None, description="向量召回排序。")
     keyword_rank: int | None = Field(default=None, description="关键词召回排序。")
+    rerank_score: float | None = Field(default=None, description="真实 ReRank 成功应用后的重排分数。")
     matched_by: list[str] = Field(default_factory=list, description="命中来源。")
 
 

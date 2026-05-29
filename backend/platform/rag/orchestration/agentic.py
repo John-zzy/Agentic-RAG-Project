@@ -21,9 +21,10 @@ from backend.platform.rag.orchestration.decisions import (
     SufficiencyJudge,
 )
 from backend.platform.rag.post_retrieval.rerank import (
-    IdentityRetrievalReranker,
-    RetrievalReranker,
+    DashScopeRetrievalReranker,
+    RerankTrace,
     disabled_rerank_trace,
+    remove_rerank_scores,
 )
 from backend.platform.rag.pre_retrieval.query_rewrite import QueryRewrite, QueryRewriter
 
@@ -56,7 +57,7 @@ class AgenticRetriever(BaseRetriever):
     tools: dict[str, RetrievalTool] = Field(default_factory=dict)
     sufficiency_judge: SufficiencyJudge = Field(exclude=True)
     query_rewriter: QueryRewriter | None = Field(default=None, exclude=True)
-    reranker: Any = Field(default_factory=IdentityRetrievalReranker, exclude=True)
+    reranker: Any = Field(default_factory=DashScopeRetrievalReranker, exclude=True)
     default_tool: str | None = None
     max_rounds: int = Field(default=3, ge=1)
     attach_trace: bool = True
@@ -390,20 +391,52 @@ class AgenticRetriever(BaseRetriever):
         if not plan.rerank_enabled:
             # 默认关闭时只补 trace，不改 records/documents/citations 的既有语义。
             trace = disabled_rerank_trace(result)
-            return result.model_copy(
+            sanitized = remove_rerank_scores(result)
+            return sanitized.model_copy(
                 update={
                     "metadata": {
-                        **result.metadata,
+                        **sanitized.metadata,
                         "rerank": trace.to_dict(),
                     }
                 }
             )
-        reranked, _trace = self.reranker.rerank(
-            query=plan.active_query,
-            result=result,
-            top_n=plan.rerank_top_n,
-        )
-        return reranked
+        try:
+            reranked, _trace = self.reranker.rerank(
+                query=plan.active_query,
+                result=result,
+                top_n=plan.rerank_top_n,
+            )
+            return reranked
+        except Exception as exc:
+            # 外层兜底只负责保护编排稳定性，具体模型调用和映射逻辑仍由 adapter 承担。
+            provider = getattr(self.reranker, "provider", "unknown")
+            input_count = max(len(result.records), len(result.documents), len(result.citations))
+            logger.warning(
+                "Rerank adapter failed; preserving original retrieval order: provider=%s, reason=%s",
+                provider,
+                type(exc).__name__,
+                exc_info=True,
+            )
+            trace = RerankTrace(
+                enabled=True,
+                provider=provider,
+                model=None,
+                applied=False,
+                input_count=input_count,
+                output_count=input_count,
+                top_n=plan.rerank_top_n,
+                fallback_reason=type(exc).__name__,
+                error=str(exc).strip().splitlines()[0][:240] if str(exc).strip() else type(exc).__name__,
+            )
+            sanitized = remove_rerank_scores(result)
+            return sanitized.model_copy(
+                update={
+                    "metadata": {
+                        **sanitized.metadata,
+                        "rerank": trace.to_dict(),
+                    }
+                }
+            )
 
     def _rewrite_query(
         self,

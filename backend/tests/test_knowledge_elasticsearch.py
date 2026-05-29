@@ -22,7 +22,7 @@ from backend.platform.search_foundation import (
     SemanticVectorQueryRepository,
     VectorStoreDocument,
 )
-from backend.tests.test_support import DATA_DIR
+from backend.tests.test_support import DATA_DIR, FakeEmbeddingStrategy
 import backend.platform.knowledge.base.store as store_module
 
 
@@ -365,6 +365,20 @@ def test_elasticsearch_store_initializes_document_management_indexes(
     assert versions_mapping["type"] == "nested"
     assert "enabled" not in versions_mapping
     assert fake_client.indices.mappings["ai-rag-chunks"]["properties"]["embedding"]["dims"] == 256
+
+
+def test_elasticsearch_document_vector_mapping_uses_embedding_strategy_dimensions() -> None:
+    app_settings = build_elasticsearch_settings()
+    fake_client = FakeElasticsearchClient()
+    store = ElasticsearchVectorStore(
+        app_settings,
+        client=fake_client,
+        embedding_strategy=FakeEmbeddingStrategy(dimensions=3),
+    )
+
+    store.ensure_document_indexes()
+
+    assert fake_client.indices.mappings["ai-rag-chunks"]["properties"]["embedding"]["dims"] == 3
 
 
 def test_elasticsearch_store_rejects_unknown_document_index_kind() -> None:

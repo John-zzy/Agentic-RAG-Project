@@ -2,11 +2,14 @@ import json
 from pathlib import Path
 import warnings
 
+import pytest
+
 from backend.application.runtime.service import build_default_scene_registry
 from backend.platform.config.settings import AppSettings
 from backend.platform.rag.retrieval.documents.filters import DOCUMENT_MINIMUM_RELEVANCE
 from backend.platform.rag.contracts import RetrievalContext, RetrievalPlan, RetrievalResult
 from backend.platform.rag.orchestration.decisions import SufficiencyDecision
+from backend.platform.rag.post_retrieval import DashScopeRetrievalReranker, IdentityRetrievalReranker
 from backend.platform.search_foundation import VectorSearchResult, VectorStoreDocument
 from backend.platform.rag.retrieval.documents import DocumentChunkRetrievalResult
 from backend.platform.tools import build_retrieval_tool
@@ -709,8 +712,6 @@ def test_scene_retrieval_policy_validates_allowed_values_and_rerank_top_n() -> N
 
 
 def test_scene_retrieval_policy_rejects_invalid_values() -> None:
-    import pytest
-
     with pytest.raises(ValueError, match="recall_strategy"):
         SceneRetrievalPolicy(recall_strategy="vector")  # type: ignore[arg-type]
     with pytest.raises(ValueError, match="no_hit_strategy"):
@@ -899,6 +900,201 @@ def test_agentic_retriever_passes_recall_strategy_to_document_tool() -> None:
     assert document_service.calls[-1]["recall_strategy"] == "keyword"
 
 
+class _FakeDashScopeRerankWrapper:
+    model = "gte-rerank-v2"
+
+    def __init__(
+        self,
+        results: list[dict[str, object]] | None = None,
+        *,
+        error: Exception | None = None,
+    ) -> None:
+        self.results = results or []
+        self.error = error
+        self.calls: list[dict[str, object]] = []
+
+    def rerank(self, documents: list[object], query: str, **kwargs: object) -> list[dict[str, object]]:
+        self.calls.append({"documents": documents, "query": query, "kwargs": kwargs})
+        if self.error is not None:
+            raise self.error
+        return self.results
+
+
+class _UnexpectedReranker:
+    provider = "unexpected"
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def rerank(self, **kwargs: object):
+        del kwargs
+        self.calls += 1
+        raise AssertionError("disabled rerank must not call reranker")
+
+
+def _build_generic_retriever_with_reranker(test_name: str, reranker: object):
+    app_settings, knowledge_service = _build_knowledge_service(test_name)
+    definition = build_generic_assistant_scene_definition(
+        app_settings=app_settings,
+        document_retrieval_service=FakeDocumentRetrievalService(knowledge_service),
+    )
+    retriever = definition.build_retriever()
+    retriever.reranker = reranker
+    return retriever, knowledge_service
+
+
+def test_agentic_dashscope_rerank_sorts_records_documents_and_citations() -> None:
+    wrapper = _FakeDashScopeRerankWrapper(
+        [
+            {"index": 1, "relevance_score": 0.97},
+            {"index": 0, "relevance_score": 0.12},
+        ]
+    )
+    reranker = DashScopeRetrievalReranker(wrapper_factory=lambda: wrapper)
+    retriever, _knowledge_service = _build_generic_retriever_with_reranker(
+        "agentic-dashscope-rerank-success",
+        reranker,
+    )
+
+    outcome = retriever.retrieve_with_trace(
+        "请根据产品手册说明 AeroPhone X 的价格和电池参数",
+        rerank_enabled=True,
+    )
+    result = outcome.results[0]
+
+    assert [record["citation_id"] for record in result.records] == ["DOC-002", "DOC-001"]
+    assert [document.metadata["citation_id"] for document in result.documents] == ["DOC-002", "DOC-001"]
+    assert [citation.citation_id for citation in result.citations] == ["DOC-002", "DOC-001"]
+    assert [record["rerank_score"] for record in result.records] == [0.97, 0.12]
+    assert [document.metadata["rerank_score"] for document in result.documents] == [0.97, 0.12]
+    assert [citation.metadata["rerank_score"] for citation in result.citations] == [0.97, 0.12]
+    assert result.metadata["rerank"] == {
+        "enabled": True,
+        "provider": "dashscope",
+        "model": "gte-rerank-v2",
+        "applied": True,
+        "input_count": 2,
+        "output_count": 2,
+        "top_n": None,
+        "fallback_reason": None,
+        "error": None,
+    }
+
+
+def test_agentic_rerank_disabled_does_not_call_model_and_keeps_no_hit_empty() -> None:
+    reranker = _UnexpectedReranker()
+    retriever, knowledge_service = _build_generic_retriever_with_reranker(
+        "agentic-rerank-disabled-no-call",
+        reranker,
+    )
+
+    hit_outcome = retriever.retrieve_with_trace("请根据产品手册说明 AeroPhone X 的价格和电池参数")
+
+    assert reranker.calls == 0
+    assert [record["citation_id"] for record in hit_outcome.results[0].records] == ["DOC-001", "DOC-002"]
+    assert [citation.citation_id for citation in hit_outcome.results[0].citations] == ["DOC-001", "DOC-002"]
+    assert all("rerank_score" not in record for record in hit_outcome.results[0].records)
+    assert all("rerank_score" not in document.metadata for document in hit_outcome.documents)
+    assert hit_outcome.results[0].metadata["rerank"]["enabled"] is False
+
+    knowledge_service.upsert_documents([])
+    no_hit_outcome = retriever.retrieve_with_trace("没有任何文档能命中")
+
+    assert reranker.calls == 0
+    assert no_hit_outcome.documents == []
+    assert no_hit_outcome.results[0].citations == []
+    assert no_hit_outcome.results[0].metadata["rerank"]["enabled"] is False
+
+
+@pytest.mark.parametrize(
+    ("wrapper", "fallback_reason", "error", "output_count"),
+    [
+        (
+            _FakeDashScopeRerankWrapper(error=RuntimeError("rerank failed")),
+            "RuntimeError",
+            "rerank failed",
+            2,
+        ),
+        (
+            _FakeDashScopeRerankWrapper(error=TimeoutError("rerank timeout")),
+            "TimeoutError",
+            "rerank timeout",
+            2,
+        ),
+        (
+            _FakeDashScopeRerankWrapper([]),
+            "empty_rerank_result",
+            None,
+            0,
+        ),
+    ],
+)
+def test_agentic_rerank_fallback_preserves_original_order(
+    wrapper: _FakeDashScopeRerankWrapper,
+    fallback_reason: str,
+    error: str | None,
+    output_count: int,
+) -> None:
+    reranker = DashScopeRetrievalReranker(wrapper_factory=lambda: wrapper)
+    retriever, _knowledge_service = _build_generic_retriever_with_reranker(
+        f"agentic-rerank-fallback-{fallback_reason}",
+        reranker,
+    )
+
+    outcome = retriever.retrieve_with_trace(
+        "请根据产品手册说明 AeroPhone X 的价格和电池参数",
+        rerank_enabled=True,
+    )
+    result = outcome.results[0]
+
+    assert [record["citation_id"] for record in result.records] == ["DOC-001", "DOC-002"]
+    assert [document.metadata["citation_id"] for document in result.documents] == ["DOC-001", "DOC-002"]
+    assert [citation.citation_id for citation in result.citations] == ["DOC-001", "DOC-002"]
+    assert all("rerank_score" not in record for record in result.records)
+    assert all("rerank_score" not in document.metadata for document in result.documents)
+    assert all("rerank_score" not in citation.metadata for citation in result.citations)
+    assert result.metadata["rerank"] == {
+        "enabled": True,
+        "provider": "dashscope",
+        "model": "gte-rerank-v2",
+        "applied": False,
+        "input_count": 2,
+        "output_count": output_count,
+        "top_n": None,
+        "fallback_reason": fallback_reason,
+        "error": error,
+    }
+
+
+def test_agentic_dashscope_rerank_top_n_limits_final_evidence_and_citations() -> None:
+    wrapper = _FakeDashScopeRerankWrapper(
+        [
+            {"index": 1, "relevance_score": 0.97},
+            {"index": 0, "relevance_score": 0.12},
+        ]
+    )
+    reranker = DashScopeRetrievalReranker(wrapper_factory=lambda: wrapper)
+    retriever, _knowledge_service = _build_generic_retriever_with_reranker(
+        "agentic-dashscope-rerank-top-n",
+        reranker,
+    )
+
+    outcome = retriever.retrieve_with_trace(
+        "请根据产品手册说明 AeroPhone X 的价格和电池参数",
+        rerank_enabled=True,
+        rerank_top_n=1,
+    )
+    result = outcome.results[0]
+
+    assert wrapper.calls[0]["kwargs"] == {"top_n": 1}
+    assert [record["citation_id"] for record in result.records] == ["DOC-002"]
+    assert [document.metadata["citation_id"] for document in result.documents] == ["DOC-002"]
+    assert [citation.citation_id for citation in result.citations] == ["DOC-002"]
+    assert [document.metadata["citation_id"] for document in outcome.documents] == ["DOC-002"]
+    assert result.metadata["rerank"]["output_count"] == 1
+    assert result.metadata["rerank"]["top_n"] == 1
+
+
 def test_agentic_identity_rerank_truncates_records_documents_and_citations() -> None:
     app_settings, knowledge_service = _build_knowledge_service("agentic-identity-rerank")
     definition = build_generic_assistant_scene_definition(
@@ -906,6 +1102,7 @@ def test_agentic_identity_rerank_truncates_records_documents_and_citations() -> 
         document_retrieval_service=FakeDocumentRetrievalService(knowledge_service),
     )
     retriever = definition.build_retriever()
+    retriever.reranker = IdentityRetrievalReranker()
 
     outcome = retriever.retrieve_with_trace(
         "请根据产品手册说明 AeroPhone X 的价格和电池参数",
@@ -919,10 +1116,13 @@ def test_agentic_identity_rerank_truncates_records_documents_and_citations() -> 
     assert outcome.results[0].metadata["rerank"] == {
         "enabled": True,
         "provider": "identity",
+        "model": None,
         "applied": False,
         "input_count": 2,
         "output_count": 1,
         "top_n": 1,
+        "fallback_reason": None,
+        "error": None,
     }
 
 

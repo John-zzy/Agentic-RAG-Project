@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from backend.platform.rag.retrieval.documents.embedding import DocumentEmbeddingStrategy
 from backend.platform.rag.retrieval.documents.types import DocumentChunkRetrievalResult
-from backend.platform.search_foundation import DocumentChunkVectorRepository
+from backend.platform.search_foundation import DocumentChunkVectorRepository, EmbeddingStrategy
 
 
 class DocumentSemanticRetriever:
@@ -12,10 +12,10 @@ class DocumentSemanticRetriever:
         self,
         *,
         vector_repository: DocumentChunkVectorRepository,
-        embedding_strategy: DocumentEmbeddingStrategy | None = None,
+        embedding_strategy: EmbeddingStrategy | None = None,
     ) -> None:
         self.vector_repository = vector_repository
-        self.embedding_strategy = embedding_strategy or DocumentEmbeddingStrategy()
+        self.embedding_strategy: EmbeddingStrategy = embedding_strategy or DocumentEmbeddingStrategy()
 
     def retrieve(
         self,

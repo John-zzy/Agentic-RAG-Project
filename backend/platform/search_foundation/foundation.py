@@ -40,6 +40,8 @@ class VectorStoreHealth(BaseModel):
 class EmbeddingStrategy(Protocol):
     """定义文本转向量的统一入口。"""
 
+    dimensions: int
+
     def embed(self, text: str) -> list[float]:
         """把一段文本转换成向量。"""
 

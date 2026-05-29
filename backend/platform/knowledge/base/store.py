@@ -8,11 +8,11 @@ import chromadb
 from chromadb.api.models.Collection import Collection
 
 from backend.platform.config.settings import AppSettings, VectorNamespaceConfig, settings
+from backend.platform.models.llm import get_embedding_strategy
 from backend.platform.search_foundation import (
     ActiveDocumentChunkSource,
     DocumentChunkVectorRepository,
     EmbeddingStrategy,
-    LocalHashingEmbedder,
     MetadataValue,
     SemanticDocumentStoreRepository,
     SemanticVectorQueryRepository,
@@ -34,14 +34,19 @@ DOCUMENT_INDEX_KINDS = ("documents", "chunks")
 class KnowledgeRetriever(SemanticDocumentStoreRepository, ABC):
     """只定义知识检索需要的方法，调用方不再依赖文档管理能力。"""
 
-    def __init__(self, app_settings: AppSettings) -> None:
+    def __init__(
+        self,
+        app_settings: AppSettings,
+        *,
+        embedding_strategy: EmbeddingStrategy | None = None,
+    ) -> None:
         """初始化检索基类配置，并把可替换策略对象挂进来。"""
         self.settings = app_settings
         self.config = app_settings.vector_store
-        self._embedder: EmbeddingStrategy = self._create_embedder()
+        self._embedder: EmbeddingStrategy = embedding_strategy or self._create_embedder()
 
     def _create_embedder(self) -> EmbeddingStrategy:
-        return LocalHashingEmbedder()
+        return get_embedding_strategy()
 
     def resolve_namespace_config(self, namespace: str) -> VectorNamespaceConfig:
         """解析命名空间对应的配置对象。"""
@@ -121,9 +126,14 @@ VectorStoreType = TypeVar("VectorStoreType", bound=VectorStore)
 class ChromaVectorStore(VectorStore):
     """Chroma 向量库实现。"""
 
-    def __init__(self, app_settings: AppSettings) -> None:
+    def __init__(
+        self,
+        app_settings: AppSettings,
+        *,
+        embedding_strategy: EmbeddingStrategy | None = None,
+    ) -> None:
         """初始化 Chroma 客户端与集合缓存。"""
-        super().__init__(app_settings)
+        super().__init__(app_settings, embedding_strategy=embedding_strategy)
         persist_directory = self.config.chroma.persist_directory
         persist_directory.mkdir(parents=True, exist_ok=True)
         self._client = chromadb.PersistentClient(path=str(persist_directory))
@@ -429,9 +439,15 @@ class ChromaVectorStore(VectorStore):
 class ElasticsearchVectorStore(VectorStore):
     """Elasticsearch 向量库实现。"""
 
-    def __init__(self, app_settings: AppSettings, client: Any | None = None) -> None:
+    def __init__(
+        self,
+        app_settings: AppSettings,
+        client: Any | None = None,
+        *,
+        embedding_strategy: EmbeddingStrategy | None = None,
+    ) -> None:
         """初始化 Elasticsearch 客户端。"""
-        super().__init__(app_settings)
+        super().__init__(app_settings, embedding_strategy=embedding_strategy)
         self._client = client or self._build_client()
 
     def ensure_collections(self) -> None:
@@ -851,7 +867,12 @@ class VectorStoreFactory:
         cls._registry[provider] = store_cls
 
     @classmethod
-    def create(cls, app_settings: AppSettings | None = None) -> VectorStore:
+    def create(
+        cls,
+        app_settings: AppSettings | None = None,
+        *,
+        embedding_strategy: EmbeddingStrategy | None = None,
+    ) -> VectorStore:
         """按配置创建对应的向量后端实例。"""
         resolved_settings = app_settings or settings
         provider = resolved_settings.vector_store.provider
@@ -861,52 +882,67 @@ class VectorStoreFactory:
                 f"Vector store provider '{provider}' is not registered yet. "
                 "Implement the provider and register it with VectorStoreFactory.register()."
             )
-        return store_cls(resolved_settings)
+        return store_cls(resolved_settings, embedding_strategy=embedding_strategy)
 
     @classmethod
-    def create_retriever(cls, app_settings: AppSettings | None = None) -> KnowledgeRetriever:
+    def create_retriever(
+        cls,
+        app_settings: AppSettings | None = None,
+        *,
+        embedding_strategy: EmbeddingStrategy | None = None,
+    ) -> KnowledgeRetriever:
         """创建检索接口实例，当前 provider 仍复用同一个对象。"""
-        return cls.create(app_settings)
+        return cls.create(app_settings, embedding_strategy=embedding_strategy)
 
     @classmethod
     def create_semantic_vector_query_repository(
         cls,
         app_settings: AppSettings | None = None,
+        *,
+        embedding_strategy: EmbeddingStrategy | None = None,
     ) -> SemanticVectorQueryRepository:
         """创建命名空间级语义检索读侧仓储。"""
-        return cls.create_retriever(app_settings)
+        return cls.create_retriever(app_settings, embedding_strategy=embedding_strategy)
 
     @classmethod
     def create_semantic_document_store_repository(
         cls,
         app_settings: AppSettings | None = None,
+        *,
+        embedding_strategy: EmbeddingStrategy | None = None,
     ) -> SemanticDocumentStoreRepository:
         """创建命名空间级语义检索兼写入仓储。"""
-        return cls.create_retriever(app_settings)
+        return cls.create_retriever(app_settings, embedding_strategy=embedding_strategy)
 
     @classmethod
     def create_document_repository(
         cls,
         app_settings: AppSettings | None = None,
+        *,
+        embedding_strategy: EmbeddingStrategy | None = None,
     ) -> KnowledgeDocumentRepository:
         """创建文档仓储接口实例，当前 provider 仍复用同一个对象。"""
-        return cls.create(app_settings)
+        return cls.create(app_settings, embedding_strategy=embedding_strategy)
 
     @classmethod
     def create_document_chunk_vector_repository(
         cls,
         app_settings: AppSettings | None = None,
+        *,
+        embedding_strategy: EmbeddingStrategy | None = None,
     ) -> DocumentChunkVectorRepository:
         """创建文档分块向量查询仓储。"""
-        return cls.create(app_settings)
+        return cls.create(app_settings, embedding_strategy=embedding_strategy)
 
     @classmethod
     def create_active_document_chunk_source(
         cls,
         app_settings: AppSettings | None = None,
+        *,
+        embedding_strategy: EmbeddingStrategy | None = None,
     ) -> ActiveDocumentChunkSource:
         """创建活跃文档分块文本源仓储。"""
-        return cls.create(app_settings)
+        return cls.create(app_settings, embedding_strategy=embedding_strategy)
 
 
 VectorStoreFactory.register("chroma", ChromaVectorStore)

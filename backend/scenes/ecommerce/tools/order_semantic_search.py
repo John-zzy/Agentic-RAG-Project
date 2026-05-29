@@ -44,7 +44,7 @@ class OrderSemanticSearchTool(SceneTool):
         rerank_enabled: bool = False,
         rerank_top_n: int | None = None,
     ) -> RetrievalResult:
-        del run_manager, recall_strategy, rerank_top_n
+        del run_manager, recall_strategy, rerank_enabled, rerank_top_n
         resolved_top_k = top_k or self._default_top_k
         logger.info("Order semantic search started: query=%r, top_k=%s", query, resolved_top_k)
         vector_results = filter_vector_results_by_min_relevance(
@@ -52,8 +52,6 @@ class OrderSemanticSearchTool(SceneTool):
             min_relevance_score,
         )
         vector_results = rank_order_results(query, vector_results)
-        if rerank_enabled:
-            logger.info("Rerank is configured but no rerank service is wired; preserving retrieval order.")
         return build_retrieval_result(
             tool_name=self.name,
             namespace="orders",

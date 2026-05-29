@@ -26,6 +26,7 @@ from backend.platform.rag.retrieval.documents.types import (
 from backend.platform.search_foundation import (
     ActiveDocumentChunkSource,
     DocumentChunkVectorRepository,
+    EmbeddingStrategy,
     VectorSearchResult,
     VectorStoreDocument,
 )
@@ -78,6 +79,7 @@ class DocumentRetrievalService:
         semantic_retriever: DocumentSemanticRetriever | None = None,
         keyword_retriever: DocumentKeywordRetriever | None = None,
         fusion_ranker: HybridFusionRanker | None = None,
+        embedding_strategy: EmbeddingStrategy | None = None,
         files_root: str | None = None,
         minimum_relevance: float = DOCUMENT_MINIMUM_RELEVANCE,
     ) -> None:
@@ -87,7 +89,8 @@ class DocumentRetrievalService:
         self.vector_repository = vector_repository
         self.chunk_source = chunk_source
         self.semantic_retriever = semantic_retriever or DocumentSemanticRetriever(
-            vector_repository=self.vector_repository
+            vector_repository=self.vector_repository,
+            embedding_strategy=embedding_strategy,
         )
         self.keyword_retriever = keyword_retriever or DocumentKeywordRetriever(
             chunk_source=self.chunk_source
