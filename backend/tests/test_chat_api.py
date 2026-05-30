@@ -1,4 +1,6 @@
+from concurrent.futures import ThreadPoolExecutor
 import json
+from threading import Event, Lock
 from typing import Any
 
 from fastapi.testclient import TestClient
@@ -1221,6 +1223,84 @@ def test_chat_api_non_stream_response_and_session_persistence_do_not_regress() -
     assert total_turns == 1
     assert turns[0].assistant_answer == "AeroPhone X 当前有货，售价 4599 元。[1]"
     assert turns[0].retrieval_snippets[0]["citation_id"] == "chunk-manual-1"
+
+
+def test_chat_request_context_is_isolated_for_concurrent_cached_service_invocations() -> None:
+    class BlockingFirstInvokeModel(FakeModel):
+        def __init__(self) -> None:
+            super().__init__(answer="并发隔离回答。[1]")
+            self.first_call_ready = Event()
+            self.release_first_call = Event()
+            self._call_lock = Lock()
+            self._call_count = 0
+
+        def invoke_runnable(self, runnable: Any, input: Any, *, config: Any | None = None) -> str:
+            with self._call_lock:
+                self._call_count += 1
+                call_index = self._call_count
+            if call_index == 1:
+                self.first_call_ready.set()
+                if not self.release_first_call.wait(timeout=5):
+                    raise AssertionError("Timed out waiting to release the first chat request.")
+            return super().invoke_runnable(runnable, input, config=config)
+
+    model = BlockingFirstInvokeModel()
+    outcome = _ForcedOutcome(
+        documents=[_forced_document()],
+        success=True,
+        exit_reason="sufficient",
+        final_decision=_ForcedDecision(next_action="finish", is_sufficient=True),
+    )
+    service = _build_forced_outcome_chat_service(
+        "chat-api-concurrent-request-context-isolation",
+        outcome=outcome,
+        model=model,
+    )
+
+    def chat(message: str):
+        return service.chat(
+            type(
+                "Payload",
+                (),
+                {
+                    "message": message,
+                    "session_id": None,
+                    "stream": False,
+                },
+            )()
+        )
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        first_future = executor.submit(chat, "first request")
+        assert model.first_call_ready.wait(timeout=5)
+        try:
+            second_response = chat("second request")
+        finally:
+            model.release_first_call.set()
+        first_response = first_future.result(timeout=5)
+
+    first_messages, first_total = service.session_store.get_session_messages(
+        first_response.session_id,
+        limit=10,
+    )
+    second_messages, second_total = service.session_store.get_session_messages(
+        second_response.session_id,
+        limit=10,
+    )
+
+    assert first_total == 2
+    assert second_total == 2
+    assert [message.content for message in first_messages] == [
+        "first request",
+        first_response.answer,
+    ]
+    assert [message.content for message in second_messages] == [
+        "second request",
+        second_response.answer,
+    ]
+    assert {message.request_id for message in first_messages} == {first_response.request_id}
+    assert {message.request_id for message in second_messages} == {second_response.request_id}
+    assert first_response.request_id != second_response.request_id
 
 
 def test_chat_api_uses_message_history_for_follow_up_turns() -> None:

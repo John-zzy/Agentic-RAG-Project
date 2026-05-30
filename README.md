@@ -117,6 +117,7 @@ backend\.venv\Scripts\python.exe backend\run.py
 4. 运行 Evaluation Harness，对比 no-hit、normal-hit、SSE 与检索指标。
 5. 修改 scene retrieval policy 或阈值，用 baseline / candidate artifact 解释效果变化。
 6. Runtime 边界 Demo Path：构造 `ask_user`、`max_rounds_reached`、`success=false` 和 normal-hit 请求，对比 JSON 与 SSE 中的 `final_decision`、`knowledge_used`、`citations` 和 `retrieval_trace` 是否一致。
+7. 请求上下文隔离 Demo Path：并发触发两个命中知识的 `/chat` 请求，分别对比 response、SSE `history/tool/done` 事件与 `/sessions/{session_id}` 消息视图中的 `request_id`、`timestamp`、`citations`，确认服务实例可缓存但请求上下文只随本次调用显式传递。
 
 ## Key APIs
 
@@ -214,7 +215,7 @@ backend\.venv\Scripts\python.exe backend\evals\run_http_eval.py --base-url http:
 P0：把 RAG Runtime 升级为真正的 Agent Runtime：
 
 - [x] Runtime 边界修正：严格消费 `AgenticRetrievalOutcome.success`、`final_decision` 和 `follow_up_question`，确保 `ask_user` / `max_rounds_reached` 不误入证据回答链
-- [ ] 请求上下文隔离：移除 `ChatService` 中 per-request mutable state，避免并发请求串写 `request_id`、时间戳和历史消息元数据
+- [x] 请求上下文隔离：移除 `ChatService` 中 per-request mutable state，避免并发请求串写 `request_id`、时间戳和历史消息元数据
 - [ ] LangGraph Runtime 骨架：接入 graph state、`thread_id`、checkpointer、stream event 映射和 graph run 生命周期管理
 - [ ] Human-in-the-Loop：基于 LangGraph interrupt/resume 支持 `approve / edit / reject / respond`，优先覆盖写操作工具、外部 API 调用和 `ask_user` 澄清场景
 - [ ] Workflow State Machine：基于 LangGraph 节点和持久化状态表达 `created / planning / running / waiting_user / retrying / succeeded / failed / cancelled`

@@ -1011,13 +1011,11 @@ class ChatService:
             retriever=self._retriever,
         )
         self._citation_mapper = CitationMapper()
-        self._answer_runnables: dict[TaskComplexity, RunnableWithMessageHistory] = {}
+        self._answer_base_runnables: dict[TaskComplexity, Any] = {}
 
     def chat(self, payload: ChatRequest) -> ChatResponse:
         """执行一次完整对话流程，并返回统一结构。"""
         prepared = self._prepare_chat_turn(payload)
-        self._history_request_id = prepared.request_id
-        self._history_timestamp = prepared.timestamp
         answer, citations = self._generate_answer(prepared)
         self._persist_turn(prepared=prepared, answer=answer, citations=citations)
         return self._build_chat_response(
@@ -1029,8 +1027,6 @@ class ChatService:
     def chat_stream(self, payload: ChatRequest) -> Iterator[ChatStreamEvent]:
         """执行一次流式对话流程，并产出结构化事件。"""
         prepared = self._prepare_chat_turn(payload)
-        self._history_request_id = prepared.request_id
-        self._history_timestamp = prepared.timestamp
         yield ChatStreamEvent(
             event="start",
             data={
@@ -1234,7 +1230,7 @@ class ChatService:
         prepared: PreparedChatTurn,
     ) -> tuple[str, list[Citation]]:
         """调用模型链生成答案，并返回答案与引用。"""
-        runnable = self._get_answer_runnable(prepared.complexity or "simple")
+        runnable = self._get_answer_runnable(prepared)
         try:
             answer = self.model.invoke_runnable(
                 runnable,
@@ -1267,7 +1263,7 @@ class ChatService:
 
     def _stream_model_answer(self, prepared: PreparedChatTurn) -> Iterator[str]:
         """对最终答案生成阶段执行流式调用。"""
-        runnable = self._get_answer_runnable(prepared.complexity or "simple")
+        runnable = self._get_answer_runnable(prepared)
         try:
             for chunk in self.model.stream_runnable(
                 runnable,
@@ -1347,32 +1343,51 @@ class ChatService:
             "input": prepared.user_message,
         }
 
-    def _get_answer_runnable(self, complexity: TaskComplexity) -> RunnableWithMessageHistory:
-        """为给定复杂度构建带消息历史的回答 runnable。"""
-        cached = self._answer_runnables.get(complexity)
+    def _get_answer_base_runnable(self, complexity: TaskComplexity) -> Any:
+        """为给定复杂度构建不携带请求上下文的基础回答 runnable。"""
+        cached = self._answer_base_runnables.get(complexity)
         if cached is not None:
             return cached
 
-        base_runnable = self.model.get_runnable(
+        runnable = self.model.get_runnable(
             complexity=complexity,
             prompt_template=self._rag_answer_template,
         )
+        self._answer_base_runnables[complexity] = runnable
+        return runnable
+
+    def _get_answer_runnable(self, prepared: PreparedChatTurn) -> RunnableWithMessageHistory:
+        """为当前请求构建带消息历史的回答 runnable。"""
+        base_runnable = self._get_answer_base_runnable(prepared.complexity or "simple")
+
+        def history_factory(session_id: str) -> SQLiteChatMessageHistory:
+            return self._get_session_history(
+                session_id,
+                request_id=prepared.request_id,
+                timestamp=prepared.timestamp,
+            )
+
         runnable = RunnableWithMessageHistory(
             base_runnable,
-            self._get_session_history,
+            history_factory,
             input_messages_key="input",
             history_messages_key="history",
         )
-        self._answer_runnables[complexity] = runnable
         return runnable
 
-    def _get_session_history(self, session_id: str) -> SQLiteChatMessageHistory:
+    def _get_session_history(
+        self,
+        session_id: str,
+        *,
+        request_id: str,
+        timestamp: str,
+    ) -> SQLiteChatMessageHistory:
         """解析指定会话的 LangChain message history。"""
         return SQLiteChatMessageHistory(
             session_id,
             store=self.session_store,
-            request_id=self._active_request_id,
-            timestamp=self._active_timestamp,
+            request_id=request_id,
+            timestamp=timestamp,
             message_limit=self.settings.session.window_size * 2,
             message_transform=self.context_builder.trim_messages,
         )
@@ -1383,7 +1398,11 @@ class ChatService:
 
     def _build_history_event(self, prepared: PreparedChatTurn) -> dict[str, Any]:
         """构造本轮模型调用前的历史消息快照事件。"""
-        messages = self._get_session_history(prepared.session_id).messages
+        messages = self._get_session_history(
+            prepared.session_id,
+            request_id=prepared.request_id,
+            timestamp=prepared.timestamp,
+        ).messages
         return {
             "session_id": prepared.session_id,
             "request_id": prepared.request_id,
@@ -1459,21 +1478,6 @@ class ChatService:
             "content": message.content,
         }
 
-    @property
-    def _active_request_id(self) -> str:
-        """读取当前执行上下文中的 request_id。"""
-        request_id = getattr(self, "_history_request_id", None)
-        if not isinstance(request_id, str) or not request_id:
-            raise RuntimeError("Active request id is not set for message history persistence.")
-        return request_id
-
-    @property
-    def _active_timestamp(self) -> str:
-        """读取当前执行上下文中的 timestamp。"""
-        timestamp = getattr(self, "_history_timestamp", None)
-        if not isinstance(timestamp, str) or not timestamp:
-            raise RuntimeError("Active timestamp is not set for message history persistence.")
-        return timestamp
 
 class ActiveSceneChatService:
     """统一 `/chat` 入口，通过会话绑定场景分发请求。"""
