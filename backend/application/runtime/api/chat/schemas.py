@@ -106,6 +106,22 @@ class RetrievalTrace(BaseModel):
     tool_call_count: int = Field(ge=0, description="实际 retrieval tool 调用次数。")
     candidate_tools: list[str] = Field(default_factory=list, description="本轮候选 retrieval tools。")
     exit_reason: str | None = Field(default=None, description="Agentic RAG 退出原因。")
+    # 以下字段是向后兼容的观测字段，避免改变现有 `/chat` 必填响应契约。
+    final_decision: str | None = Field(
+        default=None,
+        description=(
+            "Runtime 归一化后的最终业务决策，例如 answer_with_evidence、ask_user、"
+            "max_rounds_reached、no_evidence、retrieval_failed。"
+        ),
+    )
+    success: bool | None = Field(
+        default=None,
+        description="聚合检索是否成功；旧式 retriever 未提供时为空。",
+    )
+    follow_up_question: str | None = Field(
+        default=None,
+        description="ask_user 分支可返回给用户的澄清问题；非追问场景为空。",
+    )
     raw_candidates_count: int = Field(default=0, ge=0, description="聚合过滤前候选数。")
     filtered_candidates_count: int = Field(default=0, ge=0, description="聚合过滤后候选数。")
     top_k_chunks: list[RetrievalTraceTopChunk] = Field(

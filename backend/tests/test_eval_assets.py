@@ -307,6 +307,8 @@ def test_eval_observed_payload_preserves_retrieval_trace_without_full_chunk_cont
                 "tool_call_count": 1,
                 "candidate_tools": ["knowledge_document_search"],
                 "exit_reason": "sufficient",
+                "final_decision": "answer_with_evidence",
+                "success": True,
                 "raw_candidates_count": 1,
                 "filtered_candidates_count": 1,
                 "knowledge_used": True,
@@ -326,6 +328,8 @@ def test_eval_observed_payload_preserves_retrieval_trace_without_full_chunk_cont
     )
 
     assert observed["retrieval_trace"]["top_k_chunks"][0]["citation_id"] == "chunk-1"
+    assert observed["retrieval_trace"]["final_decision"] == "answer_with_evidence"
+    assert observed["retrieval_trace"]["success"] is True
     assert "full source content" not in json.dumps(observed["retrieval_trace"], ensure_ascii=False)
 
 

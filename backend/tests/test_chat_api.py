@@ -335,6 +335,108 @@ def _build_chat_service(
     )
 
 
+class _ForcedDecision:
+    def __init__(
+        self,
+        *,
+        next_action: str,
+        is_sufficient: bool,
+        follow_up_question: str | None = None,
+    ) -> None:
+        self.next_action = next_action
+        self.is_sufficient = is_sufficient
+        self.follow_up_question = follow_up_question
+
+
+class _ForcedOutcome:
+    def __init__(
+        self,
+        *,
+        documents: list[Document],
+        success: bool | None,
+        exit_reason: str,
+        final_decision: _ForcedDecision | None = None,
+        follow_up_question: str | None = None,
+        include_success: bool = True,
+        include_final_decision: bool = True,
+    ) -> None:
+        self.documents = documents
+        self.exit_reason = exit_reason
+        self.rounds: list[object] = []
+        self.follow_up_question = follow_up_question
+        if include_success:
+            self.success = success
+        if include_final_decision:
+            self.final_decision = final_decision
+
+
+class _ForcedOutcomeRetriever:
+    def __init__(self, outcome: _ForcedOutcome) -> None:
+        self.outcome = outcome
+        self.calls: list[dict[str, Any]] = []
+
+    def retrieve_with_trace(self, query: str, *, candidate_tools: tuple[str, ...], **kwargs: Any):
+        self.calls.append(
+            {
+                "query": query,
+                "candidate_tools": candidate_tools,
+                "kwargs": kwargs,
+            }
+        )
+        return self.outcome
+
+
+def _forced_document() -> Document:
+    return Document(
+        page_content="强制测试文档：这是可引用证据。",
+        metadata={
+            "document_id": "doc-forced",
+            "source_path": "forced.md",
+            "namespace": "documents",
+            "chunk_id": "chunk-forced",
+            "chunk_index": 0,
+            "score": 0.88,
+        },
+    )
+
+
+def _build_forced_outcome_chat_service(
+    test_name: str,
+    *,
+    outcome: _ForcedOutcome,
+    model: FakeModel,
+) -> ChatService:
+    runtime_dir = make_test_runtime_dir(test_name)
+    sqlite_path = runtime_dir / "chat-sessions.db"
+    app_settings = AppSettings(
+        data_dir=runtime_dir,
+        app={"active_scene": "forced_scene"},
+        session={"sqlite_path": sqlite_path, "window_size": 3},
+    )
+    retriever = _ForcedOutcomeRetriever(outcome)
+    scene_definition = SceneDefinition(
+        scene="forced_scene",
+        name="Forced Scene",
+        description="Forced outcome scene for runtime boundary tests.",
+        build_retriever=lambda: retriever,  # type: ignore[return-value]
+        build_tools=lambda: (),
+        candidate_retrieval_tools_resolver=lambda mounted: ("forced_tool",),
+        system_prompt="你是测试助手。",
+        fallback_policy=SceneFallbackPolicy(
+            no_hit_message="测试兜底：没有可用证据，请补充信息。",
+        ),
+        infer_complexity=lambda message: "simple",
+        retrieval_policy=SceneRetrievalPolicy(),
+    )
+    return ChatService(
+        scene_definition=scene_definition,
+        app_settings=app_settings,
+        session_store=SQLiteSessionStore(sqlite_path=sqlite_path),
+        context_builder=PromptContextBuilder(window_size=3),
+        model=model,
+    )
+
+
 def test_chat_api_success_path() -> None:
     knowledge = FakeKnowledgeService()
     document_retrieval_service = FakeDocumentRetrievalService(
@@ -397,6 +499,9 @@ def test_chat_api_success_path() -> None:
     assert trace["tool_call_count"] == 1
     assert trace["candidate_tools"] == ["knowledge_document_search"]
     assert trace["exit_reason"] == "sufficient"
+    assert trace["final_decision"] == "answer_with_evidence"
+    assert trace["success"] is True
+    assert trace["follow_up_question"] is None
     assert trace["knowledge_used"] is True
     assert trace["raw_candidates_count"] == 1
     assert trace["filtered_candidates_count"] == 1
@@ -478,9 +583,12 @@ def test_chat_api_sse_success_path_returns_structured_events() -> None:
     assert history_payload["message_count"] == 0
     assert history_payload["messages"] == []
     assert tool_payload["knowledge_used"] is True
+    assert tool_payload["final_decision"] == "answer_with_evidence"
+    assert tool_payload["answer_mode"] == "evidence_answer"
     assert tool_payload["documents"] == 1
     assert tool_payload["rounds"][0]["tool_name"] == "knowledge_document_search"
     assert tool_payload["retrieval_trace"]["tool_call_count"] == 1
+    assert tool_payload["retrieval_trace"]["final_decision"] == "answer_with_evidence"
     assert tool_payload["retrieval_trace"]["top_k_chunks"][0]["citation_id"] == "chunk-doc-1"
     assert tool_payload["rounds"][0]["rerank"] == tool_payload["retrieval_trace"]["rounds"][0]["rerank"]
     assert tool_payload["retrieval_policy"] == {
@@ -631,6 +739,333 @@ def test_chat_api_sse_no_hit_uses_fallback_without_model_streaming() -> None:
     assert done_payload["retrieval_trace"] == tool_payload["retrieval_trace"]
     assert model.get_runnable_calls == []
     assert model.stream_runnable_calls == []
+    assert model.invoke_runnable_calls == []
+
+
+def test_chat_api_ask_user_returns_follow_up_without_answer_model() -> None:
+    model = FakeModel(answer="unused")
+    outcome = _ForcedOutcome(
+        documents=[_forced_document()],
+        success=False,
+        exit_reason="ask_user",
+        final_decision=_ForcedDecision(
+            next_action="ask_user",
+            is_sufficient=False,
+            follow_up_question="请补充你要查询的文档主题。",
+        ),
+        follow_up_question="请补充更具体的问题。",
+    )
+    service = _build_forced_outcome_chat_service(
+        "chat-api-ask-user-boundary",
+        outcome=outcome,
+        model=model,
+    )
+    app = create_app(chat_service=service)  # type: ignore[arg-type]
+
+    with TestClient(app) as client:
+        response = client.post("/chat", json={"message": "帮我查一下"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["answer"] == "请补充更具体的问题。"
+    assert payload["knowledge_used"] is False
+    assert payload["citations"] == []
+    trace = payload["retrieval_trace"]
+    assert trace["final_decision"] == "ask_user"
+    assert trace["follow_up_question"] == "请补充更具体的问题。"
+    assert trace["knowledge_used"] is False
+    assert trace["citations"] == []
+    assert trace["top_k_chunks"] == []
+    assert model.get_runnable_calls == []
+    assert model.invoke_runnable_calls == []
+
+
+def test_chat_api_sse_ask_user_matches_json_semantics_without_stream_model() -> None:
+    model = FakeModel(answer="unused", stream_chunks=["unused"])
+    outcome = _ForcedOutcome(
+        documents=[_forced_document()],
+        success=False,
+        exit_reason="ask_user",
+        final_decision=_ForcedDecision(
+            next_action="ask_user",
+            is_sufficient=False,
+            follow_up_question="请说明需要查询的知识范围。",
+        ),
+        follow_up_question="请说明需要查询的知识范围。",
+    )
+    service = _build_forced_outcome_chat_service(
+        "chat-api-sse-ask-user-boundary",
+        outcome=outcome,
+        model=model,
+    )
+    app = create_app(chat_service=service)  # type: ignore[arg-type]
+
+    with TestClient(app) as client:
+        response = client.post("/chat", json={"message": "查资料", "stream": True})
+
+    assert response.status_code == 200
+    events = _parse_sse_events(response.text)
+    assert [event["event"] for event in events] == ["start", "history", "tool", "chunk", "done"]
+    tool_payload = json.loads(events[2]["data"])
+    chunk_payload = json.loads(events[3]["data"])
+    done_payload = json.loads(events[4]["data"])
+    assert chunk_payload["delta"] == "请说明需要查询的知识范围。"
+    assert tool_payload["final_decision"] == "ask_user"
+    assert tool_payload["knowledge_used"] is False
+    assert tool_payload["citations"] == []
+    assert tool_payload["retrieval_trace"]["final_decision"] == "ask_user"
+    assert done_payload["knowledge_used"] is False
+    assert done_payload["citations"] == []
+    assert done_payload["retrieval_trace"] == tool_payload["retrieval_trace"]
+    assert model.get_runnable_calls == []
+    assert model.stream_runnable_calls == []
+    assert model.invoke_runnable_calls == []
+
+
+def test_chat_api_max_rounds_with_documents_does_not_use_intermediate_citations() -> None:
+    model = FakeModel(answer="unused")
+    outcome = _ForcedOutcome(
+        documents=[_forced_document()],
+        success=False,
+        exit_reason="max_rounds_reached",
+        final_decision=_ForcedDecision(next_action="ask_user", is_sufficient=False),
+    )
+    service = _build_forced_outcome_chat_service(
+        "chat-api-max-rounds-boundary",
+        outcome=outcome,
+        model=model,
+    )
+    app = create_app(chat_service=service)  # type: ignore[arg-type]
+
+    with TestClient(app) as client:
+        response = client.post("/chat", json={"message": "复杂问题"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert "测试兜底" in payload["answer"]
+    assert payload["knowledge_used"] is False
+    assert payload["citations"] == []
+    trace = payload["retrieval_trace"]
+    assert trace["final_decision"] == "max_rounds_reached"
+    assert trace["knowledge_used"] is False
+    assert trace["citations"] == []
+    assert trace["top_k_chunks"] == []
+    assert model.get_runnable_calls == []
+    assert model.invoke_runnable_calls == []
+
+
+def test_chat_api_sse_max_rounds_with_documents_keeps_tool_done_consistent() -> None:
+    model = FakeModel(answer="unused", stream_chunks=["unused"])
+    outcome = _ForcedOutcome(
+        documents=[_forced_document()],
+        success=False,
+        exit_reason="max_rounds_reached",
+        final_decision=_ForcedDecision(next_action="ask_user", is_sufficient=False),
+    )
+    service = _build_forced_outcome_chat_service(
+        "chat-api-sse-max-rounds-boundary",
+        outcome=outcome,
+        model=model,
+    )
+    app = create_app(chat_service=service)  # type: ignore[arg-type]
+
+    with TestClient(app) as client:
+        response = client.post("/chat", json={"message": "复杂问题", "stream": True})
+
+    assert response.status_code == 200
+    events = _parse_sse_events(response.text)
+    tool_payload = json.loads(events[2]["data"])
+    done_payload = json.loads(events[-1]["data"])
+    assert tool_payload["final_decision"] == "max_rounds_reached"
+    assert tool_payload["knowledge_used"] is False
+    assert tool_payload["citations"] == []
+    assert done_payload["knowledge_used"] is False
+    assert done_payload["citations"] == []
+    assert done_payload["retrieval_trace"] == tool_payload["retrieval_trace"]
+    assert model.get_runnable_calls == []
+    assert model.stream_runnable_calls == []
+    assert model.invoke_runnable_calls == []
+
+
+def test_chat_api_failed_outcome_with_documents_does_not_use_intermediate_citations() -> None:
+    model = FakeModel(answer="unused")
+    outcome = _ForcedOutcome(
+        documents=[_forced_document()],
+        success=False,
+        exit_reason="sufficient",
+        final_decision=_ForcedDecision(next_action="finish", is_sufficient=True),
+    )
+    service = _build_forced_outcome_chat_service(
+        "chat-api-retrieval-failed-boundary",
+        outcome=outcome,
+        model=model,
+    )
+    app = create_app(chat_service=service)  # type: ignore[arg-type]
+
+    with TestClient(app) as client:
+        response = client.post("/chat", json={"message": "失败但有候选"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["knowledge_used"] is False
+    assert payload["citations"] == []
+    assert payload["retrieval_trace"]["final_decision"] == "retrieval_failed"
+    assert payload["retrieval_trace"]["citations"] == []
+    assert payload["retrieval_trace"]["top_k_chunks"] == []
+    assert model.get_runnable_calls == []
+    assert model.invoke_runnable_calls == []
+
+
+def test_chat_api_sse_failed_outcome_with_documents_keeps_tool_done_consistent() -> None:
+    model = FakeModel(answer="unused", stream_chunks=["unused"])
+    outcome = _ForcedOutcome(
+        documents=[_forced_document()],
+        success=False,
+        exit_reason="sufficient",
+        final_decision=_ForcedDecision(next_action="finish", is_sufficient=True),
+    )
+    service = _build_forced_outcome_chat_service(
+        "chat-api-sse-retrieval-failed-boundary",
+        outcome=outcome,
+        model=model,
+    )
+    app = create_app(chat_service=service)  # type: ignore[arg-type]
+
+    with TestClient(app) as client:
+        response = client.post("/chat", json={"message": "失败但有候选", "stream": True})
+
+    assert response.status_code == 200
+    events = _parse_sse_events(response.text)
+    tool_payload = json.loads(events[2]["data"])
+    done_payload = json.loads(events[-1]["data"])
+    assert tool_payload["final_decision"] == "retrieval_failed"
+    assert tool_payload["knowledge_used"] is False
+    assert tool_payload["citations"] == []
+    assert done_payload["knowledge_used"] is False
+    assert done_payload["citations"] == []
+    assert done_payload["retrieval_trace"] == tool_payload["retrieval_trace"]
+    assert model.get_runnable_calls == []
+    assert model.stream_runnable_calls == []
+    assert model.invoke_runnable_calls == []
+
+
+def test_chat_api_legacy_outcome_without_final_decision_remains_compatible() -> None:
+    model = FakeModel(answer="legacy answer")
+    outcome = _ForcedOutcome(
+        documents=[_forced_document()],
+        success=True,
+        exit_reason="sufficient",
+        include_final_decision=False,
+    )
+    service = _build_forced_outcome_chat_service(
+        "chat-api-legacy-outcome-boundary",
+        outcome=outcome,
+        model=model,
+    )
+    app = create_app(chat_service=service)  # type: ignore[arg-type]
+
+    with TestClient(app) as client:
+        response = client.post("/chat", json={"message": "旧 outcome"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["knowledge_used"] is True
+    assert len(payload["citations"]) == 1
+    assert payload["retrieval_trace"]["final_decision"] == "answer_with_evidence"
+    assert payload["retrieval_trace"]["success"] is True
+    assert model.get_runnable_calls == ["simple"]
+    assert len(model.invoke_runnable_calls) == 1
+
+
+def test_chat_api_legacy_outcome_without_success_uses_documents_as_success_hint() -> None:
+    model = FakeModel(answer="legacy answer")
+    outcome = _ForcedOutcome(
+        documents=[_forced_document()],
+        success=None,
+        exit_reason="sufficient",
+        include_success=False,
+        include_final_decision=False,
+    )
+    service = _build_forced_outcome_chat_service(
+        "chat-api-legacy-outcome-no-success-boundary",
+        outcome=outcome,
+        model=model,
+    )
+    app = create_app(chat_service=service)  # type: ignore[arg-type]
+
+    with TestClient(app) as client:
+        response = client.post("/chat", json={"message": "更旧 outcome"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["knowledge_used"] is True
+    assert payload["retrieval_trace"]["final_decision"] == "answer_with_evidence"
+    assert len(model.invoke_runnable_calls) == 1
+
+
+def test_chat_api_no_evidence_decision_uses_fallback_without_citations() -> None:
+    model = FakeModel(answer="unused")
+    outcome = _ForcedOutcome(
+        documents=[],
+        success=True,
+        exit_reason="sufficient",
+        final_decision=_ForcedDecision(next_action="finish", is_sufficient=True),
+    )
+    service = _build_forced_outcome_chat_service(
+        "chat-api-no-evidence-boundary",
+        outcome=outcome,
+        model=model,
+    )
+    app = create_app(chat_service=service)  # type: ignore[arg-type]
+
+    with TestClient(app) as client:
+        response = client.post("/chat", json={"message": "没有证据"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["knowledge_used"] is False
+    assert payload["citations"] == []
+    assert payload["retrieval_trace"]["final_decision"] == "no_evidence"
+    assert payload["retrieval_trace"]["filtered_candidates_count"] == 0
+    assert model.get_runnable_calls == []
+    assert model.invoke_runnable_calls == []
+
+
+def test_chat_api_answer_decision_without_effective_citations_becomes_no_evidence() -> None:
+    model = FakeModel(answer="unused")
+    document_without_snippet = Document(
+        page_content="",
+        metadata={
+            "document_id": "doc-empty",
+            "source_path": "empty.md",
+            "namespace": "documents",
+            "chunk_id": "chunk-empty",
+            "chunk_index": 0,
+        },
+    )
+    outcome = _ForcedOutcome(
+        documents=[document_without_snippet],
+        success=True,
+        exit_reason="sufficient",
+        final_decision=_ForcedDecision(next_action="finish", is_sufficient=True),
+    )
+    service = _build_forced_outcome_chat_service(
+        "chat-api-answer-without-citations-boundary",
+        outcome=outcome,
+        model=model,
+    )
+    app = create_app(chat_service=service)  # type: ignore[arg-type]
+
+    with TestClient(app) as client:
+        response = client.post("/chat", json={"message": "空证据"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["knowledge_used"] is False
+    assert payload["citations"] == []
+    assert payload["retrieval_trace"]["final_decision"] == "no_evidence"
+    assert payload["retrieval_trace"]["citations"] == []
+    assert model.get_runnable_calls == []
     assert model.invoke_runnable_calls == []
 
 
@@ -1270,11 +1705,15 @@ def test_chat_can_route_to_ecommerce_tools_when_session_mounts_ecommerce() -> No
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["knowledge_used"] is True
-    namespaces = {citation["namespace"] for citation in payload["citations"]}
-    assert "documents" not in namespaces
-    assert "products" in namespaces or "inventory" in namespaces
-    assert "[1]" in payload["answer"]
+    assert payload["knowledge_used"] is False
+    assert payload["citations"] == []
+    trace = payload["retrieval_trace"]
+    assert trace["final_decision"] == "max_rounds_reached"
+    assert trace["knowledge_used"] is False
+    assert trace["top_k_chunks"] == []
+    round_tools = {round_trace["tool_name"] for round_trace in trace["rounds"]}
+    assert "product_semantic_search" in round_tools
+    assert "inventory_lookup" in round_tools
 
 
 def test_chat_service_resolves_candidate_tools_from_scene_definition() -> None:
@@ -1794,7 +2233,9 @@ def test_chat_api_real_runtime_filters_low_relevance_document_hits_for_greeting(
     payload = response.json()
     assert payload["knowledge_used"] is False
     assert payload["citations"] == []
-    assert "暂时没有检索到足够相关的文档知识" in payload["answer"]
+    assert "请补充" in payload["answer"]
+    assert payload["retrieval_trace"]["final_decision"] == "ask_user"
+    assert payload["retrieval_trace"]["follow_up_question"] == payload["answer"]
     assert model.get_runnable_calls == []
 
 
@@ -1875,7 +2316,9 @@ def test_chat_api_real_runtime_greeting_does_not_rewrite_into_faq_hit() -> None:
     assert payload["retrieval_trace"]["filtered_candidates_count"] == 0
     assert payload["retrieval_trace"]["top_k_chunks"] == []
     assert payload["retrieval_trace"]["citations"] == []
-    assert "暂时没有检索到足够相关的文档知识" in payload["answer"]
+    assert "请补充" in payload["answer"]
+    assert payload["retrieval_trace"]["final_decision"] == "ask_user"
+    assert payload["retrieval_trace"]["follow_up_question"] == payload["answer"]
     assert model.get_runnable_calls == []
 
 

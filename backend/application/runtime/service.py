@@ -7,7 +7,7 @@ from inspect import Parameter, signature
 import logging
 from pathlib import Path
 import re
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 from uuid import uuid4
 from langchain_core.documents import Document
 from langchain_core.messages import BaseMessage
@@ -28,7 +28,6 @@ from backend.platform.knowledge.sources import (
     DEFAULT_MOUNTED_KNOWLEDGE_SOURCES,
     normalize_mounted_knowledge_sources,
 )
-from backend.platform.rag.orchestration.agentic import AgenticRetrievalOutcome
 from backend.platform.rag.retrieval.documents import DocumentRetrievalService
 from backend.scenes.base import SceneDefinition, SceneRetrievalPolicy
 from backend.platform.knowledge.base.text import truncate_snippet
@@ -44,6 +43,15 @@ from backend.scenes.generic_assistant.definition import GenericAssistantBusiness
 from backend.scenes.registry import build_default_scene_definitions
 
 logger = logging.getLogger(__name__)
+
+RuntimeFinalDecision = Literal[
+    "answer_with_evidence",
+    "ask_user",
+    "max_rounds_reached",
+    "no_evidence",
+    "retrieval_failed",
+]
+AnswerMode = Literal["evidence_answer", "follow_up", "fallback"]
 
 
 class RetrievalChainModel(Protocol):
@@ -106,6 +114,10 @@ class RetrievalExecutionResult:
     documents: list[Document]
     tool_event: dict[str, Any]
     retrieval_trace: RetrievalTrace
+    # 这些字段承载 RetrievalExecutor 已归一化的 outcome 层语义。
+    success: bool | None = None
+    final_decision: RuntimeFinalDecision | None = None
+    follow_up_question: str | None = None
 
 
 @dataclass(frozen=True)
@@ -123,6 +135,20 @@ class PreparedChatTurn:
     knowledge_used: bool
     scene_metadata: SceneMetadata
     complexity: TaskComplexity | None
+    # 同步与 SSE 后续共用的回答分支元数据
+    final_decision: RuntimeFinalDecision | None = None
+    follow_up_question: str | None = None
+    answer_mode: AnswerMode = "fallback"
+
+
+@dataclass(frozen=True)
+class RuntimeRetrievalDecision:
+    """封装 application runtime 对检索 outcome 的归一化判断。"""
+
+    success: bool
+    exit_reason: str | None
+    final_decision: RuntimeFinalDecision
+    follow_up_question: str | None = None
 
 
 @dataclass(frozen=True)
@@ -161,41 +187,56 @@ class RetrievalExecutor:
         if hasattr(self._retriever, "retrieve_with_trace"):
             retrieve_with_trace = self._retriever.retrieve_with_trace
             retrieval_kwargs = self._build_supported_policy_kwargs(retrieve_with_trace, policy)
-            outcome: AgenticRetrievalOutcome = self._retriever.retrieve_with_trace(  # type: ignore[attr-defined]
+            outcome: Any = self._retriever.retrieve_with_trace(  # type: ignore[attr-defined]
                 message,
                 candidate_tools=candidate_tools,
                 **retrieval_kwargs,
             )
-            logger.info(
-                "Agentic retrieval completed for scene=%s: exit_reason=%s, rounds=%s, documents=%s",
-                self._scene_definition.scene,
-                outcome.exit_reason,
-                len(outcome.rounds),
-                len(outcome.documents),
+            outcome_documents = list(getattr(outcome, "documents", []))
+            outcome_rounds = list(getattr(outcome, "rounds", []))
+            runtime_decision = self._normalize_agentic_outcome(
+                outcome,
+                documents=outcome_documents,
             )
-            rounds = [self._build_agentic_round_trace(round_trace) for round_trace in outcome.rounds]
+            logger.info(
+                "Agentic retrieval completed for scene=%s: exit_reason=%s, final_decision=%s, rounds=%s, documents=%s",
+                self._scene_definition.scene,
+                runtime_decision.exit_reason,
+                runtime_decision.final_decision,
+                len(outcome_rounds),
+                len(outcome_documents),
+            )
+            rounds = [self._build_agentic_round_trace(round_trace) for round_trace in outcome_rounds]
             retrieval_trace = self._build_retrieval_trace(
                 original_query=message,
                 final_query=self._resolve_outcome_final_query(outcome, message),
                 rewritten_query=self._last_rewritten_query(rounds),
                 candidate_tools=candidate_tools,
-                exit_reason=outcome.exit_reason,
+                exit_reason=runtime_decision.exit_reason,
                 rounds=rounds,
-                documents=list(outcome.documents),
+                documents=outcome_documents,
+                success=runtime_decision.success,
+                final_decision=runtime_decision.final_decision,
+                follow_up_question=runtime_decision.follow_up_question,
             )
             return RetrievalExecutionResult(
-                documents=list(outcome.documents),
+                documents=outcome_documents,
                 tool_event={
                     "stage": "retrieval",
                     "mode": "agentic",
                     "retrieval_policy": policy_summary,
                     "candidate_tools": list(candidate_tools),
-                    "documents": len(outcome.documents),
-                    "exit_reason": outcome.exit_reason,
-                    "success": outcome.success,
+                    "documents": len(outcome_documents),
+                    "exit_reason": runtime_decision.exit_reason,
+                    "success": runtime_decision.success,
+                    "final_decision": runtime_decision.final_decision,
+                    "follow_up_question": runtime_decision.follow_up_question,
                     "rounds": [round_trace.model_dump() for round_trace in rounds],
                 },
                 retrieval_trace=retrieval_trace,
+                success=runtime_decision.success,
+                final_decision=runtime_decision.final_decision,
+                follow_up_question=runtime_decision.follow_up_question,
             )
         if hasattr(self._retriever, "search"):
             search = self._retriever.search
@@ -213,6 +254,10 @@ class RetrievalExecutor:
                 reason="search completed",
                 documents=documents,
             )
+            runtime_decision = self._normalize_simple_retrieval_result(
+                documents=documents,
+                exit_reason="finished_by_search",
+            )
             return RetrievalExecutionResult(
                 documents=documents,
                 tool_event={
@@ -221,6 +266,10 @@ class RetrievalExecutor:
                     "retrieval_policy": policy_summary,
                     "candidate_tools": list(candidate_tools),
                     "documents": len(documents),
+                    "exit_reason": runtime_decision.exit_reason,
+                    "success": runtime_decision.success,
+                    "final_decision": runtime_decision.final_decision,
+                    "follow_up_question": runtime_decision.follow_up_question,
                     "rounds": [round_trace.model_dump()],
                 },
                 retrieval_trace=self._build_retrieval_trace(
@@ -228,10 +277,16 @@ class RetrievalExecutor:
                     final_query=message,
                     rewritten_query=None,
                     candidate_tools=candidate_tools,
-                    exit_reason="finished_by_search",
+                    exit_reason=runtime_decision.exit_reason,
                     rounds=[round_trace],
                     documents=documents,
+                    success=runtime_decision.success,
+                    final_decision=runtime_decision.final_decision,
+                    follow_up_question=runtime_decision.follow_up_question,
                 ),
+                success=runtime_decision.success,
+                final_decision=runtime_decision.final_decision,
+                follow_up_question=runtime_decision.follow_up_question,
             )
         if isinstance(self._retriever, BaseRetriever):
             documents = list(self._retriever.invoke(message))
@@ -247,6 +302,10 @@ class RetrievalExecutor:
                 reason="retriever invoke completed",
                 documents=documents,
             )
+            runtime_decision = self._normalize_simple_retrieval_result(
+                documents=documents,
+                exit_reason="finished_by_retriever",
+            )
             return RetrievalExecutionResult(
                 documents=documents,
                 tool_event={
@@ -255,6 +314,10 @@ class RetrievalExecutor:
                     "retrieval_policy": policy_summary,
                     "candidate_tools": list(candidate_tools),
                     "documents": len(documents),
+                    "exit_reason": runtime_decision.exit_reason,
+                    "success": runtime_decision.success,
+                    "final_decision": runtime_decision.final_decision,
+                    "follow_up_question": runtime_decision.follow_up_question,
                     "rounds": [round_trace.model_dump()],
                 },
                 retrieval_trace=self._build_retrieval_trace(
@@ -262,12 +325,118 @@ class RetrievalExecutor:
                     final_query=message,
                     rewritten_query=None,
                     candidate_tools=candidate_tools,
-                    exit_reason="finished_by_retriever",
+                    exit_reason=runtime_decision.exit_reason,
                     rounds=[round_trace],
                     documents=documents,
+                    success=runtime_decision.success,
+                    final_decision=runtime_decision.final_decision,
+                    follow_up_question=runtime_decision.follow_up_question,
                 ),
+                success=runtime_decision.success,
+                final_decision=runtime_decision.final_decision,
+                follow_up_question=runtime_decision.follow_up_question,
             )
         raise TypeError("Retriever does not support document retrieval.")
+
+    def _normalize_agentic_outcome(
+        self,
+        outcome: Any,
+        *,
+        documents: list[Document],
+    ) -> RuntimeRetrievalDecision:
+        """从 Agentic outcome 中兼容读取字段，并归一化为 runtime 决策。"""
+        raw_final_decision = getattr(outcome, "final_decision", None)
+        exit_reason = self._resolve_optional_str(getattr(outcome, "exit_reason", None))
+        success = self._resolve_outcome_success(
+            getattr(outcome, "success", None),
+            has_documents=len(documents) > 0,
+        )
+        follow_up_question = self._resolve_follow_up_question(
+            outcome=outcome,
+            raw_final_decision=raw_final_decision,
+        )
+        final_decision = self._normalize_runtime_final_decision(
+            success=success,
+            exit_reason=exit_reason,
+            raw_final_decision=raw_final_decision,
+            has_documents=len(documents) > 0,
+        )
+        return RuntimeRetrievalDecision(
+            success=success,
+            exit_reason=exit_reason,
+            final_decision=final_decision,
+            follow_up_question=follow_up_question,
+        )
+
+    def _resolve_outcome_success(self, value: Any, *, has_documents: bool) -> bool:
+        """兼容缺少 success 的旧式 outcome，有文档时按成功候选处理。"""
+        if isinstance(value, bool):
+            return value
+        if value is None:
+            return has_documents
+        return bool(value)
+
+    def _normalize_simple_retrieval_result(
+        self,
+        *,
+        documents: list[Document],
+        exit_reason: str,
+    ) -> RuntimeRetrievalDecision:
+        """为旧 search/BaseRetriever 分支补齐与 Agentic 分支一致的 runtime 决策。"""
+        success = True
+        final_decision = self._normalize_runtime_final_decision(
+            success=success,
+            exit_reason=exit_reason,
+            raw_final_decision=None,
+            has_documents=len(documents) > 0,
+        )
+        return RuntimeRetrievalDecision(
+            success=success,
+            exit_reason=exit_reason,
+            final_decision=final_decision,
+            follow_up_question=None,
+        )
+
+    def _normalize_runtime_final_decision(
+        self,
+        *,
+        success: bool,
+        exit_reason: str | None,
+        raw_final_decision: Any,
+        has_documents: bool,
+    ) -> RuntimeFinalDecision:
+        """把平台层检索动作转换成 `/chat` 可消费的最终业务语义。"""
+        next_action = getattr(raw_final_decision, "next_action", None)
+        is_sufficient = bool(getattr(raw_final_decision, "is_sufficient", False))
+
+        if exit_reason == "max_rounds_reached":
+            return "max_rounds_reached"
+        if next_action == "ask_user" or exit_reason == "ask_user":
+            return "ask_user"
+        if not success:
+            return "retrieval_failed"
+        # 旧式 outcome/search/BaseRetriever 没有 final_decision，此时先按是否有文档映射。
+        if raw_final_decision is None:
+            return "answer_with_evidence" if has_documents else "no_evidence"
+        # 归一化阶段只能看到文档；最终是否采纳仍由 effective citations 门控。
+        if is_sufficient and next_action == "finish" and has_documents:
+            return "answer_with_evidence"
+        return "no_evidence"
+
+    def _resolve_follow_up_question(
+        self,
+        *,
+        outcome: Any,
+        raw_final_decision: Any,
+    ) -> str | None:
+        """按 outcome 优先、final_decision 兜底的顺序解析追问文本。"""
+        for value in (
+            getattr(outcome, "follow_up_question", None),
+            getattr(raw_final_decision, "follow_up_question", None),
+        ):
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        return None
 
     def _build_agentic_round_trace(self, round_trace: Any) -> RetrievalTraceRound:
         document_trace = self._extract_document_retrieval_trace(round_trace.result.metadata)
@@ -340,6 +509,9 @@ class RetrievalExecutor:
         exit_reason: str | None,
         rounds: list[RetrievalTraceRound],
         documents: list[Document],
+        success: bool | None = None,
+        final_decision: RuntimeFinalDecision | None = None,
+        follow_up_question: str | None = None,
     ) -> RetrievalTrace:
         raw_candidates_count = sum(round_trace.raw_candidates_count or 0 for round_trace in rounds)
         filtered_candidates_count = sum(
@@ -352,6 +524,9 @@ class RetrievalExecutor:
             tool_call_count=len(rounds),
             candidate_tools=list(candidate_tools),
             exit_reason=exit_reason,
+            final_decision=final_decision,
+            success=success,
+            follow_up_question=follow_up_question,
             raw_candidates_count=raw_candidates_count,
             filtered_candidates_count=filtered_candidates_count,
             top_k_chunks=self._top_chunks_from_documents(documents),
@@ -573,14 +748,13 @@ class CitationMapper:
     def build_answer_documents(self, documents: list[Document]) -> list[Document]:
         citations = self.citations_from_documents(documents)
         citation_map = {
-            self._build_citation_key(
-                namespace=str(document.metadata.get("namespace", "knowledge")),
-                metadata=document.metadata,
-                citation_id=str(
-                    document.metadata.get("citation_id") or document.metadata.get("chunk_id") or "unknown"
-                ),
+            self._build_citation_key_from_values(
+                namespace=citation.namespace,
+                chunk_id=citation.chunk_id,
+                citation_id=citation.citation_id,
+                document_id=citation.document_id,
             ): citation
-            for document, citation in zip(documents, citations, strict=False)
+            for citation in citations
         }
 
         formatted_documents: list[Document] = []
@@ -672,8 +846,22 @@ class CitationMapper:
         metadata: dict[str, Any],
         citation_id: str,
     ) -> tuple[str, str]:
-        chunk_id = self._resolve_optional_str(metadata.get("chunk_id"))
-        document_id = self._resolve_optional_str(metadata.get("document_id"))
+        return self._build_citation_key_from_values(
+            namespace=namespace,
+            chunk_id=self._resolve_optional_str(metadata.get("chunk_id")),
+            citation_id=citation_id,
+            document_id=self._resolve_optional_str(metadata.get("document_id")),
+        )
+
+    def _build_citation_key_from_values(
+        self,
+        *,
+        namespace: str,
+        chunk_id: str | None,
+        citation_id: str | None,
+        document_id: str | None,
+    ) -> tuple[str, str]:
+        """用显式字段生成 citation lookup key，避免按列表位置错配。"""
         return namespace, chunk_id or citation_id or document_id or "unknown"
 
     def _resolve_source_kind(self, *, namespace: str, metadata: dict[str, Any]) -> str:
@@ -856,8 +1044,8 @@ class ChatService:
         yield ChatStreamEvent(event="history", data=self._build_history_event(prepared))
         yield ChatStreamEvent(event="tool", data=self._build_tool_event(prepared))
 
-        if not prepared.knowledge_used:
-            answer, citations = self._build_fallback_answer(prepared)
+        if prepared.answer_mode != "evidence_answer":
+            answer, citations = self._build_non_evidence_answer(prepared)
             yield ChatStreamEvent(event="chunk", data={"delta": answer})
         else:
             answer_parts: list[str] = []
@@ -940,19 +1128,23 @@ class ChatService:
             payload.message,
             mounted_knowledge_sources=mounted_knowledge_sources,
         )
-        documents = retrieval_result.documents
-        citations = self._citation_mapper.citations_from_documents(documents)
-        knowledge_used = len(citations) > 0
-        retrieval_trace = retrieval_result.retrieval_trace.model_copy(
-            update={
-                "citations": citations,
-                "knowledge_used": knowledge_used,
-                "filtered_candidates_count": (
-                    retrieval_result.retrieval_trace.filtered_candidates_count
-                    if knowledge_used
-                    else 0
-                ),
-            }
+        candidate_documents = retrieval_result.documents
+        candidate_citations = self._citation_mapper.citations_from_documents(candidate_documents)
+        knowledge_used = self._can_answer_with_evidence(
+            final_decision=retrieval_result.final_decision,
+            citations=candidate_citations,
+        )
+        final_decision = self._resolve_prepared_final_decision(
+            final_decision=retrieval_result.final_decision,
+            knowledge_used=knowledge_used,
+        )
+        documents = candidate_documents if knowledge_used else []
+        citations = candidate_citations if knowledge_used else []
+        retrieval_trace = self._build_prepared_retrieval_trace(
+            retrieval_trace=retrieval_result.retrieval_trace,
+            citations=citations,
+            knowledge_used=knowledge_used,
+            final_decision=final_decision,
         )
         return PreparedChatTurn(
             session_id=session_id,
@@ -970,12 +1162,70 @@ class ChatService:
                 if knowledge_used
                 else None
             ),
+            final_decision=final_decision,
+            follow_up_question=retrieval_result.follow_up_question,
+            answer_mode=self._resolve_answer_mode(
+                final_decision=final_decision,
+                knowledge_used=knowledge_used,
+            ),
         )
+
+    def _can_answer_with_evidence(
+        self,
+        *,
+        final_decision: RuntimeFinalDecision | None,
+        citations: list[Citation],
+    ) -> bool:
+        """只允许最终决策和有效引用同时满足时进入证据回答链。"""
+        return final_decision == "answer_with_evidence" and len(citations) > 0
+
+    def _build_prepared_retrieval_trace(
+        self,
+        *,
+        retrieval_trace: RetrievalTrace,
+        citations: list[Citation],
+        knowledge_used: bool,
+        final_decision: RuntimeFinalDecision | None,
+    ) -> RetrievalTrace:
+        """构造最终响应 trace，并保留轮次级诊断信息。"""
+        return retrieval_trace.model_copy(
+            update={
+                "citations": citations,
+                "knowledge_used": knowledge_used,
+                "final_decision": final_decision,
+                # 顶层 top_k_chunks 只代表最终采纳证据，非证据分支清空但保留 rounds。
+                "top_k_chunks": retrieval_trace.top_k_chunks if knowledge_used else [],
+            }
+        )
+
+    def _resolve_prepared_final_decision(
+        self,
+        *,
+        final_decision: RuntimeFinalDecision | None,
+        knowledge_used: bool,
+    ) -> RuntimeFinalDecision | None:
+        """将无有效 citation 的证据候选收敛为 no_evidence，保证 trace 解释最终分支。"""
+        if final_decision == "answer_with_evidence" and not knowledge_used:
+            return "no_evidence"
+        return final_decision
+
+    def _resolve_answer_mode(
+        self,
+        *,
+        final_decision: RuntimeFinalDecision | None,
+        knowledge_used: bool,
+    ) -> AnswerMode:
+        """根据最终决策选择回答分支，供 JSON 与 SSE 共用。"""
+        if knowledge_used:
+            return "evidence_answer"
+        if final_decision == "ask_user":
+            return "follow_up"
+        return "fallback"
 
     def _generate_answer(self, prepared: PreparedChatTurn) -> tuple[str, list[Citation]]:
         """根据准备结果生成最终答案。"""
-        if not prepared.knowledge_used:
-            return self._build_fallback_answer(prepared)
+        if prepared.answer_mode != "evidence_answer":
+            return self._build_non_evidence_answer(prepared)
         return self._invoke_answer_template(prepared=prepared)
 
     def _invoke_answer_template(
@@ -1064,10 +1314,22 @@ class ChatService:
             )
         return self._finalize_answer_text(joined_answer, prepared.citations)
 
-    def _build_fallback_answer(self, prepared: PreparedChatTurn) -> tuple[str, list[Citation]]:
-        """构造无命中时的 fallback 回答。"""
+    def _build_non_evidence_answer(self, prepared: PreparedChatTurn) -> tuple[str, list[Citation]]:
+        """构造不携带引用的追问或降级回答。"""
+        if prepared.answer_mode == "follow_up":
+            return self._build_follow_up_answer(prepared), []
+        return self._build_fallback_answer(prepared), []
+
+    def _build_follow_up_answer(self, prepared: PreparedChatTurn) -> str:
+        """解析 ask_user 分支追问文案，缺失时回退到 scene no-hit 文案。"""
+        if prepared.follow_up_question:
+            return prepared.follow_up_question
+        return self._build_fallback_answer(prepared)
+
+    def _build_fallback_answer(self, prepared: PreparedChatTurn) -> str:
+        """构造无命中或降级时的 fallback 回答。"""
         policy = self.scene_definition.retrieval_policy
-        return self.scene_definition.fallback_policy.message_for_strategy(policy.no_hit_strategy), []
+        return self.scene_definition.fallback_policy.message_for_strategy(policy.no_hit_strategy)
 
     def _finalize_answer_text(
         self,
@@ -1137,6 +1399,9 @@ class ChatService:
             "rounds": [round_trace.model_dump() for round_trace in prepared.retrieval_trace.rounds],
             "session_id": prepared.session_id,
             "request_id": prepared.request_id,
+            "final_decision": prepared.final_decision,
+            "follow_up_question": prepared.follow_up_question,
+            "answer_mode": prepared.answer_mode,
             "knowledge_used": prepared.knowledge_used,
             "citations": [citation.model_dump() for citation in prepared.citations],
             "retrieval_trace": prepared.retrieval_trace.model_dump(),
@@ -1179,12 +1444,10 @@ class ChatService:
             retrieval_trace=prepared.retrieval_trace.model_copy(
                 update={
                     "citations": citations,
-                    "knowledge_used": len(citations) > 0,
-                    "filtered_candidates_count": (
-                        prepared.retrieval_trace.filtered_candidates_count
-                        if citations
-                        else 0
-                    ),
+                    "knowledge_used": prepared.knowledge_used,
+                    "top_k_chunks": prepared.retrieval_trace.top_k_chunks
+                    if prepared.knowledge_used
+                    else [],
                 }
             ),
         )
