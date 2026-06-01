@@ -9,6 +9,8 @@ from fastapi.responses import StreamingResponse
 
 from backend.application.runtime.api.chat.schemas import (
     ChatRequest,
+    ChatResumeRequest,
+    ChatResumeResponse,
     ChatResponse,
     SceneListResponse,
     SceneSummary,
@@ -69,12 +71,61 @@ def chat(payload: ChatRequest, request: Request) -> ChatResponse | StreamingResp
         ) from exc
 
 
+@router.post("/chat/resume", response_model=ChatResumeResponse)
+def resume_chat(payload: ChatResumeRequest, request: Request) -> ChatResumeResponse | StreamingResponse:
+    """恢复一个正在等待用户处理的 HITL 会话。"""
+    service = _get_chat_service(request)
+    if payload.stream:
+        return StreamingResponse(
+            _stream_resume_events(service=service, payload=payload),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
+    try:
+        return service.resume(payload)
+    except Exception as exc:
+        if not isinstance(exc, ChatServiceError):
+            raise
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail=_build_error_detail(
+                code=exc.code,
+                message=exc.message,
+                request_id=exc.request_id,
+            ),
+        ) from exc
+
+
 def _stream_chat_events(service: Any, payload: ChatRequest) -> Iterator[str]:
     """将业务层结构化事件编码为 SSE 文本流。"""
     try:
         yield from (
             _encode_sse_event(event.event, event.data)
             for event in service.chat_stream(payload)
+        )
+    except Exception as exc:
+        if not isinstance(exc, ChatServiceError):
+            raise
+        yield _encode_sse_event(
+            "error",
+            _build_error_detail(
+                code=exc.code,
+                message=exc.message,
+                request_id=exc.request_id,
+            ),
+        )
+
+
+def _stream_resume_events(service: Any, payload: ChatResumeRequest) -> Iterator[str]:
+    """将 resume 业务事件编码为 SSE 文本流。"""
+    try:
+        yield from (
+            _encode_sse_event(event.event, event.data)
+            for event in service.resume_stream(payload)
         )
     except Exception as exc:
         if not isinstance(exc, ChatServiceError):

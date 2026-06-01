@@ -7,8 +7,15 @@ from langchain_core.documents import Document
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from langchain_core.runnables import RunnableLambda
 
-from backend.application.runtime.api.chat.schemas import ChatRequest, Citation, RetrievalTrace
+from backend.application.runtime.api.chat.schemas import (
+    ChatRequest,
+    ChatResponse,
+    Citation,
+    HitlState,
+    RetrievalTrace,
+)
 from backend.application.runtime.graph_runtime import ChatGraphRuntime
+from backend.application.runtime.graph_runtime import HitlResumeError, HitlResumeInput, HitlWaitInput
 from backend.application.runtime.service import ChatService
 from backend.application.runtime.stream_events import (
     GraphRuntimeStreamEvent,
@@ -27,6 +34,7 @@ from backend.platform.workflow.langgraph.lifecycle import (
 )
 from backend.platform.workflow.langgraph.state import (
     RuntimeGraphState,
+    build_runtime_hitl_state,
     build_runtime_graph_state,
 )
 from backend.scenes.base import SceneDefinition, SceneFallbackPolicy, SceneRetrievalPolicy
@@ -94,6 +102,9 @@ def test_runtime_graph_state_exposes_minimal_chat_execution_fields() -> None:
         "citations",
         "retrieval_trace",
         "metadata",
+        "status",
+        "hitl",
+        "hitl_resume",
     }
 
     state = build_runtime_graph_state(
@@ -105,6 +116,7 @@ def test_runtime_graph_state_exposes_minimal_chat_execution_fields() -> None:
         citations=[{"document_id": "doc-1", "chunk_id": "chunk-1"}],
         retrieval_trace={"final_decision": "evidence_answer"},
         metadata={"scene": "generic_assistant"},
+        status="succeeded",
     )
 
     assert state["session_id"] == "session-state"
@@ -115,6 +127,9 @@ def test_runtime_graph_state_exposes_minimal_chat_execution_fields() -> None:
     assert state["citations"] == [{"document_id": "doc-1", "chunk_id": "chunk-1"}]
     assert state["retrieval_trace"] == {"final_decision": "evidence_answer"}
     assert state["metadata"] == {"scene": "generic_assistant"}
+    assert state["status"] == "succeeded"
+    assert state["hitl"] is None
+    assert state["hitl_resume"] is None
 
 
 def test_runtime_graph_state_defaults_keep_non_evidence_branches_representable() -> None:
@@ -134,7 +149,98 @@ def test_runtime_graph_state_defaults_keep_non_evidence_branches_representable()
         "citations": [],
         "retrieval_trace": {"final_decision": "ask_user"},
         "metadata": {},
+        "status": "running",
+        "hitl": None,
+        "hitl_resume": None,
     }
+
+
+def test_runtime_hitl_state_preserves_serializable_protocol_fields() -> None:
+    hitl = build_runtime_hitl_state(
+        interrupt_id="interrupt-1",
+        thread_id="session-hitl",
+        reason="需要用户补充文档主题。",
+        pending_action="clarification",
+        allowed_actions=["respond", "reject"],
+        suggested_responses=[
+            {
+                "suggestion_id": "topic_scope",
+                "label": "限定文档主题",
+                "value": "我想查询安全合规政策相关内容。",
+            }
+        ],
+        allow_freeform_response=True,
+    )
+    state = build_runtime_graph_state(
+        session_id="session-hitl",
+        request_id="req-hitl",
+        status="waiting_user",
+        hitl=hitl,
+    )
+
+    assert state["status"] == "waiting_user"
+    assert set(state["hitl"]) == {
+        "interrupt_id",
+        "thread_id",
+        "reason",
+        "pending_action",
+        "proposed_tool_call",
+        "allowed_actions",
+        "suggested_responses",
+        "allow_freeform_response",
+        "resume_payload",
+    }
+    assert state["hitl"] == {
+        "interrupt_id": "interrupt-1",
+        "thread_id": "session-hitl",
+        "reason": "需要用户补充文档主题。",
+        "pending_action": "clarification",
+        "proposed_tool_call": None,
+        "allowed_actions": ["respond", "reject"],
+        "suggested_responses": [
+            {
+                "suggestion_id": "topic_scope",
+                "label": "限定文档主题",
+                "value": "我想查询安全合规政策相关内容。",
+            }
+        ],
+        "allow_freeform_response": True,
+        "resume_payload": None,
+    }
+
+
+def test_chat_response_accepts_optional_hitl_waiting_payload() -> None:
+    hitl = HitlState(
+        interrupt_id="interrupt-api",
+        thread_id="session-api",
+        reason="需要用户补充查询范围。",
+        pending_action="clarification",
+        allowed_actions=["respond", "reject"],
+        suggested_responses=[
+            {
+                "suggestion_id": "term_scope",
+                "label": "限定术语",
+                "value": "请围绕权限审批流程继续检索。",
+            }
+        ],
+        allow_freeform_response=True,
+    )
+
+    response = ChatResponse(
+        session_id="session-api",
+        request_id="req-api",
+        answer="",
+        knowledge_used=False,
+        scene="generic_assistant",
+        status="waiting_user",
+        hitl=hitl,
+    )
+
+    payload = response.model_dump()
+    assert payload["status"] == "waiting_user"
+    assert payload["hitl"]["pending_action"] == "clarification"
+    assert payload["hitl"]["suggested_responses"][0]["suggestion_id"] == "term_scope"
+    assert payload["hitl"]["allow_freeform_response"] is True
 
 
 def test_runtime_graph_config_binds_thread_id_to_session_id_and_metadata_to_request() -> None:
@@ -282,6 +388,333 @@ def test_chat_graph_runtime_seeds_legacy_history_only_without_checkpoint() -> No
     ]
 
 
+def test_chat_graph_runtime_creates_hitl_wait_checkpoint() -> None:
+    runtime = _build_chat_graph_runtime("runtime-graph-hitl-wait")
+
+    result = runtime.create_hitl_wait(
+        wait=HitlWaitInput(
+            session_id="session-hitl-wait",
+            request_id="req-hitl-wait",
+            reason="需要人工补充查询范围。",
+            pending_action="clarification",
+            allowed_actions=["respond", "reject"],
+            suggested_responses=[
+                {
+                    "suggestion_id": "topic_scope",
+                    "label": "限定主题",
+                    "value": "请查询安全合规政策。",
+                }
+            ],
+            allow_freeform_response=True,
+            metadata={"scene": "generic_assistant"},
+        ),
+        interrupt_id="interrupt-wait",
+    )
+    restored = runtime.checkpointer.get_tuple(result.config)
+
+    assert result.state["status"] == "waiting_user"
+    assert result.state["hitl"]["interrupt_id"] == "interrupt-wait"
+    assert restored is not None
+    assert restored.checkpoint["channel_values"]["status"] == "waiting_user"
+    assert restored.checkpoint["channel_values"]["hitl"]["allowed_actions"] == [
+        "respond",
+        "reject",
+    ]
+
+
+def test_chat_graph_runtime_rejects_invalid_hitl_wait_protocol() -> None:
+    runtime = _build_chat_graph_runtime("runtime-graph-hitl-invalid-wait")
+
+    try:
+        runtime.create_hitl_wait(
+            wait=HitlWaitInput(
+                session_id="session-hitl-invalid-wait",
+                request_id="req-hitl-invalid-wait",
+                reason="审批等待态不能返回澄清选项。",
+                pending_action="tool_approval",
+                proposed_tool_call={"tool_name": "generic_write_tool"},
+                allowed_actions=["approve", "respond"],
+            ),
+            interrupt_id="interrupt-invalid-wait",
+        )
+    except HitlResumeError as exc:
+        assert "approval HITL wait cannot include respond" in str(exc)
+    else:
+        raise AssertionError("approval HITL wait should reject respond action")
+
+    try:
+        runtime.create_hitl_wait(
+            wait=HitlWaitInput(
+                session_id="session-hitl-invalid-wait",
+                request_id="req-hitl-invalid-wait-2",
+                reason="澄清等待态必须允许 respond。",
+                pending_action="clarification",
+                allowed_actions=["reject"],
+            ),
+            interrupt_id="interrupt-invalid-wait-2",
+        )
+    except HitlResumeError as exc:
+        assert "requires respond action" in str(exc)
+    else:
+        raise AssertionError("clarification HITL wait should require respond action")
+
+    statuses = tuple(
+        event.status
+        for event in runtime.lifecycle.events_for_thread(
+            thread_id="session-hitl-invalid-wait"
+        )
+    )
+    assert statuses == ("created", "running", "failed", "created", "running", "failed")
+
+
+def test_chat_graph_runtime_resume_approve_executes_proposed_tool_once() -> None:
+    runtime = _build_chat_graph_runtime("runtime-graph-hitl-approve")
+    runtime.create_hitl_wait(
+        wait=HitlWaitInput(
+            session_id="session-hitl-approve",
+            request_id="req-hitl-approve-wait",
+            reason="外部 API 调用需要审批。",
+            pending_action="external_api_approval",
+            proposed_tool_call={"tool_name": "generic_external_webhook_call"},
+            allowed_actions=["approve", "reject"],
+        ),
+        interrupt_id="interrupt-approve",
+    )
+    executed_calls: list[dict[str, Any]] = []
+
+    result = runtime.resume_hitl(
+        resume=HitlResumeInput(
+            session_id="session-hitl-approve",
+            request_id="req-hitl-approve-resume",
+            interrupt_id="interrupt-approve",
+            action="approve",
+            payload={"reason": "approved"},
+        ),
+        approve_executor=lambda tool_call: executed_calls.append(dict(tool_call))
+        or {"executed": True},
+    )
+
+    assert executed_calls == [{"tool_name": "generic_external_webhook_call"}]
+    assert result.tool_result == {"executed": True}
+    assert result.config["configurable"]["thread_id"] == "session-hitl-approve"
+    assert result.state["status"] == "succeeded"
+    assert result.state["hitl"] is None
+    assert result.state["hitl_resume"]["action"] == "approve"
+    assert result.state["hitl_resume"]["interrupt_id"] == "interrupt-approve"
+    assert result.state["metadata"]["hitl_resume"]["action"] == "approve"
+
+    try:
+        runtime.resume_hitl(
+            resume=HitlResumeInput(
+                session_id="session-hitl-approve",
+                request_id="req-hitl-approve-duplicate",
+                interrupt_id="interrupt-approve",
+                action="approve",
+                payload={"reason": "duplicate approve"},
+            ),
+            approve_executor=lambda tool_call: executed_calls.append(dict(tool_call))
+            or {"executed": True},
+        )
+    except HitlResumeError as exc:
+        assert "not waiting" in str(exc)
+    else:
+        raise AssertionError("duplicate resume should be rejected after HITL is cleared")
+    assert executed_calls == [{"tool_name": "generic_external_webhook_call"}]
+
+
+def test_chat_graph_runtime_resume_reject_skips_proposed_tool() -> None:
+    runtime = _build_chat_graph_runtime("runtime-graph-hitl-reject")
+    runtime.create_hitl_wait(
+        wait=HitlWaitInput(
+            session_id="session-hitl-reject",
+            request_id="req-hitl-reject-wait",
+            reason="写操作需要审批。",
+            pending_action="tool_approval",
+            proposed_tool_call={"tool_name": "generic_knowledge_document_publish"},
+            allowed_actions=["approve", "reject"],
+        ),
+        interrupt_id="interrupt-reject",
+    )
+
+    result = runtime.resume_hitl(
+        resume=HitlResumeInput(
+            session_id="session-hitl-reject",
+            request_id="req-hitl-reject-resume",
+            interrupt_id="interrupt-reject",
+            action="reject",
+            payload={"reason": "not allowed"},
+        ),
+        approve_executor=lambda _: {"should_not_execute": True},
+    )
+
+    assert result.tool_result is None
+    assert result.state["status"] == "succeeded"
+    assert result.state["hitl"] is None
+    assert "未执行" in result.state["answer"]
+    assert result.state["hitl_resume"]["action"] == "reject"
+    assert result.state["metadata"]["hitl_resume"]["action"] == "reject"
+
+
+def test_chat_graph_runtime_resume_respond_records_source_and_suggestion() -> None:
+    runtime = _build_chat_graph_runtime("runtime-graph-hitl-respond")
+    runtime.create_hitl_wait(
+        wait=HitlWaitInput(
+            session_id="session-hitl-respond",
+            request_id="req-hitl-respond-wait",
+            reason="需要用户补充文档主题。",
+            pending_action="clarification",
+            allowed_actions=["respond", "reject"],
+            suggested_responses=[
+                {
+                    "suggestion_id": "topic_scope",
+                    "label": "限定主题",
+                    "value": "安全合规政策",
+                }
+            ],
+            allow_freeform_response=True,
+        ),
+        interrupt_id="interrupt-respond",
+    )
+
+    result = runtime.resume_hitl(
+        resume=HitlResumeInput(
+            session_id="session-hitl-respond",
+            request_id="req-hitl-respond-resume",
+            interrupt_id="interrupt-respond",
+            action="respond",
+            payload={
+                "response": "安全合规政策",
+                "source": "suggested_response",
+                "suggestion_id": "topic_scope",
+            },
+        ),
+        respond_handler=lambda payload: {
+            "status": "succeeded",
+            "answer": f"继续检索：{payload['response']}",
+        },
+    )
+
+    assert result.state["status"] == "succeeded"
+    assert result.state["hitl"] is None
+    assert result.state["answer"] == "继续检索：安全合规政策"
+    assert result.state["hitl_resume"]["source"] == "suggested_response"
+    assert result.state["hitl_resume"]["suggestion_id"] == "topic_scope"
+    assert result.state["metadata"]["hitl_resume"]["source"] == "suggested_response"
+    assert result.state["metadata"]["hitl_resume"]["suggestion_id"] == "topic_scope"
+
+
+def test_chat_graph_runtime_resume_respond_requires_handler_and_valid_payload() -> None:
+    runtime = _build_chat_graph_runtime("runtime-graph-hitl-respond-validation")
+    runtime.create_hitl_wait(
+        wait=HitlWaitInput(
+            session_id="session-hitl-respond-validation",
+            request_id="req-hitl-respond-validation-wait",
+            reason="需要用户补充文档主题。",
+            pending_action="clarification",
+            allowed_actions=["respond", "reject"],
+            suggested_responses=[
+                {
+                    "suggestion_id": "topic_scope",
+                    "label": "限定主题",
+                    "value": "安全合规政策",
+                }
+            ],
+            allow_freeform_response=False,
+        ),
+        interrupt_id="interrupt-respond-validation",
+    )
+
+    try:
+        runtime.resume_hitl(
+            resume=HitlResumeInput(
+                session_id="session-hitl-respond-validation",
+                request_id="req-hitl-respond-validation-no-handler",
+                interrupt_id="interrupt-respond-validation",
+                action="respond",
+                payload={"source": "suggested_response", "suggestion_id": "topic_scope"},
+            )
+        )
+    except HitlResumeError as exc:
+        assert "respond_handler" in str(exc)
+    else:
+        raise AssertionError("respond should require a handler")
+
+    try:
+        runtime.resume_hitl(
+            resume=HitlResumeInput(
+                session_id="session-hitl-respond-validation",
+                request_id="req-hitl-respond-validation-freeform",
+                interrupt_id="interrupt-respond-validation",
+                action="respond",
+                payload={"response": "自由输入", "source": "freeform"},
+            ),
+            respond_handler=lambda payload: {"status": "succeeded", "answer": payload["response"]},
+        )
+    except HitlResumeError as exc:
+        assert "freeform response is not allowed" in str(exc)
+    else:
+        raise AssertionError("freeform response should be rejected when disabled")
+
+    result = runtime.resume_hitl(
+        resume=HitlResumeInput(
+            session_id="session-hitl-respond-validation",
+            request_id="req-hitl-respond-validation-suggested",
+            interrupt_id="interrupt-respond-validation",
+            action="respond",
+            payload={"source": "suggested_response", "suggestion_id": "topic_scope"},
+        ),
+        respond_handler=lambda payload: {
+            "status": "succeeded",
+            "answer": f"继续检索：{payload['response']}",
+        },
+    )
+
+    assert result.state["answer"] == "继续检索：安全合规政策"
+    assert result.state["hitl_resume"]["response"] == "安全合规政策"
+
+
+def test_chat_graph_runtime_resume_rejects_invalid_interrupt_or_edit() -> None:
+    runtime = _build_chat_graph_runtime("runtime-graph-hitl-invalid")
+    runtime.create_hitl_wait(
+        wait=HitlWaitInput(
+            session_id="session-hitl-invalid",
+            request_id="req-hitl-invalid-wait",
+            reason="需要人工处理。",
+            pending_action="clarification",
+            allowed_actions=["respond", "edit"],
+        ),
+        interrupt_id="interrupt-valid",
+    )
+
+    try:
+        runtime.resume_hitl(
+            resume=HitlResumeInput(
+                session_id="session-hitl-invalid",
+                request_id="req-hitl-invalid-resume-1",
+                interrupt_id="interrupt-stale",
+                action="respond",
+            )
+        )
+    except HitlResumeError as exc:
+        assert "interrupt_id" in str(exc)
+    else:
+        raise AssertionError("stale interrupt_id should be rejected")
+
+    try:
+        runtime.resume_hitl(
+            resume=HitlResumeInput(
+                session_id="session-hitl-invalid",
+                request_id="req-hitl-invalid-resume-2",
+                interrupt_id="interrupt-valid",
+                action="edit",
+            )
+        )
+    except HitlResumeError as exc:
+        assert "edit action is not supported" in str(exc)
+    else:
+        raise AssertionError("edit should be rejected before implementation")
+
+
 def test_chat_service_non_streaming_answer_runs_through_graph_runtime() -> None:
     runtime_dir = make_test_runtime_dir("runtime-graph-chat-service")
     sqlite_path = runtime_dir / "sessions.db"
@@ -358,6 +791,14 @@ def test_graph_stream_event_mapper_keeps_business_event_protocol() -> None:
                 ),
                 GraphRuntimeStreamEvent("answer_chunk", {"delta": "hello"}),
                 GraphRuntimeStreamEvent(
+                    "human_waiting",
+                    {"hitl": {"interrupt_id": "interrupt-stream"}},
+                ),
+                GraphRuntimeStreamEvent(
+                    "human_resume",
+                    {"interrupt_id": "interrupt-stream", "action": "respond"},
+                ),
+                GraphRuntimeStreamEvent(
                     "graph_run_succeeded",
                     {"retrieval_trace": {"final_decision": "answer_with_evidence"}},
                 ),
@@ -374,6 +815,8 @@ def test_graph_stream_event_mapper_keeps_business_event_protocol() -> None:
         "history",
         "tool",
         "chunk",
+        "waiting_user",
+        "resume",
         "done",
         "error",
     ]

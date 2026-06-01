@@ -5,12 +5,23 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 
-BusinessStreamEventName = Literal["start", "history", "tool", "chunk", "done", "error"]
+BusinessStreamEventName = Literal[
+    "start",
+    "history",
+    "tool",
+    "chunk",
+    "waiting_user",
+    "resume",
+    "done",
+    "error",
+]
 GraphStreamEventName = Literal[
     "graph_run_created",
     "history_snapshot",
     "retrieval_tool_result",
     "answer_chunk",
+    "human_waiting",
+    "human_resume",
     "graph_run_succeeded",
     "graph_run_failed",
 ]
@@ -40,6 +51,8 @@ class GraphStreamEventMapper:
         "history_snapshot": "history",
         "retrieval_tool_result": "tool",
         "answer_chunk": "chunk",
+        "human_waiting": "waiting_user",
+        "human_resume": "resume",
         "graph_run_succeeded": "done",
         "graph_run_failed": "error",
     }

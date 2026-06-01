@@ -1214,6 +1214,281 @@
       font-weight: 700;
     }
 
+    .hitl-card {
+      border-color: rgba(184, 119, 31, 0.24);
+      background: linear-gradient(180deg, rgba(255, 252, 247, 0.98), rgba(249, 244, 235, 0.98));
+    }
+
+    .hitl-card.is-resolved {
+      border-color: rgba(29, 141, 103, 0.24);
+      background: linear-gradient(180deg, rgba(248, 253, 250, 0.98), rgba(239, 249, 244, 0.98));
+    }
+
+    .hitl-status-chip {
+      min-height: 28px;
+      padding: 0 11px;
+      border-radius: 999px;
+      background: var(--amber-soft);
+      color: var(--amber);
+      display: inline-flex;
+      align-items: center;
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+
+    .hitl-card.is-resolved .hitl-status-chip {
+      background: var(--green-soft);
+      color: var(--green);
+    }
+
+    .hitl-reason {
+      padding: 14px 16px;
+      border-radius: 18px;
+      background: rgba(255, 255, 255, 0.88);
+      border: 1px solid rgba(214, 225, 232, 0.92);
+      color: #13374f;
+      font-size: 14px;
+      line-height: 1.7;
+      word-break: break-word;
+    }
+
+    .hitl-summary-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .hitl-summary-item {
+      min-width: 0;
+      padding: 12px;
+      border-radius: 16px;
+      background: rgba(255, 255, 255, 0.84);
+      border: 1px solid rgba(214, 225, 232, 0.92);
+    }
+
+    .hitl-summary-item strong {
+      display: block;
+      margin-bottom: 5px;
+      color: var(--text-muted);
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+
+    .hitl-summary-item span,
+    .hitl-tool-json {
+      color: var(--text);
+      font-size: 12px;
+      line-height: 1.55;
+      word-break: break-word;
+    }
+
+    .hitl-tool-json {
+      max-height: 160px;
+      margin: 0;
+      overflow: auto;
+      padding: 12px;
+      border-radius: 16px;
+      border: 1px solid rgba(214, 225, 232, 0.92);
+      background: rgba(255, 255, 255, 0.88);
+      white-space: pre-wrap;
+    }
+
+    .hitl-suggestions,
+    .hitl-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+
+    .hitl-suggestion,
+    .hitl-action {
+      min-height: 38px;
+      padding: 0 14px;
+      border-radius: 14px;
+      border: 1px solid rgba(177, 220, 223, 0.92);
+      background: rgba(223, 242, 240, 0.78);
+      color: var(--teal);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 13px;
+      font-weight: 800;
+    }
+
+    .hitl-action.primary {
+      border: 0;
+      background: linear-gradient(135deg, var(--teal), #1f878c);
+      color: #ffffff;
+      box-shadow: 0 12px 24px rgba(15, 109, 116, 0.18);
+    }
+
+    .hitl-action.danger {
+      border-color: rgba(211, 90, 72, 0.22);
+      background: var(--red-soft);
+      color: var(--red);
+    }
+
+    .hitl-action:disabled,
+    .hitl-suggestion:disabled,
+    .hitl-choice:disabled {
+      cursor: not-allowed;
+      opacity: 0.55;
+      box-shadow: none;
+    }
+
+    .hitl-response-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 10px;
+      align-items: end;
+    }
+
+    .hitl-response-input {
+      min-height: 86px;
+      height: 86px;
+      padding: 12px 14px;
+      border-radius: 16px;
+      font-size: 14px;
+      line-height: 1.6;
+    }
+
+    .hitl-dock {
+      display: none;
+      gap: 8px;
+      padding: 10px;
+      border-radius: 18px;
+      border: 1px solid rgba(184, 119, 31, 0.22);
+      background: linear-gradient(180deg, rgba(255, 252, 247, 0.98), rgba(249, 244, 235, 0.98));
+      box-shadow: 0 14px 34px rgba(12, 39, 58, 0.08);
+      animation: hitl-slide-up 180ms ease both;
+    }
+
+    .hitl-dock.is-visible {
+      display: grid;
+    }
+
+    .hitl-dock-head {
+      display: grid;
+      gap: 6px;
+    }
+
+    .hitl-dock-title {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      color: var(--text-muted);
+      font-size: 12px;
+      font-weight: 800;
+    }
+
+    .hitl-dock-question {
+      margin: 0;
+      color: #12374f;
+      font-size: 14px;
+      font-weight: 800;
+      line-height: 1.45;
+      word-break: break-word;
+    }
+
+    .hitl-choice-list {
+      display: grid;
+      gap: 6px;
+    }
+
+    .hitl-choice {
+      width: 100%;
+      min-height: 40px;
+      padding: 8px 10px;
+      border-radius: 14px;
+      border: 1px solid rgba(205, 219, 227, 0.92);
+      background: rgba(255, 255, 255, 0.9);
+      color: var(--text);
+      display: grid;
+      grid-template-columns: 24px minmax(0, 1fr);
+      gap: 8px;
+      align-items: start;
+      text-align: left;
+    }
+
+    .hitl-choice:hover {
+      border-color: rgba(15, 109, 116, 0.34);
+      background: rgba(223, 242, 240, 0.62);
+    }
+
+    .hitl-choice-index {
+      width: 24px;
+      height: 24px;
+      border-radius: 9px;
+      background: rgba(15, 109, 116, 0.12);
+      color: var(--teal);
+      display: grid;
+      place-items: center;
+      font-size: 12px;
+      font-weight: 900;
+    }
+
+    .hitl-choice-copy {
+      min-width: 0;
+      display: grid;
+      gap: 3px;
+    }
+
+    .hitl-choice-copy strong {
+      color: var(--text);
+      font-size: 13px;
+      font-weight: 800;
+      line-height: 1.35;
+    }
+
+    .hitl-choice-copy span {
+      color: var(--text-muted);
+      font-size: 12px;
+      line-height: 1.45;
+      word-break: break-word;
+    }
+
+    .hitl-dock-freeform {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 8px;
+      align-items: end;
+    }
+
+    .hitl-dock-input {
+      min-height: 46px;
+      height: 46px;
+      padding: 10px 12px;
+      border-radius: 14px;
+      font-size: 13px;
+      line-height: 1.45;
+    }
+
+    .hitl-dock-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .hitl-dock-reject {
+      justify-content: flex-end;
+    }
+
+    @keyframes hitl-slide-up {
+      from {
+        opacity: 0;
+        transform: translateY(10px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+
     .typing {
       display: inline-flex;
       align-items: center;
@@ -1258,6 +1533,35 @@
       gap: 16px;
       color: var(--text-muted);
       font-size: 12px;
+    }
+
+    .composer-controls {
+      display: inline-flex;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    .hitl-toggle {
+      min-height: 32px;
+      padding: 0 11px;
+      border-radius: 999px;
+      border: 1px solid rgba(184, 119, 31, 0.2);
+      background: var(--amber-soft);
+      color: var(--amber);
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      font-size: 12px;
+      font-weight: 800;
+      white-space: nowrap;
+    }
+
+    .hitl-toggle input {
+      width: 14px;
+      height: 14px;
+      accent-color: var(--amber);
     }
 
     .composer-grid {
@@ -1375,6 +1679,10 @@
         align-items: stretch;
       }
 
+      .composer-controls {
+        justify-content: flex-start;
+      }
+
       .topbar-row,
       .topbar-actions,
       .composer-grid {
@@ -1420,6 +1728,12 @@
       }
 
       .detail-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .hitl-summary-grid,
+      .hitl-response-grid,
+      .hitl-dock-freeform {
         grid-template-columns: 1fr;
       }
 
@@ -1543,9 +1857,17 @@
 
       <footer class="composer">
         <div class="composer-shell">
+          <div id="hitlDock" class="hitl-dock" aria-live="polite" hidden></div>
+
           <div class="composer-topline">
             <span>支持连续追问，按 `Enter` 发送，`Shift + Enter` 换行</span>
-            <span id="composerStatus">准备就绪</span>
+            <span class="composer-controls">
+              <label class="hitl-toggle">
+                <input id="hitlClarificationToggle" type="checkbox" checked />
+                HITL 澄清
+              </label>
+              <span id="composerStatus">准备就绪</span>
+            </span>
           </div>
 
           <div class="composer-grid">
@@ -1584,7 +1906,9 @@
       mountedKnowledgeSources: ["documents"],
       streamAnimation: null,
       activeTraceMessageId: "",
-      traceDrawerOpen: false
+      traceDrawerOpen: false,
+      pendingHitl: null,
+      resuming: false
     };
 
     const refs = {
@@ -1593,6 +1917,7 @@
       sceneHeadline: document.getElementById("sceneHeadline"),
       sessionIdBadge: document.getElementById("sessionIdBadge"),
       chatFeed: document.getElementById("chatFeed"),
+      hitlDock: document.getElementById("hitlDock"),
       traceToggle: document.getElementById("traceToggle"),
       traceBackdrop: document.getElementById("traceBackdrop"),
       traceDrawer: document.getElementById("traceDrawer"),
@@ -1608,6 +1933,7 @@
       documentsMount: document.getElementById("mountDocuments"),
       ecommerceMount: document.getElementById("mountEcommerce"),
       input: document.getElementById("messageInput"),
+      hitlClarificationToggle: document.getElementById("hitlClarificationToggle"),
       sendButton: document.getElementById("sendButton"),
       newChat: document.getElementById("newChat"),
       composerStatus: document.getElementById("composerStatus"),
@@ -1709,14 +2035,16 @@
     }
 
     function setInteractiveState() {
-      const disabled = state.sending || state.sceneLoading || !state.activeScene || !state.sessionId;
+      const waitingForHuman = !!state.pendingHitl;
+      const disabled = state.sending || state.resuming || waitingForHuman || state.sceneLoading || !state.activeScene || !state.sessionId;
       refs.sendButton.disabled = disabled;
-      refs.input.disabled = state.sceneLoading || !state.activeScene;
-      refs.sceneSelect.disabled = state.sceneLoading || !state.scenes.length;
-      refs.newChat.disabled = state.sceneLoading || !state.activeScene;
-      refs.documentsMount.disabled = state.sceneLoading;
-      refs.ecommerceMount.disabled = state.sceneLoading;
-      refs.mountTrigger.disabled = state.sceneLoading;
+      refs.input.disabled = state.resuming || waitingForHuman || state.sceneLoading || !state.activeScene;
+      refs.hitlClarificationToggle.disabled = state.resuming || waitingForHuman || state.sceneLoading || state.activeScene !== "generic_assistant";
+      refs.sceneSelect.disabled = state.sceneLoading || state.resuming || waitingForHuman || !state.scenes.length;
+      refs.newChat.disabled = state.sceneLoading || state.resuming || !state.activeScene;
+      refs.documentsMount.disabled = state.sceneLoading || state.resuming || waitingForHuman;
+      refs.ecommerceMount.disabled = state.sceneLoading || state.resuming || waitingForHuman;
+      refs.mountTrigger.disabled = state.sceneLoading || state.resuming || waitingForHuman;
     }
 
     function updateSessionBadge() {
@@ -1739,6 +2067,8 @@
         knowledgeUsed: meta.knowledgeUsed,
         scene: meta.scene || state.activeScene,
         sourcePrompt: meta.sourcePrompt || "",
+        hitl: meta.hitl || null,
+        hitlStatus: meta.hitlStatus || "",
         streaming: !!meta.streaming,
         rendered: false
       });
@@ -1746,10 +2076,14 @@
       return messageId;
     }
 
-    function updateMessage(messageId, patch) {
-      const target = state.messages.find(function (message) {
+    function findMessage(messageId) {
+      return state.messages.find(function (message) {
         return message.id === messageId;
-      });
+      }) || null;
+    }
+
+    function updateMessage(messageId, patch) {
+      const target = findMessage(messageId);
       if (!target) {
         return;
       }
@@ -1978,12 +2312,257 @@
       );
     }
 
+    function formatHitlPendingActionLabel(value) {
+      const labels = {
+        clarification: "补充信息",
+        tool_approval: "工具审批",
+        external_api_approval: "外部 API 审批"
+      };
+      return labels[value] || value || "等待处理";
+    }
+
+    function formatHitlActionLabel(value) {
+      const labels = {
+        approve: "批准执行",
+        reject: "拒绝",
+        respond: "提交补充",
+        edit: "编辑后执行"
+      };
+      return labels[value] || value || "处理";
+    }
+
+    function getHitlAllowedActions(hitl) {
+      return Array.isArray(hitl && hitl.allowed_actions) ? hitl.allowed_actions : [];
+    }
+
+    function isHitlActionAllowed(hitl, action) {
+      return getHitlAllowedActions(hitl).indexOf(action) >= 0;
+    }
+
+    function getHitlSuggestion(hitl, suggestionId) {
+      const suggestions = Array.isArray(hitl && hitl.suggested_responses) ? hitl.suggested_responses : [];
+      return suggestions.find(function (suggestion) {
+        return suggestion.suggestion_id === suggestionId;
+      }) || null;
+    }
+
+    function renderHitlToolCall(hitl) {
+      if (!hitl || !hitl.proposed_tool_call) {
+        return "";
+      }
+      return (
+        '<div>' +
+          '<div class="trace-section-title">待执行调用</div>' +
+          '<pre class="hitl-tool-json">' + escapeHtml(JSON.stringify(hitl.proposed_tool_call, null, 2)) + '</pre>' +
+        '</div>'
+      );
+    }
+
+    function renderHitlSuggestions(message) {
+      const hitl = message.hitl || {};
+      const suggestions = Array.isArray(hitl.suggested_responses) ? hitl.suggested_responses : [];
+      if (!suggestions.length) {
+        return "";
+      }
+      return (
+        '<div>' +
+          '<div class="trace-section-title">建议补充</div>' +
+          '<div class="hitl-suggestions">' +
+            suggestions.map(function (suggestion) {
+              return (
+                '<button class="hitl-suggestion" type="button" data-hitl-suggestion="' + escapeHtml(message.id) + '" data-suggestion-id="' + escapeHtml(suggestion.suggestion_id) + '"' +
+                  (state.resuming ? " disabled" : "") +
+                  ' title="' + escapeHtml(suggestion.description || suggestion.value || suggestion.label) + '">' +
+                  escapeHtml(suggestion.label || suggestion.value || suggestion.suggestion_id) +
+                '</button>'
+              );
+            }).join("") +
+          '</div>' +
+        '</div>'
+      );
+    }
+
+    function renderHitlFreeform(message) {
+      const hitl = message.hitl || {};
+      if (!hitl.allow_freeform_response || !isHitlActionAllowed(hitl, "respond")) {
+        return "";
+      }
+      return (
+        '<div class="hitl-response-grid">' +
+          '<textarea class="hitl-response-input" data-hitl-input="' + escapeHtml(message.id) + '" placeholder="补充关键信息后继续执行，例如具体主题、范围或限制条件..."' +
+            (state.resuming ? " disabled" : "") +
+          '></textarea>' +
+          '<button class="hitl-action primary" type="button" data-hitl-freeform="' + escapeHtml(message.id) + '"' + (state.resuming ? " disabled" : "") + '>提交补充</button>' +
+        '</div>'
+      );
+    }
+
+    function renderHitlActions(message) {
+      const hitl = message.hitl || {};
+      const actions = [];
+      if (isHitlActionAllowed(hitl, "approve")) {
+        actions.push('<button class="hitl-action primary" type="button" data-hitl-action="' + escapeHtml(message.id) + '" data-action="approve"' + (state.resuming ? " disabled" : "") + '>批准执行</button>');
+      }
+      if (isHitlActionAllowed(hitl, "reject")) {
+        actions.push('<button class="hitl-action danger" type="button" data-hitl-action="' + escapeHtml(message.id) + '" data-action="reject"' + (state.resuming ? " disabled" : "") + '>拒绝</button>');
+      }
+      if (!actions.length) {
+        return "";
+      }
+      return '<div class="hitl-actions">' + actions.join("") + '</div>';
+    }
+
+    function getChoiceIndex(index) {
+      return String.fromCharCode(65 + index);
+    }
+
+    function getPendingHitlMessage() {
+      if (!state.pendingHitl || !state.pendingHitl.messageId) {
+        return null;
+      }
+      return findMessage(state.pendingHitl.messageId);
+    }
+
+    function getHitlInput(messageId) {
+      return document.querySelector('[data-hitl-input="' + messageId + '"]');
+    }
+
+    function renderHitlDockSuggestions(message) {
+      const hitl = message.hitl || {};
+      const suggestions = Array.isArray(hitl.suggested_responses) ? hitl.suggested_responses : [];
+      if (!suggestions.length || !isHitlActionAllowed(hitl, "respond")) {
+        return "";
+      }
+      return (
+        '<div class="hitl-choice-list">' +
+          suggestions.map(function (suggestion, index) {
+            const label = suggestion.label || suggestion.value || suggestion.suggestion_id;
+            const description = suggestion.description || suggestion.value || "";
+            return (
+              '<button class="hitl-choice" type="button" data-hitl-suggestion="' + escapeHtml(message.id) + '" data-suggestion-id="' + escapeHtml(suggestion.suggestion_id) + '"' +
+                (state.resuming ? " disabled" : "") +
+              '>' +
+                '<span class="hitl-choice-index">' + escapeHtml(getChoiceIndex(index)) + '</span>' +
+                '<span class="hitl-choice-copy">' +
+                  '<strong>' + escapeHtml(label) + '</strong>' +
+                  (description ? '<span>' + escapeHtml(description) + '</span>' : "") +
+                '</span>' +
+              '</button>'
+            );
+          }).join("") +
+        '</div>'
+      );
+    }
+
+    function renderHitlDockFreeform(message) {
+      const hitl = message.hitl || {};
+      if (!hitl.allow_freeform_response || !isHitlActionAllowed(hitl, "respond")) {
+        return "";
+      }
+      return (
+        '<div class="hitl-dock-freeform">' +
+          '<textarea class="hitl-dock-input" data-hitl-input="' + escapeHtml(message.id) + '" placeholder="也可以直接输入补充信息..."' +
+            (state.resuming ? " disabled" : "") +
+          '></textarea>' +
+          '<button class="hitl-action primary" type="button" data-hitl-freeform="' + escapeHtml(message.id) + '"' + (state.resuming ? " disabled" : "") + '>提交</button>' +
+        '</div>'
+      );
+    }
+
+    function renderHitlDockActions(message) {
+      const hitl = message.hitl || {};
+      const actions = [];
+      if (isHitlActionAllowed(hitl, "approve")) {
+        actions.push(
+          '<button class="hitl-choice" type="button" data-hitl-action="' + escapeHtml(message.id) + '" data-action="approve"' + (state.resuming ? " disabled" : "") + '>' +
+            '<span class="hitl-choice-index">A</span>' +
+            '<span class="hitl-choice-copy"><strong>批准执行</strong><span>继续执行当前等待的工具或外部调用。</span></span>' +
+          '</button>'
+        );
+      }
+      if (isHitlActionAllowed(hitl, "reject")) {
+        actions.push(
+          '<button class="hitl-action danger" type="button" data-hitl-action="' + escapeHtml(message.id) + '" data-action="reject"' + (state.resuming ? " disabled" : "") + '>' +
+            '拒绝' +
+          '</button>'
+        );
+      }
+      if (!actions.length) {
+        return "";
+      }
+      if (isHitlActionAllowed(hitl, "approve")) {
+        return '<div class="hitl-choice-list">' + actions.join("") + '</div>';
+      }
+      return '<div class="hitl-dock-actions hitl-dock-reject">' + actions.join("") + '</div>';
+    }
+
+    function renderHitlDock() {
+      const message = getPendingHitlMessage();
+      const hitl = message && message.hitl ? message.hitl : null;
+      if (!message || !hitl || message.hitlStatus === "resolved") {
+        refs.hitlDock.innerHTML = "";
+        refs.hitlDock.classList.remove("is-visible");
+        refs.hitlDock.setAttribute("hidden", "");
+        return;
+      }
+
+      const question = hitl.reason || "需要你确认或补充信息后继续。";
+      refs.hitlDock.innerHTML = (
+        '<div class="hitl-dock-head">' +
+          '<div class="hitl-dock-title">' +
+            '<span>Human-in-the-Loop</span>' +
+            '<span class="hitl-status-chip">Waiting User</span>' +
+          '</div>' +
+          '<p class="hitl-dock-question">' + escapeHtml(question) + '</p>' +
+        '</div>' +
+        renderHitlDockSuggestions(message) +
+        renderHitlDockFreeform(message) +
+        renderHitlDockActions(message) +
+        renderHitlToolCall(hitl)
+      );
+      refs.hitlDock.removeAttribute("hidden");
+      refs.hitlDock.classList.add("is-visible");
+    }
+
+    function renderHitlCard(message) {
+      if (!message.hitl) {
+        return "";
+      }
+
+      const hitl = message.hitl;
+      const resolved = message.hitlStatus === "resolved";
+      const allowedActions = getHitlAllowedActions(hitl).map(formatHitlActionLabel).join(" / ") || "无";
+      return (
+        '<section class="support-card-inline hitl-card' + (resolved ? " is-resolved" : "") + '">' +
+          '<div class="support-head-inline">' +
+            '<h4>Human-in-the-Loop</h4>' +
+            '<span class="hitl-status-chip">' + (resolved ? "Resolved" : "Waiting User") + '</span>' +
+          '</div>' +
+          '<div class="support-body-inline">' +
+            '<div class="hitl-reason">' + escapeHtml(resolved ? "等待点已处理，本轮结果见下方最新回复。" : (hitl.reason || "需要人工处理后继续。")) + '</div>' +
+            '<div class="hitl-summary-grid">' +
+              '<div class="hitl-summary-item"><strong>类型</strong><span>' + escapeHtml(formatHitlPendingActionLabel(hitl.pending_action)) + '</span></div>' +
+              '<div class="hitl-summary-item"><strong>动作</strong><span>' + escapeHtml(allowedActions) + '</span></div>' +
+              '<div class="hitl-summary-item"><strong>等待点</strong><span>' + escapeHtml(hitl.interrupt_id || "-") + '</span></div>' +
+            '</div>' +
+            (resolved ? "" : renderHitlToolCall(hitl)) +
+            (resolved ? "" : renderHitlSuggestions(message)) +
+            (resolved ? "" : renderHitlFreeform(message)) +
+            (resolved ? "" : renderHitlActions(message)) +
+          '</div>' +
+        '</section>'
+      );
+    }
+
     function renderSupportBlocks(message) {
       if (message.role !== "assistant") {
         return "";
       }
       const promptText = message.sourcePrompt || "";
       const blocks = [];
+      if (message.hitl && message.hitlStatus === "resolved") {
+        blocks.push(renderHitlCard(message));
+      }
       if (state.activeScene === "ecommerce" && shouldShowOrderCard({ text: promptText })) {
         blocks.push(renderOrderCard(message));
       }
@@ -2229,6 +2808,7 @@
       if (!state.messages.length) {
         refs.chatFeed.innerHTML = renderWelcome();
         scrollToBottom();
+        renderHitlDock();
         renderTraceDrawer();
         return;
       }
@@ -2287,6 +2867,8 @@
       });
       bindKnowledgeToggles();
       bindTraceButtons();
+      renderHitlDock();
+      bindHitlControls();
       renderTraceDrawer();
       scrollToBottom();
     }
@@ -2304,6 +2886,36 @@
         button.addEventListener("click", function () {
           openTraceForMessage(button.getAttribute("data-trace-open"));
         });
+      });
+    }
+
+    function bindHitlControls() {
+      document.querySelectorAll("[data-hitl-suggestion]").forEach(function (button) {
+        button.addEventListener("click", function () {
+          resumeHitlWithSuggestion(
+            button.getAttribute("data-hitl-suggestion"),
+            button.getAttribute("data-suggestion-id")
+          );
+        });
+      });
+      document.querySelectorAll("[data-hitl-freeform]").forEach(function (button) {
+        button.addEventListener("click", function () {
+          resumeHitlWithFreeform(button.getAttribute("data-hitl-freeform"));
+        });
+      });
+      document.querySelectorAll("[data-hitl-action]").forEach(function (button) {
+        button.addEventListener("click", function () {
+          resumeHitlAction(
+            button.getAttribute("data-hitl-action"),
+            button.getAttribute("data-action")
+          );
+        });
+      });
+    }
+
+    function setHitlControlsDisabled(disabled) {
+      document.querySelectorAll("[data-hitl-suggestion], [data-hitl-freeform], [data-hitl-action], [data-hitl-input]").forEach(function (element) {
+        element.disabled = !!disabled;
       });
     }
 
@@ -2366,8 +2978,8 @@
       return data;
     }
 
-    async function streamChatRequest(payload, handlers) {
-      const response = await fetch(API_BASE_URL + "/chat", {
+    async function streamJsonRequest(path, payload, handlers) {
+      const response = await fetch(API_BASE_URL + path, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload)
@@ -2409,6 +3021,14 @@
       consumeSseBuffer(buffer, handlers, true);
     }
 
+    function streamChatRequest(payload, handlers) {
+      return streamJsonRequest("/chat", payload, handlers);
+    }
+
+    function streamResumeRequest(payload, handlers) {
+      return streamJsonRequest("/chat/resume", payload, handlers);
+    }
+
     function consumeSseBuffer(buffer, handlers, flush) {
       let normalized = String(buffer || "").replace(/\r\n/g, "\n");
       let separatorIndex = normalized.indexOf("\n\n");
@@ -2448,6 +3068,14 @@
       }
       if (event.event === "tool" && handlers && handlers.onTool) {
         handlers.onTool(event.data || {});
+        return;
+      }
+      if (event.event === "waiting_user" && handlers && handlers.onWaitingUser) {
+        handlers.onWaitingUser(event.data || {});
+        return;
+      }
+      if (event.event === "resume" && handlers && handlers.onResume) {
+        handlers.onResume(event.data || {});
         return;
       }
       if (event.event === "done" && handlers && handlers.onDone) {
@@ -2526,6 +3154,7 @@
       if (!keepMessages) {
         state.messages = [];
         state.activeTraceMessageId = "";
+        state.pendingHitl = null;
         setTraceDrawerOpen(false);
         renderMessages();
       }
@@ -2564,6 +3193,154 @@
       }
     }
 
+    function setPendingHitlFromEvent(data, messageId, sourcePrompt) {
+      const hitl = data && data.hitl ? data.hitl : null;
+      if (!hitl) {
+        return;
+      }
+      const sessionId = data.session_id || state.sessionId || hitl.thread_id || "";
+      state.sessionId = sessionId || state.sessionId;
+      state.pendingHitl = {
+        messageId: messageId,
+        sessionId: state.sessionId,
+        interruptId: hitl.interrupt_id,
+        hitl: hitl
+      };
+      updateSessionBadge();
+      updateMessage(messageId, {
+        text: hitl.reason || "需要人工处理后继续。",
+        hitl: hitl,
+        hitlStatus: "waiting",
+        knowledgeUsed: false,
+        scene: data.scene || state.activeScene,
+        sourcePrompt: sourcePrompt || "",
+        streaming: false
+      });
+      setServiceStatus(true);
+      setComposerStatus("等待人工处理后继续");
+    }
+
+    function resolvePendingHitl(messageId) {
+      state.pendingHitl = null;
+      if (messageId) {
+        updateMessage(messageId, { hitlStatus: "resolved" });
+      } else {
+        renderHitlDock();
+      }
+    }
+
+    function buildResumePayload(action, payload) {
+      const base = Object.assign({}, payload || {});
+      base.action = action;
+      if (!base.source && action === "respond") {
+        base.source = "freeform";
+      }
+      return base;
+    }
+
+    function addResumeResultMessage(data, sourcePrompt) {
+      const messageId = addMessage("assistant", data.answer || "当前等待点已处理。", {
+        citations: data.citations || [],
+        retrievalTrace: data.retrieval_trace || null,
+        knowledgeUsed: data.knowledge_used,
+        scene: state.activeScene,
+        sourcePrompt: sourcePrompt || "",
+        streaming: false
+      });
+      if (data.retrieval_trace) {
+        state.activeTraceMessageId = messageId;
+      }
+      return messageId;
+    }
+
+    async function resumeHitl(messageId, action, payload) {
+      const message = findMessage(messageId);
+      const hitl = message && message.hitl ? message.hitl : null;
+      if (!message || !hitl || state.resuming) {
+        return;
+      }
+      if (!isHitlActionAllowed(hitl, action)) {
+        showError("当前等待点不允许执行这个动作。");
+        return;
+      }
+
+      clearError();
+      state.resuming = true;
+      setInteractiveState();
+      setHitlControlsDisabled(true);
+      setComposerStatus("正在恢复等待点...");
+
+      let resumeCompleted = false;
+      try {
+        await streamResumeRequest({
+          session_id: state.sessionId || hitl.thread_id,
+          interrupt_id: hitl.interrupt_id,
+          action: action,
+          payload: buildResumePayload(action, payload),
+          stream: true
+        }, {
+          onResume: function () {
+            setComposerStatus("等待点已提交，正在继续执行...");
+          },
+          onDone: function (data) {
+            resumeCompleted = true;
+            state.sessionId = data.session_id || state.sessionId;
+            updateSessionBadge();
+            resolvePendingHitl(messageId);
+            addResumeResultMessage(data, message.sourcePrompt || "");
+            setServiceStatus(true);
+            setComposerStatus(data.knowledge_used ? "恢复完成，已命中知识" : "恢复完成");
+          },
+          onError: function (data) {
+            throw new Error((data && data.message) || "等待点恢复失败。");
+          }
+        });
+
+        if (!resumeCompleted) {
+          throw new Error("服务未返回 resume 完成事件。");
+        }
+      } catch (error) {
+        showError((error && error.message) || "等待点恢复失败，请稍后重试。");
+        setServiceStatus(false);
+        setComposerStatus("等待点恢复失败");
+      } finally {
+        state.resuming = false;
+        setInteractiveState();
+        setHitlControlsDisabled(false);
+      }
+    }
+
+    function resumeHitlWithSuggestion(messageId, suggestionId) {
+      const message = findMessage(messageId);
+      const suggestion = getHitlSuggestion(message && message.hitl, suggestionId);
+      if (!suggestion) {
+        showError("未找到这条建议，请刷新等待态后重试。");
+        return;
+      }
+      resumeHitl(messageId, "respond", {
+        source: "suggested_response",
+        suggestion_id: suggestionId
+      });
+    }
+
+    function resumeHitlWithFreeform(messageId) {
+      const input = getHitlInput(messageId);
+      const response = input ? input.value.trim() : "";
+      if (!response) {
+        showError("请先填写补充信息。");
+        return;
+      }
+      resumeHitl(messageId, "respond", {
+        source: "freeform",
+        response: response
+      });
+    }
+
+    function resumeHitlAction(messageId, action) {
+      const payload = action === "reject" ? { reason: "用户在测试台拒绝继续执行。" } : {};
+      resumeHitl(messageId, action, payload);
+    }
+
     async function sendMessage() {
       const text = refs.input.value.trim();
       if (!text || state.sending) {
@@ -2580,11 +3357,13 @@
 
       let assistantMessageId = "";
       let streamCompleted = false;
+      let waitingForUser = false;
 
       try {
         await streamChatRequest({
           message: text,
           session_id: state.sessionId || null,
+          hitl_clarification_enabled: refs.hitlClarificationToggle.checked && state.activeScene === "generic_assistant",
           stream: true,
           top_k: 4
         }, {
@@ -2627,6 +3406,20 @@
               state.activeTraceMessageId = assistantMessageId;
             }
           },
+          onWaitingUser: function (data) {
+            waitingForUser = true;
+            removeTyping();
+            resetStreamAnimation();
+            if (!assistantMessageId) {
+              assistantMessageId = addMessage("assistant", "", {
+                citations: [],
+                knowledgeUsed: false,
+                scene: data.scene || state.activeScene,
+                sourcePrompt: text
+              });
+            }
+            setPendingHitlFromEvent(data, assistantMessageId, text);
+          },
           onDone: async function (data) {
             streamCompleted = true;
             state.sessionId = data.session_id || state.sessionId;
@@ -2666,7 +3459,7 @@
           }
         });
 
-        if (!streamCompleted) {
+        if (!streamCompleted && !waitingForUser) {
           throw new Error("服务未返回完成事件。");
         }
       } catch (error) {

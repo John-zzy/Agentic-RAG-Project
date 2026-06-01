@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from inspect import Parameter, signature
@@ -17,13 +17,22 @@ from langchain_core.runnables.history import RunnableWithMessageHistory
 from backend.application.runtime.api.chat.prompts import build_rag_answer_prompt_template
 from backend.application.runtime.api.chat.schemas import (
     ChatRequest,
+    ChatResumeRequest,
+    ChatResumeResponse,
     ChatResponse,
     Citation,
+    HitlResumePayload,
+    HitlState,
     RetrievalTrace,
     RetrievalTraceRound,
     RetrievalTraceTopChunk,
 )
-from backend.application.runtime.graph_runtime import ChatGraphRuntime
+from backend.application.runtime.graph_runtime import (
+    ChatGraphRuntime,
+    HitlResumeError,
+    HitlResumeInput,
+    HitlWaitInput,
+)
 from backend.application.runtime.stream_events import (
     ChatStreamEvent,
     GraphRuntimeStreamEvent,
@@ -46,6 +55,11 @@ from backend.platform.memory.base.session_store import (
 from backend.platform.memory.chat.prompt_context import PromptContextBuilder
 from backend.platform.models.base.router import TaskComplexity
 from backend.platform.models.llm.client import ModelClient, model_client
+from backend.scenes.generic_assistant.hitl import (
+    GenericAssistantHitlOptions,
+    GenericAssistantHitlPlanner,
+    GenericAssistantHitlWaitPlan,
+)
 from backend.scenes.generic_assistant.definition import GenericAssistantBusinessExtension
 from backend.scenes.registry import build_default_scene_definitions
 
@@ -146,6 +160,7 @@ class PreparedChatTurn:
     final_decision: RuntimeFinalDecision | None = None
     follow_up_question: str | None = None
     answer_mode: AnswerMode = "fallback"
+    hitl_clarification_enabled: bool = False
 
 
 @dataclass(frozen=True)
@@ -1011,6 +1026,10 @@ class ChatService:
             scene_definition=scene_definition,
             retriever=self._retriever,
         )
+        self._generic_hitl_planner = GenericAssistantHitlPlanner.from_scene_metadata(
+            scene_definition.metadata,
+            suggestion_model=self.model,
+        )
         self._citation_mapper = CitationMapper()
         self._stream_event_mapper = GraphStreamEventMapper()
         self._answer_base_runnables: dict[TaskComplexity, Any] = {}
@@ -1018,12 +1037,25 @@ class ChatService:
     def chat(self, payload: ChatRequest) -> ChatResponse:
         """执行一次完整对话流程，并返回统一结构。"""
         prepared = self._prepare_chat_turn(payload)
+        hitl_response = self._try_create_hitl_wait_response(prepared)
+        if hitl_response is not None:
+            return hitl_response
         answer, citations = self._generate_answer(prepared)
         self._persist_turn(prepared=prepared, answer=answer, citations=citations)
         return self._build_chat_response(
             prepared=prepared,
             answer=answer,
             citations=citations,
+        )
+
+    def resume(self, payload: ChatResumeRequest) -> ChatResumeResponse:
+        """非流式恢复 HITL 等待点，并返回本次人工动作结果。"""
+        request_id = uuid4().hex
+        result = self._run_hitl_resume(payload=payload, request_id=request_id)
+        return self._build_resume_response(
+            payload=payload,
+            request_id=request_id,
+            result_state=result.state,
         )
 
     def chat_stream(self, payload: ChatRequest) -> Iterator[ChatStreamEvent]:
@@ -1047,6 +1079,14 @@ class ChatService:
             "retrieval_tool_result",
             self._build_tool_event(prepared),
         )
+
+        hitl_response = self._try_create_hitl_wait_response(prepared)
+        if hitl_response is not None:
+            yield self._map_graph_stream_event(
+                "human_waiting",
+                self._build_hitl_wait_event(hitl_response),
+            )
+            return
 
         try:
             if prepared.answer_mode != "evidence_answer":
@@ -1074,6 +1114,38 @@ class ChatService:
             prepared=prepared,
             answer=answer,
             citations=citations,
+        )
+        yield self._map_graph_stream_event("graph_run_succeeded", response.model_dump())
+
+    def resume_stream(self, payload: ChatResumeRequest) -> Iterator[ChatStreamEvent]:
+        """流式恢复 HITL 等待点，先通知 resume，再返回 done 或 error。"""
+        request_id = uuid4().hex
+        yield self._map_graph_stream_event(
+            "human_resume",
+            {
+                "session_id": payload.session_id,
+                "request_id": request_id,
+                "interrupt_id": payload.interrupt_id,
+                "action": payload.action,
+            },
+        )
+        try:
+            result = self._run_hitl_resume(payload=payload, request_id=request_id)
+        except ChatServiceError as exc:
+            yield self._map_graph_stream_event(
+                "graph_run_failed",
+                {
+                    "code": exc.code,
+                    "message": exc.message,
+                    "request_id": exc.request_id,
+                },
+            )
+            return
+
+        response = self._build_resume_response(
+            payload=payload,
+            request_id=request_id,
+            result_state=result.state,
         )
         yield self._map_graph_stream_event("graph_run_succeeded", response.model_dump())
 
@@ -1117,6 +1189,40 @@ class ChatService:
             )
         self.session_store.touch_session(session_id=session_id, now=timestamp)
 
+    def _ensure_resume_session_ready(
+            self,
+            *,
+            session_id: str,
+            timestamp: str,
+            request_id: str,
+            scene: str,
+    ) -> None:
+        """resume 只能恢复已有会话，不能静默创建新会话。"""
+        self.session_store.cleanup_expired_sessions(now=timestamp)
+        session = self.session_store.get_session(session_id)
+        if session is None:
+            raise ChatServiceError(
+                status_code=404,
+                code="SESSION_NOT_FOUND",
+                message="Session was not found. Please create a new session before continuing.",
+                request_id=request_id,
+            )
+        if session.status == "expired":
+            raise ChatServiceError(
+                status_code=409,
+                code="SESSION_EXPIRED",
+                message="Session has expired. Please create a new session before continuing.",
+                request_id=request_id,
+            )
+        if session.scene != scene:
+            raise ChatServiceError(
+                status_code=409,
+                code="SCENE_SESSION_MISMATCH",
+                message="Session is bound to a different scene. Please create a new session for this scene.",
+                request_id=request_id,
+            )
+        self.session_store.touch_session(session_id=session_id, now=timestamp)
+
     def _scene_metadata(self) -> SceneMetadata:
         """从场景定义中提取响应元数据。"""
         default_agent = self.scene_definition.metadata.get("default_agent")
@@ -1127,22 +1233,35 @@ class ChatService:
 
     def _prepare_chat_turn(self, payload: ChatRequest) -> PreparedChatTurn:
         """准备一次对话执行所需的共享上下文。"""
-
-        # 每次请求都生成独立 request_id，方便把日志、SSE 事件、checkpoint 串起来排查。
         request_id = uuid4().hex
-        # 如果前端没有传 session_id，就创建一个新会话 ID；传了就继续使用老会话。
         session_id = payload.session_id or uuid4().hex
-        # 同一轮请求内统一使用这个时间，避免消息表和轮次表时间不一致。
         timestamp = datetime.now(UTC).isoformat()
-        resolved_scene = self.scene_definition.scene
 
-        # 先确认会话可用：不存在就创建，过期或场景不匹配就直接报错。
+        # 普通 /chat 可以创建新会话，也可以续期旧会话。
         self._ensure_session_ready(
             session_id=session_id,
             timestamp=timestamp,
             request_id=request_id,
-            scene=resolved_scene,
+            scene=self.scene_definition.scene,
         )
+        return self._prepare_existing_session_turn(
+            session_id=session_id,
+            request_id=request_id,
+            timestamp=timestamp,
+            message=payload.message,
+            hitl_clarification_enabled=payload.hitl_clarification_enabled,
+        )
+
+    def _prepare_existing_session_turn(
+            self,
+            *,
+            session_id: str,
+            request_id: str,
+            timestamp: str,
+            message: str,
+            hitl_clarification_enabled: bool = False,
+    ) -> PreparedChatTurn:
+        """基于已存在的会话准备一轮检索上下文，供 /chat 和 HITL respond 复用。"""
         # 会话里记录了本轮允许使用哪些知识源，例如只查 documents，或同时查 ecommerce。
         session = self.session_store.get_session(session_id)
         mounted_knowledge_sources = (
@@ -1152,7 +1271,7 @@ class ChatService:
         )
         # 执行检索，并拿到候选文档、工具事件、检索 trace 和最终决策。
         retrieval_result = self._retrieval_executor.retrieve(
-            payload.message,
+            message,
             mounted_knowledge_sources=mounted_knowledge_sources,
         )
         # 先把检索候选转成 citation，后面再判断这些 citation 是否真的能被最终回答采用。
@@ -1183,7 +1302,7 @@ class ChatService:
             session_id=session_id,
             request_id=request_id,
             timestamp=timestamp,
-            user_message=payload.message,
+            user_message=message,
             documents=documents,
             tool_event=retrieval_result.tool_event,
             retrieval_trace=retrieval_trace,
@@ -1191,7 +1310,7 @@ class ChatService:
             knowledge_used=knowledge_used,
             scene_metadata=self._scene_metadata(),
             complexity=(
-                self.scene_definition.infer_complexity(payload.message)
+                self.scene_definition.infer_complexity(message)
                 if knowledge_used
                 else None
             ),
@@ -1201,6 +1320,7 @@ class ChatService:
                 final_decision=final_decision,
                 knowledge_used=knowledge_used,
             ),
+            hitl_clarification_enabled=hitl_clarification_enabled,
         )
 
     def _can_answer_with_evidence(
@@ -1254,6 +1374,216 @@ class ChatService:
         if final_decision == "ask_user":
             return "follow_up"
         return "fallback"
+
+    def _try_create_hitl_wait_response(self, prepared: PreparedChatTurn) -> ChatResponse | None:
+        """HITL 开启时，把 ask_user 追问改成等待用户补充。"""
+        planner = self._resolve_hitl_planner(prepared)
+        if not planner.should_wait_for_clarification(prepared):
+            return None
+        wait_plan = planner.build_clarification_wait(prepared)
+        result = self.graph_runtime.create_hitl_wait(
+            wait=self._build_hitl_wait_input(prepared=prepared, wait_plan=wait_plan),
+            interrupt_id=wait_plan.interrupt_id,
+        )
+        hitl_payload = result.state.get("hitl")
+        if hitl_payload is None:
+            raise ChatServiceError(
+                status_code=500,
+                code="HITL_WAIT_STATE_MISSING",
+                message="HITL waiting state was not created.",
+                request_id=prepared.request_id,
+            )
+        return self._build_hitl_wait_response(
+            prepared=prepared,
+            hitl=HitlState(**hitl_payload),
+        )
+
+    def _build_hitl_wait_input(
+            self,
+            *,
+            prepared: PreparedChatTurn,
+            wait_plan: GenericAssistantHitlWaitPlan,
+    ) -> HitlWaitInput:
+        """把 generic HITL 等待计划转换成 graph runtime 能保存的输入。"""
+        return HitlWaitInput(
+            session_id=prepared.session_id,
+            request_id=prepared.request_id,
+            reason=wait_plan.reason,
+            pending_action=wait_plan.pending_action,
+            allowed_actions=wait_plan.allowed_actions,
+            proposed_tool_call=wait_plan.proposed_tool_call,
+            suggested_responses=wait_plan.suggested_responses,
+            allow_freeform_response=wait_plan.allow_freeform_response,
+            metadata={
+                "scene": prepared.scene_metadata.scene,
+                "agent": prepared.scene_metadata.agent,
+                "answer_mode": prepared.answer_mode,
+                "final_decision": prepared.final_decision,
+                **dict(wait_plan.metadata or {}),
+            },
+        )
+
+    def _build_hitl_wait_response(
+            self,
+            *,
+            prepared: PreparedChatTurn,
+            hitl: HitlState,
+    ) -> ChatResponse:
+        """返回等待态响应；这里不生成模型答案，也不写最终对话轮次。"""
+        return ChatResponse(
+            session_id=prepared.session_id,
+            request_id=prepared.request_id,
+            answer=hitl.reason,
+            knowledge_used=False,
+            scene=prepared.scene_metadata.scene,
+            agent=prepared.scene_metadata.agent,
+            status="waiting_user",
+            hitl=hitl,
+            citations=[],
+            retrieval_trace=prepared.retrieval_trace.model_copy(
+                update={
+                    "citations": [],
+                    "knowledge_used": False,
+                    "top_k_chunks": [],
+                }
+            ),
+        )
+
+    def _resolve_hitl_planner(self, prepared: PreparedChatTurn) -> GenericAssistantHitlPlanner:
+        """优先使用本次请求显式打开的 HITL 澄清开关。"""
+        if not prepared.hitl_clarification_enabled:
+            return self._generic_hitl_planner
+        return GenericAssistantHitlPlanner(
+            GenericAssistantHitlOptions(clarification_enabled=True),
+            suggestion_model=self.model,
+        )
+
+    def _build_hitl_wait_event(self, response: ChatResponse) -> dict[str, Any]:
+        """构造 SSE waiting_user 事件，只暴露前端恢复所需的字段。"""
+        hitl = response.hitl.model_dump() if response.hitl is not None else None
+        return {
+            "session_id": response.session_id,
+            "request_id": response.request_id,
+            "status": response.status,
+            "hitl": hitl,
+        }
+
+    def _run_hitl_resume(
+            self,
+            *,
+            payload: ChatResumeRequest,
+            request_id: str,
+    ) -> Any:
+        """调用 graph runtime 恢复等待点，并把 runtime 错误转换成 API 错误。"""
+        timestamp = datetime.now(UTC).isoformat()
+        self._ensure_resume_session_ready(
+            session_id=payload.session_id,
+            timestamp=timestamp,
+            request_id=request_id,
+            scene=self.scene_definition.scene,
+        )
+        try:
+            return self.graph_runtime.resume_hitl(
+                resume=HitlResumeInput(
+                    session_id=payload.session_id,
+                    request_id=request_id,
+                    interrupt_id=payload.interrupt_id,
+                    action=payload.action,
+                    payload=payload.payload.model_dump(),
+                    metadata={
+                        "scene": self.scene_definition.scene,
+                        "agent": self._scene_metadata().agent,
+                    },
+                ),
+                approve_executor=self._execute_approved_scene_tool,
+                respond_handler=self._handle_clarification_response,
+            )
+        except HitlResumeError as exc:
+            raise ChatServiceError(
+                status_code=409,
+                code="HITL_RESUME_REJECTED",
+                message=str(exc),
+                request_id=request_id,
+            ) from exc
+
+    def _execute_approved_scene_tool(self, proposed_tool_call: Mapping[str, Any]) -> dict[str, Any]:
+        """执行用户批准的 scene 工具；只按等待态里记录的工具名和参数执行。"""
+        tool_name = str(proposed_tool_call.get("tool_name") or "").strip()
+        args = proposed_tool_call.get("args")
+        if not tool_name:
+            raise HitlResumeError("proposed_tool_call.tool_name is required.")
+        if not isinstance(args, Mapping):
+            raise HitlResumeError("proposed_tool_call.args must be an object.")
+
+        tools = {tool.name: tool for tool in self.scene_definition.build_tools()}
+        tool = tools.get(tool_name)
+        if tool is None:
+            raise HitlResumeError("proposed tool is not available in current scene.")
+
+        result = tool.invoke(dict(args))
+        if hasattr(result, "model_dump"):
+            return dict(result.model_dump())
+        if isinstance(result, Mapping):
+            return dict(result)
+        return {"tool_name": tool_name, "success": True, "result": result}
+
+    def _handle_clarification_response(self, resume_payload: Mapping[str, Any]) -> dict[str, Any]:
+        """用用户补充内容继续跑 generic 检索；没有证据时仍走原有 fallback。"""
+        session_id = str(resume_payload.get("session_id") or "").strip()
+        request_id = str(resume_payload.get("request_id") or "").strip()
+        response = str(resume_payload.get("response") or "").strip()
+        if not session_id or not request_id:
+            raise HitlResumeError("respond resume payload must include session_id and request_id.")
+
+        prepared = self._prepare_existing_session_turn(
+            session_id=session_id,
+            request_id=request_id,
+            timestamp=datetime.now(UTC).isoformat(),
+            message=response,
+        )
+        answer, citations = self._generate_answer_direct(prepared)
+        self._persist_turn(prepared=prepared, answer=answer, citations=citations)
+        return {
+            "status": "succeeded",
+            "answer": answer,
+            "knowledge_used": prepared.knowledge_used,
+            "citations": [citation.model_dump() for citation in citations],
+            "retrieval_trace": prepared.retrieval_trace.model_dump(),
+        }
+
+    def _build_resume_response(
+            self,
+            *,
+            payload: ChatResumeRequest,
+            request_id: str,
+            result_state: Mapping[str, Any],
+    ) -> ChatResumeResponse:
+        """把 graph runtime 的最新状态转换成 `/chat/resume` 响应体。"""
+        raw_hitl = result_state.get("hitl")
+        raw_resume_payload = result_state.get("hitl_resume")
+        return ChatResumeResponse(
+            session_id=payload.session_id,
+            request_id=request_id,
+            status=str(result_state.get("status") or "succeeded"),
+            answer=(
+                str(result_state.get("answer"))
+                if result_state.get("answer") is not None
+                else None
+            ),
+            knowledge_used=bool(result_state.get("knowledge_used", False)),
+            citations=list(result_state.get("citations") or []),
+            retrieval_trace=(
+                dict(result_state.get("retrieval_trace") or {})
+                if result_state.get("retrieval_trace")
+                else None
+            ),
+            hitl=HitlState(**raw_hitl) if isinstance(raw_hitl, Mapping) else None,
+            resume_payload=(
+                HitlResumePayload(**raw_resume_payload)
+                if isinstance(raw_resume_payload, Mapping)
+                else None
+            ),
+        )
 
     def _generate_answer(self, prepared: PreparedChatTurn) -> tuple[str, list[Citation]]:
         """根据准备结果生成最终答案。"""
@@ -1574,10 +1904,20 @@ class ActiveSceneChatService:
         scene = self.resolve_session_scene(payload.session_id)
         return self._get_scene_service(scene).chat(payload)
 
+    def resume(self, payload: ChatResumeRequest) -> ChatResumeResponse:
+        """将 HITL resume 请求转发给会话绑定的场景。"""
+        scene = self.resolve_session_scene(payload.session_id)
+        return self._get_scene_service(scene).resume(payload)
+
     def chat_stream(self, payload: ChatRequest) -> Iterator[ChatStreamEvent]:
         """将流式请求转发给会话绑定的场景。"""
         scene = self.resolve_session_scene(payload.session_id)
         yield from self._get_scene_service(scene).chat_stream(payload)
+
+    def resume_stream(self, payload: ChatResumeRequest) -> Iterator[ChatStreamEvent]:
+        """将流式 HITL resume 请求转发给会话绑定的场景。"""
+        scene = self.resolve_session_scene(payload.session_id)
+        yield from self._get_scene_service(scene).resume_stream(payload)
 
     def delete_session(self, session_id: str) -> int:
         """由 application facade 编排 session 与 LangGraph thread 的一致清理。"""

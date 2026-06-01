@@ -16,6 +16,7 @@
 - 主要入参：
   - Body `message`: 用户输入文本，必填，1-4000 字符。
   - Body `session_id`: 会话 ID，可选；不传时由服务侧按默认逻辑处理。
+  - Body `hitl_clarification_enabled`: 是否把 `generic_assistant` 的 `ask_user` 澄清分支转成 HITL 等待，默认 `false`；仅用于本次请求。
   - Body `stream`: 是否流式，布尔值；传 `false` 或不传时返回 JSON，传 `true` 时返回 `text/event-stream`。
 - 返回结构：
   - 非流式 `stream=false`：
@@ -25,14 +26,17 @@
     - `knowledge_used`: 是否使用了知识检索结果。
     - `scene`: 当前响应所属场景。
     - `agent`: 代理/角色标识，可为空。
+    - `status`: 可选 runtime 状态；普通完成请求为空，HITL 等待时为 `"waiting_user"`，resume 后可为 `"succeeded"`。
+    - `hitl`: 可选 HITL 等待态；非等待场景为空。等待态包含 `interrupt_id`、`thread_id`、`reason`、`pending_action`、`proposed_tool_call`、`allowed_actions`、`suggested_responses`、`allow_freeform_response`、`resume_payload`。
     - `citations`: 统一引用列表，每项包含 `index`、`citation_id`、`namespace`、`source_kind`、`source_name`、`source_path`、`document_id`、`chunk_id`、`chunk_index`、`snippet`、`score`、`vector_score`、`keyword_score`、`vector_rank`、`keyword_rank`、`matched_by`、`rank`。
   - 流式 `stream=true`：
     - 响应头为 `Content-Type: text/event-stream`。
-    - 事件类型为 `start`、`history`、`tool`、`chunk`、`done`、`error`，且 `data` 一律为 JSON。
+    - 事件类型为 `start`、`history`、`tool`、`chunk`、`waiting_user`、`done`、`error`，且 `data` 一律为 JSON。
     - `start.data` 包含 `session_id`、`request_id`、`knowledge_used`、`scene`、`agent`。
     - `history.data` 包含 `session_id`、`request_id`、`window_size`、`message_count`、`messages`，用于暴露本轮注入模型前的历史消息窗口；`messages` 每项包含 `type` 与 `content`。
     - `tool.data` 包含 retrieval 阶段的结构化结果，固定补充 `session_id`、`request_id`、`knowledge_used`、`citations`；当前常见字段还包括 `stage`、`mode`、`retrieval_policy`、`candidate_tools`、`documents`、`rounds`。
     - `chunk.data` 包含 `delta`，表示最终回答文本增量。
+    - `waiting_user.data` 包含 `session_id`、`request_id`、`status="waiting_user"`、`hitl`；客户端需要使用 `hitl.interrupt_id` 调用 `/chat/resume`。
     - `done.data` 与非流式 `ChatResponse` 结构一致，客户端应以 `done.answer` 作为最终权威文本。
     - `error.data` 包含 `code`、`message`、`request_id`。
 
@@ -43,7 +47,45 @@
 - `tool.data.retrieval_policy` 只包含可观测的策略配置摘要：`top_k`、`min_relevance_score`、`recall_strategy`、`no_hit_strategy`、`rerank_enabled`、`rerank_top_n`。
 - 命中知识时，成功路径事件顺序通常为 `start -> history -> tool -> chunk... -> done`。
 - 无知识命中时，仍返回 SSE 成功态，事件顺序为 `start -> history -> tool -> chunk -> done`，其中 `tool.documents = 0`，`done.knowledge_used = false`。
+- HITL 澄清等待路径事件顺序为 `start -> history -> tool -> waiting_user`，不会在等待用户时生成 `chunk` 或 `done`。
 - 失败路径事件顺序为 `start -> history -> tool -> error`。
+
+### `POST /chat/resume`
+
+- 一句话说明：恢复一个正在等待用户处理的 HITL 会话，当前用于 `generic_assistant` 的工具审批、外部 API 审批和 `ask_user` 澄清。
+- 主要入参：
+  - Body `session_id`: 需要恢复的会话 ID，必填。
+  - Body `interrupt_id`: `/chat` 返回的当前等待点 ID，必填；必须匹配该 session 最新 checkpoint 中的等待点。
+  - Body `action`: 人工动作，支持 `approve`、`reject`、`respond`；`edit` 仅保留协议占位，首轮不支持。
+  - Body `payload`: 动作输入，可选。`respond` 使用 `response`、`source`、`suggestion_id`；`reject/approve` 可带 `reason`。
+  - Body `stream`: 是否流式恢复，布尔值；传 `true` 时返回 SSE。
+- 返回结构：
+  - `session_id`: 被恢复的会话 ID。
+  - `request_id`: 本次 resume 请求 ID。
+  - `status`: resume 后状态，正常完成时为 `"succeeded"`。
+  - `answer`: resume 后形成的最终说明或回答；`reject` 会明确说明未执行待审批调用。
+  - `knowledge_used`: resume 后结果是否使用知识证据。
+  - `citations`: resume 后结果使用的引用；无证据、拒绝或审批说明时为空。
+  - `retrieval_trace`: `respond` 继续检索时返回的 trace；审批 approve/reject 可为空。
+  - `hitl`: 如果恢复后仍等待用户则返回新等待态；当前最小闭环通常为空。
+  - `resume_payload`: 已接受的人工输入，用于审计；会记录 `action`、`session_id`、`interrupt_id`、`request_id`、`source`、`suggestion_id`、`response` 等字段。
+- 流式 `stream=true`：
+  - 响应头为 `Content-Type: text/event-stream`。
+  - 成功路径事件顺序为 `resume -> done`。
+  - `resume.data` 包含 `session_id`、`request_id`、`interrupt_id`、`action`。
+  - `done.data` 与非流式 `ChatResumeResponse` 结构一致。
+  - 失败路径事件顺序为 `resume -> error`。
+- 常见错误：
+  - `404 SESSION_NOT_FOUND`: 会话不存在，resume 不会自动创建会话。
+  - `409 SESSION_EXPIRED`: 会话已过期。
+  - `409 SCENE_SESSION_MISMATCH`: 会话绑定场景与当前服务不一致。
+  - `409 HITL_RESUME_REJECTED`: `interrupt_id` 不是当前等待点、等待点已消费、动作不允许，或 `edit` 尚未支持。
+
+补充说明：
+
+- `pending_action=clarification` 时，`allowed_actions` 通常为 `["respond", "reject"]`，并可返回 `suggested_responses` 和 `allow_freeform_response=true`。
+- `pending_action=tool_approval` 或 `external_api_approval` 时，`allowed_actions` 通常为 `["approve", "reject"]`，会返回 `proposed_tool_call`，但不会返回澄清建议。
+- `respond` 会使用用户补充内容继续执行 generic 检索；如果仍无证据，会沿用原有 no-hit / ask_user fallback 边界，不伪造 citations。
 
 ### `GET /scenes`
 

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -10,9 +10,109 @@ class ChatRequest(BaseModel):
 
     message: str = Field(min_length=1, max_length=4000, description="用户本轮输入的问题。")
     session_id: str | None = Field(default=None, description="会话 ID，不传时由服务端自动创建。")
+    hitl_clarification_enabled: bool = Field(
+        default=False,
+        description="是否把 generic_assistant 的 ask_user 分支转成 HITL 等待用户补充。",
+    )
     stream: bool = Field(
         default=False,
         description="是否请求流式输出；为 true 时返回 SSE，仅最终回答阶段按 chunk 推送。",
+    )
+
+
+ChatRuntimeStatus = Literal["running", "waiting_user", "succeeded", "failed"]
+HitlPendingAction = Literal["tool_approval", "external_api_approval", "clarification"]
+HitlAllowedAction = Literal["approve", "edit", "reject", "respond"]
+HitlResumeSource = Literal["suggested_response", "freeform", "system"]
+
+
+class HitlSuggestedResponse(BaseModel):
+    """需要用户补充信息时，后端给出的一个可选答案。"""
+
+    suggestion_id: str = Field(description="建议项 ID，用来记录用户选了哪一项。")
+    label: str = Field(description="建议项短标签，供前端按钮或列表展示。")
+    value: str = Field(description="用户选择该建议后，实际提交的文本。")
+    description: str | None = Field(default=None, description="建议项的可选说明。")
+    metadata: dict[str, Any] = Field(default_factory=dict, description="建议项扩展信息。")
+
+
+class HitlResumePayload(BaseModel):
+    """用户处理等待任务时提交的内容。"""
+
+    action: HitlAllowedAction | None = Field(default=None, description="本次人工动作。")
+    session_id: str | None = Field(default=None, description="本次 resume 所属会话 ID。")
+    interrupt_id: str | None = Field(default=None, description="本次恢复的等待点 ID。")
+    request_id: str | None = Field(default=None, description="本次 resume 请求 ID。")
+    reason: str | None = Field(default=None, description="人工操作原因或备注。")
+    edited_args: dict[str, Any] | None = Field(default=None, description="edit 动作后的工具参数。")
+    response: str | None = Field(default=None, description="respond 动作的用户补充内容。")
+    source: HitlResumeSource | None = Field(default=None, description="respond 内容来源。")
+    suggestion_id: str | None = Field(default=None, description="被选择的建议项 ID。")
+    metadata: dict[str, Any] = Field(default_factory=dict, description="resume 扩展信息。")
+
+
+class HitlState(BaseModel):
+    """返回给前端的等待用户处理状态。"""
+
+    interrupt_id: str = Field(description="当前等待点 ID，恢复时必须带回这个 ID。")
+    thread_id: str = Field(description="LangGraph thread ID，当前等同于 session_id。")
+    reason: str = Field(description="为什么需要用户处理。")
+    pending_action: HitlPendingAction = Field(description="当前在等用户处理什么事情。")
+    proposed_tool_call: dict[str, Any] | None = Field(
+        default=None,
+        description="待审批工具调用摘要；澄清场景为空。",
+    )
+    allowed_actions: list[HitlAllowedAction] = Field(
+        default_factory=list,
+        description="当前等待态允许执行的人类动作。",
+    )
+    suggested_responses: list[HitlSuggestedResponse] = Field(
+        default_factory=list,
+        description="ask_user 澄清场景的建议补充项；审批场景应为空。",
+    )
+    allow_freeform_response: bool = Field(
+        default=False,
+        description="是否允许用户自由输入补充信息。",
+    )
+    resume_payload: HitlResumePayload | None = Field(
+        default=None,
+        description="已恢复时记录的人工输入；初始等待态为空。",
+    )
+
+
+class ChatResumeRequest(BaseModel):
+    """用户处理等待任务后，提交给 resume 接口的请求体。"""
+
+    session_id: str = Field(description="需要恢复的会话 ID。")
+    interrupt_id: str = Field(description="需要恢复的 HITL 等待点 ID。")
+    action: HitlAllowedAction = Field(description="本次人工动作。")
+    payload: HitlResumePayload = Field(
+        default_factory=HitlResumePayload,
+        description="本次人工动作携带的输入。",
+    )
+    stream: bool = Field(default=False, description="是否请求流式 resume 输出。")
+
+
+class ChatResumeResponse(BaseModel):
+    """resume 接口的响应体。"""
+
+    session_id: str = Field(description="被恢复的会话 ID。")
+    request_id: str = Field(description="本次 resume 请求 ID。")
+    status: ChatRuntimeStatus = Field(description="resume 后的 runtime 状态。")
+    answer: str | None = Field(default=None, description="resume 后形成的最终说明或回答。")
+    knowledge_used: bool = Field(default=False, description="resume 后的结果是否使用知识证据。")
+    citations: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description="resume 后结果使用的引用；无证据或拒绝时为空。",
+    )
+    retrieval_trace: dict[str, Any] | None = Field(
+        default=None,
+        description="respond 继续检索时的 trace；审批 approve/reject 可为空。",
+    )
+    hitl: HitlState | None = Field(default=None, description="仍在等待时的 HITL 状态。")
+    resume_payload: HitlResumePayload | None = Field(
+        default=None,
+        description="已接受的人工恢复输入，用于 resume 审计。",
     )
 
 
@@ -142,6 +242,14 @@ class ChatResponse(BaseModel):
     knowledge_used: bool = Field(description="本轮是否使用了知识检索结果。")
     scene: str = Field(description="本轮回答所属场景。")
     agent: str | None = Field(default=None, description="场景使用的代理标识，没有则为空。")
+    status: ChatRuntimeStatus | None = Field(
+        default=None,
+        description="可选 runtime 状态；普通完成请求可为空，HITL 等待时为 waiting_user。",
+    )
+    hitl: HitlState | None = Field(
+        default=None,
+        description="可选 HITL 等待态；非人工等待场景为空。",
+    )
     citations: list[Citation] = Field(default_factory=list, description="结构化引用列表。")
     retrieval_trace: RetrievalTrace | None = Field(
         default=None,

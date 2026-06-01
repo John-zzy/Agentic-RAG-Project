@@ -23,6 +23,7 @@ from backend.platform.rag.pre_retrieval.query_rewrite_validator import QueryRewr
 from backend.platform.rag.retrieval.documents import DocumentRetrievalService
 from backend.platform.rag.retrieval.documents.filters import DOCUMENT_MINIMUM_RELEVANCE
 from backend.platform.tools import build_retrieval_tool, build_scene_structured_tool
+from backend.scenes.generic_assistant.hitl import GenericAssistantHitlOptions
 from backend.scenes.base import (
     SceneBootstrapResult,
     SceneDefinition,
@@ -32,6 +33,8 @@ from backend.scenes.base import (
 from backend.scenes.generic_assistant.tools import (
     GENERIC_DOCUMENT_KNOWLEDGE_SOURCE,
     GENERIC_DOCUMENT_TOOL_NAME,
+    GenericHitlFakeExternalApiTool,
+    GenericHitlFakeWriteTool,
     KnowledgeDocumentSearchTool,
 )
 
@@ -438,11 +441,17 @@ def build_generic_assistant_scene_definition(
         document_retrieval_service: DocumentRetrievalService | None = None,
         retrieval_policy: SceneRetrievalPolicy = GENERIC_ASSISTANT_RETRIEVAL_POLICY,
         max_rounds: int = 3,
+        hitl_clarification_enabled: bool = False,
+        include_hitl_test_tools: bool = False,
 ) -> SceneDefinition:
     """构建通用知识助手场景定义。"""
     current_settings = app_settings or settings
     resolved_retrieval_policy = retrieval_policy
     resolved_business_extensions = tuple(business_extensions)
+    hitl_options = GenericAssistantHitlOptions(
+        clarification_enabled=hitl_clarification_enabled,
+        test_tools_enabled=include_hitl_test_tools,
+    )
     resolved_document_retrieval_service = document_retrieval_service or DocumentRetrievalService(
         app_settings=current_settings,
         vector_repository=VectorStoreFactory.create_document_chunk_vector_repository(current_settings),
@@ -458,13 +467,10 @@ def build_generic_assistant_scene_definition(
             retrieval_policy=resolved_retrieval_policy,
             max_rounds=max_rounds,
         ),
-        build_tools=lambda: (
-            build_scene_structured_tool(
-                _build_knowledge_document_search_tool(
-                    document_retrieval_service=resolved_document_retrieval_service,
-                    retrieval_policy=resolved_retrieval_policy,
-                )
-            ),
+        build_tools=lambda: _build_generic_scene_tools(
+            document_retrieval_service=resolved_document_retrieval_service,
+            retrieval_policy=resolved_retrieval_policy,
+            include_hitl_test_tools=hitl_options.test_tools_enabled,
         ),
         candidate_retrieval_tools_resolver=lambda mounted_knowledge_sources: (
             _resolve_candidate_retrieval_tools(
@@ -487,6 +493,7 @@ def build_generic_assistant_scene_definition(
             ),
             "default_agent": None,
             "prompt_style": "generic_knowledge_assistant",
+            "hitl": hitl_options.to_metadata(),
         },
     )
 
@@ -565,6 +572,31 @@ def _build_knowledge_document_search_tool(
         default_min_relevance_score=retrieval_policy.min_relevance_score,
         default_recall_strategy=retrieval_policy.recall_strategy,
     )
+
+
+def _build_generic_scene_tools(
+        *,
+        document_retrieval_service: DocumentRetrievalService,
+        retrieval_policy: SceneRetrievalPolicy,
+        include_hitl_test_tools: bool,
+) -> tuple[Any, ...]:
+    """组装 generic_assistant 的结构化工具；HITL 测试工具默认不启用。"""
+    tools = [
+        build_scene_structured_tool(
+            _build_knowledge_document_search_tool(
+                document_retrieval_service=document_retrieval_service,
+                retrieval_policy=retrieval_policy,
+            )
+        )
+    ]
+    if include_hitl_test_tools:
+        tools.extend(
+            [
+                build_scene_structured_tool(GenericHitlFakeWriteTool()),
+                build_scene_structured_tool(GenericHitlFakeExternalApiTool()),
+            ]
+        )
+    return tuple(tools)
 
 
 def _resolve_candidate_retrieval_tools(
