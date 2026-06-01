@@ -1,0 +1,58 @@
+请使用 subagents 协作完成 OpenSpec change：add-langgraph-runtime-skeleton 的剩余任务开发、测试和代码 review。
+
+要求：
+1. 严格遵循 OpenSpec artifacts：
+   - openspec/changes/add-langgraph-runtime-skeleton/proposal.md
+   - openspec/changes/add-langgraph-runtime-skeleton/design.md
+   - openspec/changes/add-langgraph-runtime-skeleton/specs/**
+   - openspec/changes/add-langgraph-runtime-skeleton/tasks.md
+2. 先运行：
+   openspec status --change "add-langgraph-runtime-skeleton" --json
+   openspec instructions apply --change "add-langgraph-runtime-skeleton" --json
+3. 只实现 tasks.md 中尚未完成的任务，完成一项立即把对应 checkbox 从 [ ] 改成 [x]。
+4. 代码必须满足：
+   - 必要过程写中文注释
+   - 单一职责原则
+   - 重构要彻底，不写兼容式绕路代码来增加耦合
+   - 遵守 backend/platform、backend/application、backend/scenes 的分层边界
+   - SQLiteSessionStore 不反向依赖 LangGraph runtime
+5. 使用 subagents 分工：
+   - implementation agent：实现当前待办任务，保持改动聚焦
+   - test agent：补充或修正单元测试、回归测试，并运行指定 pytest
+   - review agent：以 code review 视角检查 bug、耦合、边界破坏、缺失测试和 OpenSpec 偏差
+6. 每轮开发流程：
+   - 读取相关代码和 OpenSpec 上下文
+   - 实现最小必要改动
+   - 运行相关测试
+   - review agent 输出 findings
+   - 根据 findings 修复
+   - 更新 tasks.md
+7. 完成后运行：
+   backend\.venv\Scripts\python.exe -m pytest backend\tests\test_langgraph_checkpointer.py backend\tests\test_langgraph_runtime.py -q -c backend\tests\pytest.ini
+   backend\.venv\Scripts\python.exe -m pytest backend\tests\test_chat_api.py backend\tests\test_session_store.py backend\tests\test_eval_assets.py -q -c backend\tests\pytest.ini
+   openspec validate add-langgraph-runtime-skeleton
+8. 最终输出：
+   - 完成了哪些 task
+   - 修改了哪些关键文件
+   - 测试结果
+   - review 发现和修复摘要
+   - 若有未完成项，说明阻塞原因和下一步
+
+
+---
+
+
+请使用 subagents 协作完成 OpenSpec change `<change-name>` 的当前待办任务。
+
+流程：
+1. 先运行：
+   openspec status --change "<change-name>" --json
+   openspec instructions apply --change "<change-name>" --json
+2. 读取 proposal/design/specs/tasks，只实现 tasks.md 中未完成项。
+3. 使用 subagents：
+   - implementation agent：分析并实现最小必要改动，保持分层边界。
+   - test agent：补充/修正测试，运行相关 pytest。
+   - review agent：检查 bug、耦合、边界破坏、缺失测试和 OpenSpec 偏差。
+4. 每完成一项任务，立即把 checkbox 从 [ ] 改为 [x]。
+5. 代码要求：必要过程中文注释，单一职责，不写兼容式绕路代码，不破坏 platform/application/scenes 边界。
+6. 最终输出：完成 task、关键文件、测试结果、review findings 与修复摘要、未完成项和阻塞原因。

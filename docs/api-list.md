@@ -101,6 +101,7 @@
 - 返回结构：
   - `session_id`: 被删除的会话 ID。
   - `deleted_messages`: 被删除的消息数量。
+- 补充说明：服务端会同步清理该 `session_id` 对应的内部 LangGraph checkpoint thread；返回结构不暴露底层 checkpoint 细节。
 
 ## Evals
 

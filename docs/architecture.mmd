@@ -11,6 +11,8 @@ flowchart LR
         APP2["Runtime Bootstrap<br/>装配 chat service、knowledge services、scene registry"]
         APP3["ActiveSceneChatService<br/>按 session 解析 scene 并分发请求"]
         APP4["SceneRegistry<br/>注册 generic_assistant / ecommerce scene definitions"]
+        APP5["ChatGraphRuntime<br/>最小 answer graph / thread_id=session_id"]
+        APP6["GraphStreamEventMapper<br/>LangGraph 内部事件映射为 SSE 业务事件"]
     end
 
     subgraph SCENE["Scenes"]
@@ -35,14 +37,21 @@ flowchart LR
             RET1["VectorStoreDocument / VectorSearchResult"]
             RET2["EmbeddingStrategy / Vector Repository Contracts"]
         end
+        subgraph WF["platform.workflow.langgraph<br/>LangGraph Runtime Foundation"]
+            direction TB
+            WF1["RuntimeGraphState / Config<br/>session_id、request_id、messages、answer、trace"]
+            WF2["GraphRunLifecycleRecorder<br/>created / running / succeeded / failed"]
+            WF3["SQLiteLangGraphCheckpointer<br/>checkpoints / blobs / pending writes"]
+        end
         PL3["KnowledgeDocumentApplicationService / QueryService<br/>预处理预览、注册、重处理、重分块、查询"]
-        PL4["SQLiteSessionStore + PromptContextBuilder<br/>会话、历史、retrieval_snippets"]
+        PL4["SQLiteSessionStore + PromptContextBuilder<br/>sessions / chat_turns / chat_messages 兼容读模型"]
         PL5["Model Router / LLM Client<br/>按复杂度选择模型并生成回答"]
     end
 
     subgraph DATA["Data Stores"]
         direction TB
-        DB1["SQLite Session DB"]
+        DB1["SQLite Session DB<br/>sessions / chat_turns / chat_messages"]
+        DB5["SQLite LangGraph DB<br/>langgraph_checkpoints / blobs / writes"]
         DB2["Uploaded Files"]
         DB3["Chroma / Elasticsearch<br/>知识文档主记录与 chunks"]
         DB4["Ecommerce Demo JSON Data"]
@@ -60,6 +69,8 @@ flowchart LR
     APP1 --> APP3
     APP1 --> PL3
     APP3 --> APP4
+    APP3 --> APP5
+    APP3 --> APP6
     APP3 --> PL4
     APP3 --> PL5
 
@@ -85,4 +96,10 @@ flowchart LR
     PL3 --> DB2
     PL3 --> DB3
     PL4 --> DB1
+    APP5 --> WF1
+    APP5 --> WF2
+    APP5 --> WF3
+    APP5 -. 首次 graph run 从兼容读模型种子化 .-> PL4
+    APP6 -. 对外保持 start / history / tool / chunk / done / error .-> APP1
+    WF3 --> DB5
     PL5 --> EX1

@@ -35,7 +35,6 @@ from backend.scenes.generic_assistant.tools import (
     KnowledgeDocumentSearchTool,
 )
 
-
 GENERIC_ASSISTANT_RETRIEVAL_POLICY = SceneRetrievalPolicy(
     top_k=5,
     min_relevance_score=DOCUMENT_MINIMUM_RELEVANCE,
@@ -45,13 +44,11 @@ GENERIC_ASSISTANT_RETRIEVAL_POLICY = SceneRetrievalPolicy(
     rerank_top_n=None,
 )
 
-
 GENERIC_ASSISTANT_SYSTEM_PROMPT = (
     "你是一名通用知识助手。"
     "请优先依据检索到的文档上下文回答问题，回答要清晰、克制。"
     "当证据不足时，明确说明不确定，并提示用户补充更具体的文档主题、术语或背景。"
 )
-
 
 GENERIC_ASSISTANT_QUERY_REWRITE_PROMPT = PromptTemplate.from_template(
     """你是检索 query 改写器，只为下一轮知识库检索生成 query。
@@ -80,21 +77,21 @@ class QueryRewriteModelClient(Protocol):
     """定义 query rewrite 只需要依赖的模型客户端最小协议。"""
 
     def get_runnable(
-        self,
-        complexity: str = "simple",
-        prompt_template: Any | None = None,
-        *,
-        output_parser: Any | None = None,
+            self,
+            complexity: str = "simple",
+            prompt_template: Any | None = None,
+            *,
+            output_parser: Any | None = None,
     ) -> Any:
         """返回可执行的模型 runnable。"""
         ...
 
     def invoke_runnable(
-        self,
-        runnable: Any,
-        input: Any,
-        *,
-        config: Any | None = None,
+            self,
+            runnable: Any,
+            input: Any,
+            *,
+            config: Any | None = None,
     ) -> Any:
         """同步执行模型 runnable。"""
         ...
@@ -154,10 +151,10 @@ class GenericAssistantSufficiencyJudge(SufficiencyJudge):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     def invoke(
-        self,
-        input: RetrievalContext,
-        config: RunnableConfig | None = None,
-        **kwargs: Any,
+            self,
+            input: RetrievalContext,
+            config: RunnableConfig | None = None,
+            **kwargs: Any,
     ) -> SufficiencyDecision:
         """优先评估文档证据，再按扩展顺序决定是否接管。"""
         del config, kwargs
@@ -215,11 +212,11 @@ class GenericAssistantSufficiencyJudge(SufficiencyJudge):
         return None
 
     def _build_no_hit_decision(
-        self,
-        *,
-        query: str,
-        round_index: int,
-        max_rounds: int,
+            self,
+            *,
+            query: str,
+            round_index: int,
+            max_rounds: int,
     ) -> SufficiencyDecision:
         if not self._should_retry_retrieval(query):
             return SufficiencyDecision(
@@ -265,10 +262,10 @@ class GenericAssistantQueryRewriter(QueryRewriter):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     def invoke(
-        self,
-        input: RetrievalContext,
-        config: RunnableConfig | None = None,
-        **kwargs: Any,
+            self,
+            input: RetrievalContext,
+            config: RunnableConfig | None = None,
+            **kwargs: Any,
     ) -> QueryRewrite:
         """用 LLM 生成下一轮检索 query，失败时保守回退到归一化原 query。"""
         del kwargs
@@ -340,10 +337,10 @@ class GenericAssistantQueryRewriter(QueryRewriter):
         )
 
     def _build_prompt_variables(
-        self,
-        context: RetrievalContext,
-        *,
-        original_query: str,
+            self,
+            context: RetrievalContext,
+            *,
+            original_query: str,
     ) -> dict[str, str]:
         """构造 prompt 变量，避免 prompt 模板直接感知 RetrievalContext 结构。"""
         return {
@@ -389,12 +386,12 @@ class GenericAssistantQueryRewriter(QueryRewriter):
         }
 
     def _fallback_rewrite(
-        self,
-        original_query: str,
-        *,
-        reason: str,
-        fallback_reason: str,
-        preserved_tokens: tuple[str, ...],
+            self,
+            original_query: str,
+            *,
+            reason: str,
+            fallback_reason: str,
+            preserved_tokens: tuple[str, ...],
     ) -> QueryRewrite:
         """构造保守 fallback，保证 query rewrite 失败不会中断聊天链路。"""
         return QueryRewrite(
@@ -409,12 +406,12 @@ class GenericAssistantQueryRewriter(QueryRewriter):
         )
 
     def _build_metadata(
-        self,
-        *,
-        original_query: str,
-        fallback: bool,
-        fallback_reason: str | None,
-        preserved_tokens: tuple[str, ...],
+            self,
+            *,
+            original_query: str,
+            fallback: bool,
+            fallback_reason: str | None,
+            preserved_tokens: tuple[str, ...],
     ) -> dict[str, Any]:
         """统一输出 rewrite 诊断 metadata，保持 trace 可解释。"""
         return {
@@ -435,12 +432,12 @@ class GenericAssistantQueryRewriter(QueryRewriter):
 
 
 def build_generic_assistant_scene_definition(
-    app_settings: AppSettings | None = None,
-    *,
-    business_extensions: tuple[GenericAssistantBusinessExtension, ...] = (),
-    document_retrieval_service: DocumentRetrievalService | None = None,
-    retrieval_policy: SceneRetrievalPolicy = GENERIC_ASSISTANT_RETRIEVAL_POLICY,
-    max_rounds: int = 3,
+        app_settings: AppSettings | None = None,
+        *,
+        business_extensions: tuple[GenericAssistantBusinessExtension, ...] = (),
+        document_retrieval_service: DocumentRetrievalService | None = None,
+        retrieval_policy: SceneRetrievalPolicy = GENERIC_ASSISTANT_RETRIEVAL_POLICY,
+        max_rounds: int = 3,
 ) -> SceneDefinition:
     """构建通用知识助手场景定义。"""
     current_settings = app_settings or settings
@@ -508,11 +505,11 @@ def infer_generic_assistant_complexity(message: str) -> str:
 
 
 def _build_generic_agentic_retriever(
-    *,
-    document_retrieval_service: DocumentRetrievalService,
-    business_extensions: tuple[GenericAssistantBusinessExtension, ...],
-    retrieval_policy: SceneRetrievalPolicy,
-    max_rounds: int,
+        *,
+        document_retrieval_service: DocumentRetrievalService,
+        business_extensions: tuple[GenericAssistantBusinessExtension, ...],
+        retrieval_policy: SceneRetrievalPolicy,
+        max_rounds: int,
 ) -> AgenticRetriever:
     """为通用场景构建文档优先的 AgenticRetriever。"""
     tools = _build_docs_first_retrieval_tools(
@@ -532,10 +529,10 @@ def _build_generic_agentic_retriever(
 
 
 def _build_docs_first_retrieval_tools(
-    *,
-    document_retrieval_service: DocumentRetrievalService,
-    business_extensions: tuple[GenericAssistantBusinessExtension, ...],
-    retrieval_policy: SceneRetrievalPolicy,
+        *,
+        document_retrieval_service: DocumentRetrievalService,
+        business_extensions: tuple[GenericAssistantBusinessExtension, ...],
+        retrieval_policy: SceneRetrievalPolicy,
 ) -> tuple[RetrievalTool, ...]:
     """按 docs-only 默认边界组装主链工具，再按扩展顺序附加业务工具。"""
     tools: list[RetrievalTool] = [
@@ -557,9 +554,9 @@ def _build_docs_first_retrieval_tools(
 
 
 def _build_knowledge_document_search_tool(
-    *,
-    document_retrieval_service: DocumentRetrievalService,
-    retrieval_policy: SceneRetrievalPolicy,
+        *,
+        document_retrieval_service: DocumentRetrievalService,
+        retrieval_policy: SceneRetrievalPolicy,
 ) -> KnowledgeDocumentSearchTool:
     """构建文档检索工具实例；scene 只注入策略，不承载工具业务逻辑。"""
     return KnowledgeDocumentSearchTool(
@@ -571,9 +568,9 @@ def _build_knowledge_document_search_tool(
 
 
 def _resolve_candidate_retrieval_tools(
-    mounted_knowledge_sources: tuple[str, ...],
-    *,
-    business_extensions: tuple[GenericAssistantBusinessExtension, ...],
+        mounted_knowledge_sources: tuple[str, ...],
+        *,
+        business_extensions: tuple[GenericAssistantBusinessExtension, ...],
 ) -> tuple[str, ...]:
     """根据挂载知识源解析 generic scene 当前可用的候选检索工具。"""
     tool_names: list[str] = []
@@ -598,7 +595,7 @@ def _resolve_candidate_retrieval_tools(
 
 
 def _resolve_supported_knowledge_sources(
-    business_extensions: tuple[GenericAssistantBusinessExtension, ...],
+        business_extensions: tuple[GenericAssistantBusinessExtension, ...],
 ) -> tuple[str, ...]:
     """汇总 generic scene 自身与已注册扩展支持的知识源。"""
     resolved = [GENERIC_DOCUMENT_KNOWLEDGE_SOURCE]
@@ -612,7 +609,7 @@ def _resolve_supported_knowledge_sources(
 
 
 def _bootstrap_generic_scene(
-    business_extensions: tuple[GenericAssistantBusinessExtension, ...],
+        business_extensions: tuple[GenericAssistantBusinessExtension, ...],
 ) -> SceneBootstrapResult:
     """聚合已注册扩展的预热结果，避免 tool builder 承担 bootstrap 语义。"""
     metrics: dict[str, int] = {}

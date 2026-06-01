@@ -195,7 +195,15 @@ def get_session(
 def delete_session(session_id: str, request: Request) -> SessionDeleteResponse:
     """删除指定会话及其全部历史消息。"""
     service = _get_chat_service(request)
-    deleted_messages = service.session_store.delete_session(session_id=session_id)
+    if not hasattr(service, "delete_session"):
+        raise HTTPException(
+            status_code=500,
+            detail=_build_error_detail(
+                code="SERVICE_NOT_INITIALIZED",
+                message="Chat service does not support session deletion.",
+            ),
+        )
+    deleted_messages = service.delete_session(session_id=session_id)
     return SessionDeleteResponse(session_id=session_id, deleted_messages=deleted_messages)
 
 

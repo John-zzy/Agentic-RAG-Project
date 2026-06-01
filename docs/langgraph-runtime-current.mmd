@@ -1,0 +1,31 @@
+flowchart TB
+    USER["Client<br/>/chat 或 /sessions/{id}"] --> ROUTES["FastAPI Chat Routes<br/>backend/application/runtime/api/chat/routes.py"]
+
+    ROUTES --> ACTIVE["ActiveSceneChatService<br/>按 session 解析 scene"]
+    ACTIVE --> CHAT["ChatService<br/>准备检索、回答、持久化"]
+
+    CHAT --> PREP["PreparedChatTurn<br/>session_id / request_id / retrieval_trace / citations"]
+    PREP --> RETRIEVAL["RetrievalExecutor<br/>AgenticRetriever 或 Search Retriever"]
+    RETRIEVAL --> RAG["platform.rag<br/>query rewrite / retrieval / rerank / trace"]
+
+    PREP --> GRAPH["ChatGraphRuntime<br/>application 层 LangGraph facade"]
+    GRAPH --> CONFIG["build_runtime_graph_config<br/>thread_id=session_id<br/>metadata.request_id=request_id"]
+    GRAPH --> STATE["RuntimeGraphState<br/>messages / answer / knowledge_used / citations / retrieval_trace"]
+    GRAPH --> LIFECYCLE["GraphRunLifecycleRecorder<br/>created -> running -> succeeded/failed"]
+    GRAPH --> CHECKPOINTER["SQLiteLangGraphCheckpointer<br/>put / get_tuple / list / put_writes / delete_thread"]
+    CHECKPOINTER --> LGDB["langgraph.db<br/>langgraph_checkpoints / blobs / writes"]
+
+    GRAPH --> ANSWER["Minimal Answer Graph<br/>START -> answer -> END"]
+    ANSWER --> MODEL["Model Router / LLM Client<br/>生成最终回答"]
+
+    GRAPH -. "无 checkpoint 时" .-> HISTORY["SQLiteSessionStore<br/>从 chat_messages 加载旧历史作为 seed"]
+    CHAT --> READMODEL["SQLiteSessionStore.append_turn<br/>写 chat_turns + chat_messages 兼容读模型"]
+    READMODEL --> SESSIONDB["sessions.db<br/>sessions / chat_turns / chat_messages"]
+
+    CHAT --> STREAMMAP["GraphStreamEventMapper<br/>内部 graph event -> SSE 业务事件"]
+    STREAMMAP --> SSE["SSE Protocol<br/>start / history / tool / chunk / done / error"]
+
+    ROUTES --> DELETE["DELETE /sessions/{id}"]
+    DELETE --> CLEAN["service.delete_session<br/>先清理 graph thread"]
+    CLEAN --> CHECKPOINTER
+    CLEAN --> READMODEL

@@ -18,6 +18,7 @@ from backend.platform.memory.chat.prompt_context import PromptContextBuilder
 from backend.platform.rag.retrieval.documents import DocumentChunkRetrievalResult
 from backend.platform.rag.retrieval.documents.service import DocumentRetrievalService
 from backend.platform.search_foundation import VectorSearchResult, VectorStoreDocument
+from backend.platform.workflow.langgraph.config import DEFAULT_RUNTIME_CHECKPOINT_NS
 from backend.scenes.base import SceneDefinition, SceneFallbackPolicy, SceneRetrievalPolicy
 from backend.scenes.ecommerce.knowledge_service import create_knowledge_service
 from backend.tests.test_support import make_test_runtime_dir
@@ -1182,6 +1183,8 @@ def test_chat_api_sse_error_path_keeps_runtime_event_order() -> None:
     assert [event["event"] for event in events] == ["start", "history", "tool", "error"]
     error_payload = json.loads(events[-1]["data"])
     assert error_payload["code"] == "MODEL_EMPTY_RESPONSE"
+    assert error_payload["message"] == "Model returned empty response."
+    assert error_payload["request_id"] == json.loads(events[0]["data"])["request_id"]
 
 
 def test_chat_api_non_stream_response_and_session_persistence_do_not_regress() -> None:
@@ -1500,6 +1503,15 @@ def test_session_management_endpoints() -> None:
 
         chat_response = client.post("/chat", json={"message": "你好", "session_id": session_id})
         assert chat_response.status_code == 200
+        restored_checkpoint = service.graph_runtime.checkpointer.get_tuple(
+            {
+                "configurable": {
+                    "thread_id": session_id,
+                    "checkpoint_ns": DEFAULT_RUNTIME_CHECKPOINT_NS,
+                }
+            }
+        )
+        assert restored_checkpoint is not None
 
         populated_session_response = client.get(f"/sessions/{session_id}")
         assert populated_session_response.status_code == 200
@@ -1524,6 +1536,14 @@ def test_session_management_endpoints() -> None:
         after_delete_response = client.get(f"/sessions/{session_id}")
         assert after_delete_response.status_code == 200
         assert after_delete_response.json()["total_messages"] == 0
+        assert service.graph_runtime.checkpointer.get_tuple(
+            {
+                "configurable": {
+                    "thread_id": session_id,
+                    "checkpoint_ns": DEFAULT_RUNTIME_CHECKPOINT_NS,
+                }
+            }
+        ) is None
 
 
 def test_chat_api_rejects_expired_session() -> None:

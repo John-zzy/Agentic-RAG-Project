@@ -3,6 +3,7 @@
 本文基于以下来源整理项目核心数据模型：
 
 - 持久化表结构：`backend/platform/memory/base/session_store.py`
+- LangGraph checkpoint 表结构：`backend/platform/workflow/langgraph/checkpointer.py`
 - 知识文档模型：`backend/platform/knowledge/documents/*.py`、`backend/platform/knowledge/base/store.py`
 - API DTO：`backend/application/runtime/api/*/schemas.py`
 - 电商演示数据：`backend/data/orders.json`、`backend/data/products.json`、`backend/data/reviews.json`
@@ -13,8 +14,8 @@
 
 核心数据主要分为三类：
 
-1. SQLite 会话数据
-   - 用于聊天会话、轮次历史、LangChain message 历史。
+1. SQLite 会话与 Runtime 数据
+   - 用于聊天会话、轮次历史、LangChain message 兼容读模型，以及 LangGraph checkpoint 持久化。
 2. 知识文档索引数据
    - 用于知识文档主记录、版本信息、文档分块及向量检索元数据。
 3. 电商场景演示业务数据
@@ -62,7 +63,7 @@
 
 ### 3. `chat_messages`
 
-一句话说明：为 LangChain `BaseChatMessageHistory` 适配而持久化的消息级历史表。
+一句话说明：为 LangChain `BaseChatMessageHistory` 适配和 `/sessions/{session_id}` 响应保留的消息级兼容读模型。
 
 | 字段 | 类型 | 约束 | 说明 |
 | --- | --- | --- | --- |
@@ -77,6 +78,58 @@
 补充约束：
 
 - 唯一索引：`(session_id, request_id, sequence_index)`
+
+### LangGraph checkpoint tables
+
+一句话说明：LangGraph runtime 的持久化状态表，由 `SQLiteLangGraphCheckpointer` 在 `langgraph.db` 中创建，`thread_id` 固定使用聊天 `session_id`。
+
+这些表不反向依赖 `SQLiteSessionStore`。删除 session 时由 application runtime facade 先按 `thread_id=session_id` 清理 checkpoint，再删除 `sessions` / `chat_turns` / `chat_messages` 兼容读模型。
+
+#### `langgraph_checkpoints`
+
+保存每个 graph checkpoint 的主体 payload 和 metadata。
+
+| 字段 | 类型 | 约束 | 说明 |
+| --- | --- | --- | --- |
+| `thread_id` | `TEXT` | 复合 PK | LangGraph thread ID，当前等于聊天 `session_id`。 |
+| `checkpoint_ns` | `TEXT` | 复合 PK | checkpoint namespace，当前运行时使用默认 namespace。 |
+| `checkpoint_id` | `TEXT` | 复合 PK | checkpoint ID，用于读取最新或指定 checkpoint。 |
+| `parent_checkpoint_id` | `TEXT` | 可空 | 父 checkpoint ID。 |
+| `checkpoint_type` | `TEXT` |  | checkpoint 序列化类型。 |
+| `checkpoint_blob` | `BLOB` |  | checkpoint 主体序列化数据，不直接保存 channel values。 |
+| `metadata_type` | `TEXT` |  | metadata 序列化类型。 |
+| `metadata_blob` | `BLOB` |  | metadata 序列化数据，包含 `session_id`、`request_id` 等运行时元数据。 |
+| `created_at` | `TEXT` |  | 写入时间。 |
+
+#### `langgraph_blobs`
+
+保存 checkpoint 中按 channel/version 拆分的 channel values。
+
+| 字段 | 类型 | 约束 | 说明 |
+| --- | --- | --- | --- |
+| `thread_id` | `TEXT` | 复合 PK | LangGraph thread ID。 |
+| `checkpoint_ns` | `TEXT` | 复合 PK | checkpoint namespace。 |
+| `channel` | `TEXT` | 复合 PK | graph state channel 名称，如 `messages`、`answer`、`retrieval_trace`。 |
+| `version` | `TEXT` | 复合 PK | channel version。 |
+| `value_type` | `TEXT` |  | channel value 序列化类型；空值以 `empty` 标记。 |
+| `value_blob` | `BLOB` |  | channel value 序列化数据。 |
+
+#### `langgraph_writes`
+
+保存 LangGraph pending writes，便于 checkpoint 恢复。
+
+| 字段 | 类型 | 约束 | 说明 |
+| --- | --- | --- | --- |
+| `thread_id` | `TEXT` | 复合 PK | LangGraph thread ID。 |
+| `checkpoint_ns` | `TEXT` | 复合 PK | checkpoint namespace。 |
+| `checkpoint_id` | `TEXT` | 复合 PK | 对应 checkpoint ID。 |
+| `task_id` | `TEXT` | 复合 PK | LangGraph task ID。 |
+| `write_index` | `INTEGER` | 复合 PK | 同一 task 内的写入顺序。 |
+| `channel` | `TEXT` |  | 写入的 channel 名称。 |
+| `value_type` | `TEXT` |  | 写入值序列化类型。 |
+| `value_blob` | `BLOB` |  | 写入值序列化数据。 |
+| `task_path` | `TEXT` |  | LangGraph task path。 |
+| `created_at` | `TEXT` |  | 写入时间。 |
 
 ## 二、知识文档模型
 
@@ -769,6 +822,7 @@
 
 - `sessions` 1 对多 `chat_turns`
 - `sessions` 1 对多 `chat_messages`
+- `sessions.session_id` 逻辑关联 `langgraph_checkpoints.thread_id` / `langgraph_blobs.thread_id` / `langgraph_writes.thread_id`
 - `KnowledgeDocumentRecord` 1 对多 `KnowledgeDocumentVersion`
 - `KnowledgeDocumentRecord` 1 对多 `DocumentChunk`
 - `DocumentRecord` 1 对多 `ProcessedDocumentRecord`
@@ -784,6 +838,7 @@
 ## 六、建模备注
 
 - SQLite 只对 `sessions.session_id` 声明了物理主键；其余跨表关系目前是逻辑外键，不是数据库级约束。
+- LangGraph checkpoint 当前落在独立 `langgraph.db`，`thread_id=session_id` 是 runtime 约定，不是数据库级外键。
 - 知识文档的“版本”是嵌套在主记录里的版本数组，不是独立关系表。
 - 知识文档主记录和分块可落在 Chroma 或 Elasticsearch，因此字段是统一逻辑模型，不依赖单一后端。
 - 电商场景数据当前以 JSON 文件形式存在，更接近示例主数据而不是强约束事务模型。

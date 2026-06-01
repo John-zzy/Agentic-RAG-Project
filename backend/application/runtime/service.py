@@ -23,6 +23,13 @@ from backend.application.runtime.api.chat.schemas import (
     RetrievalTraceRound,
     RetrievalTraceTopChunk,
 )
+from backend.application.runtime.graph_runtime import ChatGraphRuntime
+from backend.application.runtime.stream_events import (
+    ChatStreamEvent,
+    GraphRuntimeStreamEvent,
+    GraphStreamEventName,
+    GraphStreamEventMapper,
+)
 from backend.platform.config.settings import AppSettings, settings
 from backend.platform.knowledge.sources import (
     DEFAULT_MOUNTED_KNOWLEDGE_SOURCES,
@@ -58,31 +65,31 @@ class RetrievalChainModel(Protocol):
     """定义运行时依赖的最小模型构建协议。"""
 
     def get_runnable(
-        self,
-        complexity: TaskComplexity = "simple",
-        prompt_template: Any | None = None,
-        *,
-        output_parser: Any | None = None,
+            self,
+            complexity: TaskComplexity = "simple",
+            prompt_template: Any | None = None,
+            *,
+            output_parser: Any | None = None,
     ) -> Any:
         """返回可供 runtime 执行的 LCEL runnable。"""
         ...
 
     def invoke_runnable(
-        self,
-        runnable: Any,
-        input: Any,
-        *,
-        config: Any | None = None,
+            self,
+            runnable: Any,
+            input: Any,
+            *,
+            config: Any | None = None,
     ) -> Any:
         """同步执行 runnable。"""
         ...
 
     def stream_runnable(
-        self,
-        runnable: Any,
-        input: Any,
-        *,
-        config: Any | None = None,
+            self,
+            runnable: Any,
+            input: Any,
+            *,
+            config: Any | None = None,
     ) -> Iterator[Any]:
         """流式执行 runnable。"""
         ...
@@ -151,14 +158,6 @@ class RuntimeRetrievalDecision:
     follow_up_question: str | None = None
 
 
-@dataclass(frozen=True)
-class ChatStreamEvent:
-    """描述一条待编码为 SSE 的聊天流事件。"""
-
-    event: str
-    data: dict[str, Any]
-
-
 class RetrievalExecutor:
     """负责执行 retriever 并返回统一的文档结果。"""
 
@@ -167,10 +166,10 @@ class RetrievalExecutor:
         self._retriever = retriever
 
     def retrieve(
-        self,
-        message: str,
-        *,
-        mounted_knowledge_sources: tuple[str, ...],
+            self,
+            message: str,
+            *,
+            mounted_knowledge_sources: tuple[str, ...],
     ) -> RetrievalExecutionResult:
         policy = self._scene_definition.retrieval_policy
         policy_summary = self._build_policy_summary(policy)
@@ -339,10 +338,10 @@ class RetrievalExecutor:
         raise TypeError("Retriever does not support document retrieval.")
 
     def _normalize_agentic_outcome(
-        self,
-        outcome: Any,
-        *,
-        documents: list[Document],
+            self,
+            outcome: Any,
+            *,
+            documents: list[Document],
     ) -> RuntimeRetrievalDecision:
         """从 Agentic outcome 中兼容读取字段，并归一化为 runtime 决策。"""
         raw_final_decision = getattr(outcome, "final_decision", None)
@@ -377,10 +376,10 @@ class RetrievalExecutor:
         return bool(value)
 
     def _normalize_simple_retrieval_result(
-        self,
-        *,
-        documents: list[Document],
-        exit_reason: str,
+            self,
+            *,
+            documents: list[Document],
+            exit_reason: str,
     ) -> RuntimeRetrievalDecision:
         """为旧 search/BaseRetriever 分支补齐与 Agentic 分支一致的 runtime 决策。"""
         success = True
@@ -398,12 +397,12 @@ class RetrievalExecutor:
         )
 
     def _normalize_runtime_final_decision(
-        self,
-        *,
-        success: bool,
-        exit_reason: str | None,
-        raw_final_decision: Any,
-        has_documents: bool,
+            self,
+            *,
+            success: bool,
+            exit_reason: str | None,
+            raw_final_decision: Any,
+            has_documents: bool,
     ) -> RuntimeFinalDecision:
         """把平台层检索动作转换成 `/chat` 可消费的最终业务语义。"""
         next_action = getattr(raw_final_decision, "next_action", None)
@@ -424,15 +423,15 @@ class RetrievalExecutor:
         return "no_evidence"
 
     def _resolve_follow_up_question(
-        self,
-        *,
-        outcome: Any,
-        raw_final_decision: Any,
+            self,
+            *,
+            outcome: Any,
+            raw_final_decision: Any,
     ) -> str | None:
         """按 outcome 优先、final_decision 兜底的顺序解析追问文本。"""
         for value in (
-            getattr(outcome, "follow_up_question", None),
-            getattr(raw_final_decision, "follow_up_question", None),
+                getattr(outcome, "follow_up_question", None),
+                getattr(raw_final_decision, "follow_up_question", None),
         ):
             if isinstance(value, str) and value.strip():
                 return value.strip()
@@ -473,13 +472,13 @@ class RetrievalExecutor:
         )
 
     def _build_simple_round_trace(
-        self,
-        *,
-        round_index: int,
-        tool_name: str,
-        query: str,
-        reason: str,
-        documents: list[Document],
+            self,
+            *,
+            round_index: int,
+            tool_name: str,
+            query: str,
+            reason: str,
+            documents: list[Document],
     ) -> RetrievalTraceRound:
         return RetrievalTraceRound(
             round_index=round_index,
@@ -500,18 +499,18 @@ class RetrievalExecutor:
         )
 
     def _build_retrieval_trace(
-        self,
-        *,
-        original_query: str,
-        final_query: str,
-        rewritten_query: str | None,
-        candidate_tools: tuple[str, ...],
-        exit_reason: str | None,
-        rounds: list[RetrievalTraceRound],
-        documents: list[Document],
-        success: bool | None = None,
-        final_decision: RuntimeFinalDecision | None = None,
-        follow_up_question: str | None = None,
+            self,
+            *,
+            original_query: str,
+            final_query: str,
+            rewritten_query: str | None,
+            candidate_tools: tuple[str, ...],
+            exit_reason: str | None,
+            rounds: list[RetrievalTraceRound],
+            documents: list[Document],
+            success: bool | None = None,
+            final_decision: RuntimeFinalDecision | None = None,
+            follow_up_question: str | None = None,
     ) -> RetrievalTrace:
         raw_candidates_count = sum(round_trace.raw_candidates_count or 0 for round_trace in rounds)
         filtered_candidates_count = sum(
@@ -555,11 +554,11 @@ class RetrievalExecutor:
         return chunks
 
     def _round_top_chunks(
-        self,
-        *,
-        document_trace: dict[str, Any],
-        rerank_trace: Any,
-        documents: list[Document],
+            self,
+            *,
+            document_trace: dict[str, Any],
+            rerank_trace: Any,
+            documents: list[Document],
     ) -> list[RetrievalTraceTopChunk]:
         if isinstance(rerank_trace, dict) and rerank_trace.get("enabled") is True:
             # 步骤 1：ReRank 边界开启后，轮次 trace 使用重排/截断后的最终证据顺序。
@@ -613,11 +612,11 @@ class RetrievalExecutor:
         return fallback
 
     def _resolve_source_name(
-        self,
-        *,
-        citation_id: str,
-        document_id: str | None,
-        metadata: dict[str, Any],
+            self,
+            *,
+            citation_id: str,
+            document_id: str | None,
+            metadata: dict[str, Any],
     ) -> str:
         source_path = self._resolve_optional_str(metadata.get("source_path"))
         if source_path:
@@ -683,9 +682,9 @@ class RetrievalExecutor:
         }
 
     def _build_supported_policy_kwargs(
-        self,
-        callable_obj: Any,
-        policy: SceneRetrievalPolicy,
+            self,
+            callable_obj: Any,
+            policy: SceneRetrievalPolicy,
     ) -> dict[str, Any]:
         try:
             parameters = signature(callable_obj).parameters
@@ -794,15 +793,15 @@ class CitationMapper:
         return f"{answer}\n\n参考来源：{markers}"
 
     def _build_citation(
-        self,
-        *,
-        index: int,
-        rank: int,
-        namespace: str,
-        citation_id: str,
-        snippet: str,
-        score: float | None,
-        metadata: dict[str, Any],
+            self,
+            *,
+            index: int,
+            rank: int,
+            namespace: str,
+            citation_id: str,
+            snippet: str,
+            score: float | None,
+            metadata: dict[str, Any],
     ) -> Citation:
         source_kind = self._resolve_source_kind(namespace=namespace, metadata=metadata)
         source_path = self._resolve_source_path(metadata)
@@ -840,11 +839,11 @@ class CitationMapper:
         )
 
     def _build_citation_key(
-        self,
-        *,
-        namespace: str,
-        metadata: dict[str, Any],
-        citation_id: str,
+            self,
+            *,
+            namespace: str,
+            metadata: dict[str, Any],
+            citation_id: str,
     ) -> tuple[str, str]:
         return self._build_citation_key_from_values(
             namespace=namespace,
@@ -854,12 +853,12 @@ class CitationMapper:
         )
 
     def _build_citation_key_from_values(
-        self,
-        *,
-        namespace: str,
-        chunk_id: str | None,
-        citation_id: str | None,
-        document_id: str | None,
+            self,
+            *,
+            namespace: str,
+            chunk_id: str | None,
+            citation_id: str | None,
+            document_id: str | None,
     ) -> tuple[str, str]:
         """用显式字段生成 citation lookup key，避免按列表位置错配。"""
         return namespace, chunk_id or citation_id or document_id or "unknown"
@@ -878,13 +877,13 @@ class CitationMapper:
         return source_kind_map.get(namespace, namespace)
 
     def _resolve_source_name(
-        self,
-        *,
-        source_kind: str,
-        citation_id: str,
-        source_path: str | None,
-        document_id: str | None,
-        metadata: dict[str, Any],
+            self,
+            *,
+            source_kind: str,
+            citation_id: str,
+            source_path: str | None,
+            document_id: str | None,
+            metadata: dict[str, Any],
     ) -> str:
         if source_kind == "document_chunk":
             if source_path:
@@ -986,13 +985,14 @@ class ChatService:
     """执行单个场景下的检索、生成和会话持久化流程。"""
 
     def __init__(
-        self,
-        *,
-        scene_definition: SceneDefinition,
-        app_settings: AppSettings | None = None,
-        session_store: SQLiteSessionStore | None = None,
-        context_builder: PromptContextBuilder | None = None,
-        model: RetrievalChainModel | None = None,
+            self,
+            *,
+            scene_definition: SceneDefinition,
+            app_settings: AppSettings | None = None,
+            session_store: SQLiteSessionStore | None = None,
+            context_builder: PromptContextBuilder | None = None,
+            model: RetrievalChainModel | None = None,
+            graph_runtime: ChatGraphRuntime | None = None,
     ) -> None:
         """初始化场景聊天服务依赖。"""
         self.settings = app_settings or settings
@@ -1002,6 +1002,7 @@ class ChatService:
             window_size=self.settings.session.window_size
         )
         self.model = model or model_client
+        self.graph_runtime = graph_runtime or ChatGraphRuntime.from_settings(self.settings)
         self._rag_answer_template = build_rag_answer_prompt_template(
             system_prompt=scene_definition.system_prompt
         )
@@ -1011,6 +1012,7 @@ class ChatService:
             retriever=self._retriever,
         )
         self._citation_mapper = CitationMapper()
+        self._stream_event_mapper = GraphStreamEventMapper()
         self._answer_base_runnables: dict[TaskComplexity, Any] = {}
 
     def chat(self, payload: ChatRequest) -> ChatResponse:
@@ -1027,9 +1029,9 @@ class ChatService:
     def chat_stream(self, payload: ChatRequest) -> Iterator[ChatStreamEvent]:
         """执行一次流式对话流程，并产出结构化事件。"""
         prepared = self._prepare_chat_turn(payload)
-        yield ChatStreamEvent(
-            event="start",
-            data={
+        yield self._map_graph_stream_event(
+            "graph_run_created",
+            {
                 "session_id": prepared.session_id,
                 "request_id": prepared.request_id,
                 "knowledge_used": prepared.knowledge_used,
@@ -1037,18 +1039,35 @@ class ChatService:
                 "agent": prepared.scene_metadata.agent,
             },
         )
-        yield ChatStreamEvent(event="history", data=self._build_history_event(prepared))
-        yield ChatStreamEvent(event="tool", data=self._build_tool_event(prepared))
+        yield self._map_graph_stream_event(
+            "history_snapshot",
+            self._build_history_event(prepared),
+        )
+        yield self._map_graph_stream_event(
+            "retrieval_tool_result",
+            self._build_tool_event(prepared),
+        )
 
-        if prepared.answer_mode != "evidence_answer":
-            answer, citations = self._build_non_evidence_answer(prepared)
-            yield ChatStreamEvent(event="chunk", data={"delta": answer})
-        else:
-            answer_parts: list[str] = []
-            for chunk in self._stream_model_answer(prepared):
-                answer_parts.append(chunk)
-                yield ChatStreamEvent(event="chunk", data={"delta": chunk})
-            answer, citations = self._finalize_streamed_answer(prepared, answer_parts)
+        try:
+            if prepared.answer_mode != "evidence_answer":
+                answer, citations = self._build_non_evidence_answer(prepared)
+                yield self._map_graph_stream_event("answer_chunk", {"delta": answer})
+            else:
+                answer_parts: list[str] = []
+                for chunk in self._stream_model_answer(prepared):
+                    answer_parts.append(chunk)
+                    yield self._map_graph_stream_event("answer_chunk", {"delta": chunk})
+                answer, citations = self._finalize_streamed_answer(prepared, answer_parts)
+        except ChatServiceError as exc:
+            yield self._map_graph_stream_event(
+                "graph_run_failed",
+                {
+                    "code": exc.code,
+                    "message": exc.message,
+                    "request_id": exc.request_id,
+                },
+            )
+            return
 
         self._persist_turn(prepared=prepared, answer=answer, citations=citations)
         response = self._build_chat_response(
@@ -1056,15 +1075,20 @@ class ChatService:
             answer=answer,
             citations=citations,
         )
-        yield ChatStreamEvent(event="done", data=response.model_dump())
+        yield self._map_graph_stream_event("graph_run_succeeded", response.model_dump())
+
+    def delete_session(self, session_id: str) -> int:
+        """清理 graph thread 后删除会话读模型，避免 memory 层依赖 workflow。"""
+        self.graph_runtime.delete_session_thread(session_id)
+        return self.session_store.delete_session(session_id=session_id)
 
     def _ensure_session_ready(
-        self,
-        *,
-        session_id: str,
-        timestamp: str,
-        request_id: str,
-        scene: str,
+            self,
+            *,
+            session_id: str,
+            timestamp: str,
+            request_id: str,
+            scene: str,
     ) -> None:
         """创建或续期当前会话。"""
         self.session_store.cleanup_expired_sessions(now=timestamp)
@@ -1103,45 +1127,58 @@ class ChatService:
 
     def _prepare_chat_turn(self, payload: ChatRequest) -> PreparedChatTurn:
         """准备一次对话执行所需的共享上下文。"""
+
+        # 每次请求都生成独立 request_id，方便把日志、SSE 事件、checkpoint 串起来排查。
         request_id = uuid4().hex
+        # 如果前端没有传 session_id，就创建一个新会话 ID；传了就继续使用老会话。
         session_id = payload.session_id or uuid4().hex
+        # 同一轮请求内统一使用这个时间，避免消息表和轮次表时间不一致。
         timestamp = datetime.now(UTC).isoformat()
         resolved_scene = self.scene_definition.scene
 
+        # 先确认会话可用：不存在就创建，过期或场景不匹配就直接报错。
         self._ensure_session_ready(
             session_id=session_id,
             timestamp=timestamp,
             request_id=request_id,
             scene=resolved_scene,
         )
+        # 会话里记录了本轮允许使用哪些知识源，例如只查 documents，或同时查 ecommerce。
         session = self.session_store.get_session(session_id)
         mounted_knowledge_sources = (
             session.mounted_knowledge_sources
             if session is not None
             else DEFAULT_MOUNTED_KNOWLEDGE_SOURCES
         )
+        # 执行检索，并拿到候选文档、工具事件、检索 trace 和最终决策。
         retrieval_result = self._retrieval_executor.retrieve(
             payload.message,
             mounted_knowledge_sources=mounted_knowledge_sources,
         )
+        # 先把检索候选转成 citation，后面再判断这些 citation 是否真的能被最终回答采用。
         candidate_documents = retrieval_result.documents
         candidate_citations = self._citation_mapper.citations_from_documents(candidate_documents)
+        # 只有“检索决策允许证据回答”并且“确实有有效引用”时，才算真正使用知识。
         knowledge_used = self._can_answer_with_evidence(
             final_decision=retrieval_result.final_decision,
             citations=candidate_citations,
         )
+        # 如果检索说可以回答但没有有效引用，这里会把最终决策收敛成 no_evidence。
         final_decision = self._resolve_prepared_final_decision(
             final_decision=retrieval_result.final_decision,
             knowledge_used=knowledge_used,
         )
+        # 非证据分支不能把候选文档和引用继续带进回答，避免模型误用未采纳的材料。
         documents = candidate_documents if knowledge_used else []
         citations = candidate_citations if knowledge_used else []
+        # 统一整理最终 trace：顶层只展示真正被采纳的 citations，诊断信息仍保留在 rounds。
         retrieval_trace = self._build_prepared_retrieval_trace(
             retrieval_trace=retrieval_result.retrieval_trace,
             citations=citations,
             knowledge_used=knowledge_used,
             final_decision=final_decision,
         )
+        # 把后续 JSON、SSE、LangGraph 和持久化都会用到的数据打成一个只读上下文对象。
         return PreparedChatTurn(
             session_id=session_id,
             request_id=request_id,
@@ -1167,21 +1204,21 @@ class ChatService:
         )
 
     def _can_answer_with_evidence(
-        self,
-        *,
-        final_decision: RuntimeFinalDecision | None,
-        citations: list[Citation],
+            self,
+            *,
+            final_decision: RuntimeFinalDecision | None,
+            citations: list[Citation],
     ) -> bool:
         """只允许最终决策和有效引用同时满足时进入证据回答链。"""
         return final_decision == "answer_with_evidence" and len(citations) > 0
 
     def _build_prepared_retrieval_trace(
-        self,
-        *,
-        retrieval_trace: RetrievalTrace,
-        citations: list[Citation],
-        knowledge_used: bool,
-        final_decision: RuntimeFinalDecision | None,
+            self,
+            *,
+            retrieval_trace: RetrievalTrace,
+            citations: list[Citation],
+            knowledge_used: bool,
+            final_decision: RuntimeFinalDecision | None,
     ) -> RetrievalTrace:
         """构造最终响应 trace，并保留轮次级诊断信息。"""
         return retrieval_trace.model_copy(
@@ -1195,10 +1232,10 @@ class ChatService:
         )
 
     def _resolve_prepared_final_decision(
-        self,
-        *,
-        final_decision: RuntimeFinalDecision | None,
-        knowledge_used: bool,
+            self,
+            *,
+            final_decision: RuntimeFinalDecision | None,
+            knowledge_used: bool,
     ) -> RuntimeFinalDecision | None:
         """将无有效 citation 的证据候选收敛为 no_evidence，保证 trace 解释最终分支。"""
         if final_decision == "answer_with_evidence" and not knowledge_used:
@@ -1206,10 +1243,10 @@ class ChatService:
         return final_decision
 
     def _resolve_answer_mode(
-        self,
-        *,
-        final_decision: RuntimeFinalDecision | None,
-        knowledge_used: bool,
+            self,
+            *,
+            final_decision: RuntimeFinalDecision | None,
+            knowledge_used: bool,
     ) -> AnswerMode:
         """根据最终决策选择回答分支，供 JSON 与 SSE 共用。"""
         if knowledge_used:
@@ -1220,14 +1257,31 @@ class ChatService:
 
     def _generate_answer(self, prepared: PreparedChatTurn) -> tuple[str, list[Citation]]:
         """根据准备结果生成最终答案。"""
+        result = self.graph_runtime.invoke(
+            prepared=prepared,
+            answer_builder=self._generate_answer_direct,
+            history_loader=self._load_graph_seed_history,
+        )
+        return result.answer, result.citations
+
+    def _generate_answer_direct(self, prepared: PreparedChatTurn) -> tuple[str, list[Citation]]:
+        """执行 graph answer node 内部的直接回答逻辑。"""
         if prepared.answer_mode != "evidence_answer":
             return self._build_non_evidence_answer(prepared)
         return self._invoke_answer_template(prepared=prepared)
 
+    def _load_graph_seed_history(self, prepared: PreparedChatTurn) -> list[BaseMessage]:
+        """读取首次 graph run 的旧会话消息种子。"""
+        return self._get_session_history(
+            prepared.session_id,
+            request_id=prepared.request_id,
+            timestamp=prepared.timestamp,
+        ).messages
+
     def _invoke_answer_template(
-        self,
-        *,
-        prepared: PreparedChatTurn,
+            self,
+            *,
+            prepared: PreparedChatTurn,
     ) -> tuple[str, list[Citation]]:
         """调用模型链生成答案，并返回答案与引用。"""
         runnable = self._get_answer_runnable(prepared)
@@ -1266,9 +1320,9 @@ class ChatService:
         runnable = self._get_answer_runnable(prepared)
         try:
             for chunk in self.model.stream_runnable(
-                runnable,
-                self._build_answer_variables(prepared),
-                config=self._build_runnable_config(prepared.session_id),
+                    runnable,
+                    self._build_answer_variables(prepared),
+                    config=self._build_runnable_config(prepared.session_id),
             ):
                 yield str(chunk)
         except ValueError as exc:
@@ -1295,9 +1349,9 @@ class ChatService:
             ) from exc
 
     def _finalize_streamed_answer(
-        self,
-        prepared: PreparedChatTurn,
-        answer_parts: list[str],
+            self,
+            prepared: PreparedChatTurn,
+            answer_parts: list[str],
     ) -> tuple[str, list[Citation]]:
         """将流式片段拼接为最终权威答案。"""
         joined_answer = "".join(answer_parts).strip()
@@ -1328,9 +1382,9 @@ class ChatService:
         return self.scene_definition.fallback_policy.message_for_strategy(policy.no_hit_strategy)
 
     def _finalize_answer_text(
-        self,
-        answer: str,
-        citations: list[Citation],
+            self,
+            answer: str,
+            citations: list[Citation],
     ) -> tuple[str, list[Citation]]:
         """统一补齐 citation markers，并返回最终答案与引用。"""
         final_answer = self._citation_mapper.ensure_answer_citation_markers(answer.strip(), citations)
@@ -1376,11 +1430,11 @@ class ChatService:
         return runnable
 
     def _get_session_history(
-        self,
-        session_id: str,
-        *,
-        request_id: str,
-        timestamp: str,
+            self,
+            session_id: str,
+            *,
+            request_id: str,
+            timestamp: str,
     ) -> SQLiteChatMessageHistory:
         """解析指定会话的 LangChain message history。"""
         return SQLiteChatMessageHistory(
@@ -1427,11 +1481,11 @@ class ChatService:
         }
 
     def _persist_turn(
-        self,
-        *,
-        prepared: PreparedChatTurn,
-        answer: str,
-        citations: list[Citation],
+            self,
+            *,
+            prepared: PreparedChatTurn,
+            answer: str,
+            citations: list[Citation],
     ) -> None:
         """以既有语义写入最终对话轮次。"""
         self.session_store.append_turn(
@@ -1445,11 +1499,11 @@ class ChatService:
         )
 
     def _build_chat_response(
-        self,
-        *,
-        prepared: PreparedChatTurn,
-        answer: str,
-        citations: list[Citation],
+            self,
+            *,
+            prepared: PreparedChatTurn,
+            answer: str,
+            citations: list[Citation],
     ) -> ChatResponse:
         """统一构造聊天响应。"""
         return ChatResponse(
@@ -1478,19 +1532,30 @@ class ChatService:
             "content": message.content,
         }
 
+    def _map_graph_stream_event(
+            self,
+            event: GraphStreamEventName,
+            data: dict[str, Any],
+    ) -> ChatStreamEvent:
+        """统一映射 graph runtime 事件，避免 SSE 暴露底层事件名。"""
+        return self._stream_event_mapper.map_event(
+            GraphRuntimeStreamEvent(event=event, data=data)
+        )
+
 
 class ActiveSceneChatService:
     """统一 `/chat` 入口，通过会话绑定场景分发请求。"""
 
     def __init__(
-        self,
-        *,
-        scene_registry: SceneRegistry,
-        app_settings: AppSettings | None = None,
-        knowledge_service: object | None = None,
-        session_store: SQLiteSessionStore | None = None,
-        context_builder: PromptContextBuilder | None = None,
-        model: RetrievalChainModel | None = None,
+            self,
+            *,
+            scene_registry: SceneRegistry,
+            app_settings: AppSettings | None = None,
+            knowledge_service: object | None = None,
+            session_store: SQLiteSessionStore | None = None,
+            context_builder: PromptContextBuilder | None = None,
+            model: RetrievalChainModel | None = None,
+            graph_runtime: ChatGraphRuntime | None = None,
     ) -> None:
         """初始化运行时依赖，并缓存当前激活场景服务。"""
         del knowledge_service
@@ -1501,6 +1566,7 @@ class ActiveSceneChatService:
             window_size=self.settings.session.window_size
         )
         self.model = model or model_client
+        self.graph_runtime = graph_runtime or ChatGraphRuntime.from_settings(self.settings)
         self._scene_services: dict[str, ChatService] = {}
 
     def chat(self, payload: ChatRequest) -> ChatResponse:
@@ -1512,6 +1578,11 @@ class ActiveSceneChatService:
         """将流式请求转发给会话绑定的场景。"""
         scene = self.resolve_session_scene(payload.session_id)
         yield from self._get_scene_service(scene).chat_stream(payload)
+
+    def delete_session(self, session_id: str) -> int:
+        """由 application facade 编排 session 与 LangGraph thread 的一致清理。"""
+        self.graph_runtime.delete_session_thread(session_id)
+        return self.session_store.delete_session(session_id=session_id)
 
     def list_scenes(self) -> tuple[SceneDefinition, ...]:
         """列出所有可用场景定义。"""
@@ -1531,9 +1602,9 @@ class ActiveSceneChatService:
         return scene
 
     def create_session(
-        self,
-        scene: str | None = None,
-        mounted_knowledge_sources: list[str] | tuple[str, ...] | None = None,
+            self,
+            scene: str | None = None,
+            mounted_knowledge_sources: list[str] | tuple[str, ...] | None = None,
     ) -> SessionRecord:
         """创建绑定场景的新会话，并保存规范化后的挂载知识源。"""
         resolved_scene = self.validate_scene(scene or self.default_scene())
@@ -1546,8 +1617,8 @@ class ActiveSceneChatService:
         )
 
     def validate_mounted_knowledge_sources(
-        self,
-        mounted_knowledge_sources: list[str] | tuple[str, ...] | None,
+            self,
+            mounted_knowledge_sources: list[str] | tuple[str, ...] | None,
     ) -> tuple[str, ...]:
         """校验并规范化会话挂载知识源。"""
         return normalize_mounted_knowledge_sources(mounted_knowledge_sources)
@@ -1582,6 +1653,7 @@ class ActiveSceneChatService:
             session_store=self.session_store,
             context_builder=self.context_builder,
             model=self.model,
+            graph_runtime=self.graph_runtime,
         )
         self._scene_services[scene] = service
         return service
@@ -1591,12 +1663,12 @@ SceneChatService = ActiveSceneChatService
 
 
 def build_default_scene_registry(
-    *,
-    app_settings: AppSettings | None = None,
-    knowledge_service: object | None = None,
-    document_retrieval_service: DocumentRetrievalService | None = None,
-    generic_business_extensions: tuple[GenericAssistantBusinessExtension, ...] | None = None,
-    include_default_business_extensions: bool = True,
+        *,
+        app_settings: AppSettings | None = None,
+        knowledge_service: object | None = None,
+        document_retrieval_service: DocumentRetrievalService | None = None,
+        generic_business_extensions: tuple[GenericAssistantBusinessExtension, ...] | None = None,
+        include_default_business_extensions: bool = True,
 ) -> SceneRegistry:
     """构建默认场景注册表。"""
     resolved_settings = app_settings or settings
@@ -1613,14 +1685,15 @@ def build_default_scene_registry(
 
 
 def create_chat_service(
-    app_settings: AppSettings | None = None,
-    knowledge_service: object | None = None,
-    document_retrieval_service: DocumentRetrievalService | None = None,
-    generic_business_extensions: tuple[GenericAssistantBusinessExtension, ...] | None = None,
-    include_default_business_extensions: bool = True,
-    session_store: SQLiteSessionStore | None = None,
-    context_builder: PromptContextBuilder | None = None,
-    model: ModelClient | None = None,
+        app_settings: AppSettings | None = None,
+        knowledge_service: object | None = None,
+        document_retrieval_service: DocumentRetrievalService | None = None,
+        generic_business_extensions: tuple[GenericAssistantBusinessExtension, ...] | None = None,
+        include_default_business_extensions: bool = True,
+        session_store: SQLiteSessionStore | None = None,
+        context_builder: PromptContextBuilder | None = None,
+        model: ModelClient | None = None,
+        graph_runtime: ChatGraphRuntime | None = None,
 ) -> ActiveSceneChatService:
     """聊天服务工厂函数，返回统一场景运行时服务。"""
     resolved_settings = app_settings or settings
@@ -1638,4 +1711,5 @@ def create_chat_service(
         session_store=session_store,
         context_builder=context_builder,
         model=model,
+        graph_runtime=graph_runtime,
     )

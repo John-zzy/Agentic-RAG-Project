@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import warnings
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -11,6 +12,10 @@ if __package__ in {None, ""}:
         sys.path.insert(0, str(project_root))
 
 import uvicorn
+
+# jieba 0.42.x 在新版 Python 下会因正则字符串打印 SyntaxWarning；这是第三方库告警，
+# 不影响服务启动，这里只在启动入口定向隐藏 jieba 模块的该类 warning。
+warnings.filterwarnings("ignore", category=SyntaxWarning, module=r"jieba(\..*)?$")
 
 from backend.application.runtime.api.app import create_app
 from backend.application.runtime import BootstrapSummary, SceneChatService, bootstrap_runtime
