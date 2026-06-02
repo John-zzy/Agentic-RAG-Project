@@ -7,13 +7,13 @@
 在仓库根目录执行：
 
 ```bash
-docker compose -f docs/documents/operations/elasticsearch/docker-compose.yml up -d
+docker compose -f devops/elasticsearch/docker-compose.yml up -d
 ```
 
 停止并清理容器：
 
 ```bash
-docker compose -f docs/documents/operations/elasticsearch/docker-compose.yml down
+docker compose -f devops/elasticsearch/docker-compose.yml down
 ```
 
 ## 默认约定

@@ -19,6 +19,7 @@
 - 架构、接口、数据模型、运行方式或状态语义变化后，要同步检查 `README.md`、`AGENTS.md` 和 `docs/documents/` 下的模块文档。
 - API 字段变化优先同步 `docs/documents/reference/api-list.md` 和 `docs/documents/reference/data-model.md`。
 - Mermaid 图移动或改名后，要同时维护 `.mmd` 和对应 `.svg`，并更新 README / AGENTS / 文档索引链接。
+- Docker Compose、本地基础设施和部署脚本统一放到 `devops/`；
 - 历史方案文档在 `docs/plan/`，不要把旧方案当成当前实现事实；当前事实优先看 `docs/documents/` 和代码。
 
 ## 编码与 PowerShell

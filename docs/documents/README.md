@@ -9,7 +9,7 @@
 3. 如果关注 LangGraph、HITL、状态治理，读 [LangGraph Runtime 图](./architecture/langgraph-runtime-current.svg)。
 4. 如果关注知识库入库、预处理和索引，读 [知识管理流程图](./knowledge/knowledge-document-flow.svg)。
 5. 如果要对接接口或排查字段，读 [API 文档](./reference/api-list.md) 和 [数据模型](./reference/data-model.md)。
-6. 如果要运行 Elasticsearch 或排查本地问题，读 [运维与排障](./operations/common-pitfalls.md)。
+6. 如果要运行 Elasticsearch 或排查本地问题，读 [运维与排障](./operations/common-pitfalls.md) 和 [Elasticsearch 本地运行](../../devops/elasticsearch/README.md)。
 
 ## 架构文档
 
@@ -38,8 +38,10 @@
 ## 运维与排障
 
 - [常见坑与排障](./operations/common-pitfalls.md)
-- [Elasticsearch 本地运行](./operations/elasticsearch/README.md)
-- [Elasticsearch docker-compose](./operations/elasticsearch/docker-compose.yml)
+- [Elasticsearch 本地运行](../../devops/elasticsearch/README.md)
+- [Elasticsearch docker-compose](../../devops/elasticsearch/docker-compose.yml)
+
+说明：Docker Compose、本地基础设施和部署脚本统一归档到 `devops/`。`docs/documents/` 只维护说明文档索引和项目架构资料。
 
 ## 资源文件
 
