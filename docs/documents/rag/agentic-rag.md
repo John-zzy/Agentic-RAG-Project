@@ -55,7 +55,7 @@
 
 用户请求进入系统后，不是直接把问题丢给模型，而是先经过会话绑定的场景与知识源配置。
 
-完整流程图见：[docs/agentic-rag-retrieval-flow.svg](./agentic-rag-retrieval-flow.svg)
+完整流程图见：[Agentic RAG 流程图](./agentic-rag-retrieval-flow.svg)
 
 一句话概括：
 

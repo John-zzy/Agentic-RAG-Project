@@ -37,6 +37,12 @@ from backend.platform.workflow.langgraph.state import (
     build_runtime_hitl_state,
     build_runtime_graph_state,
 )
+from backend.platform.workflow.state_machine import (
+    InvalidWorkflowTransitionError,
+    UnknownWorkflowStateError,
+    is_terminal,
+    validate_transition,
+)
 from backend.scenes.base import SceneDefinition, SceneFallbackPolicy, SceneRetrievalPolicy
 from backend.tests.test_support import make_test_runtime_dir
 
@@ -103,6 +109,11 @@ def test_runtime_graph_state_exposes_minimal_chat_execution_fields() -> None:
         "retrieval_trace",
         "metadata",
         "status",
+        "run_id",
+        "state_event",
+        "final_state",
+        "retry_attempt",
+        "retry_metadata",
         "hitl",
         "hitl_resume",
     }
@@ -128,6 +139,8 @@ def test_runtime_graph_state_exposes_minimal_chat_execution_fields() -> None:
     assert state["retrieval_trace"] == {"final_decision": "evidence_answer"}
     assert state["metadata"] == {"scene": "generic_assistant"}
     assert state["status"] == "succeeded"
+    assert state["final_state"] is None
+    assert state["retry_attempt"] == 0
     assert state["hitl"] is None
     assert state["hitl_resume"] is None
 
@@ -150,6 +163,11 @@ def test_runtime_graph_state_defaults_keep_non_evidence_branches_representable()
         "retrieval_trace": {"final_decision": "ask_user"},
         "metadata": {},
         "status": "running",
+        "run_id": None,
+        "state_event": None,
+        "final_state": None,
+        "retry_attempt": 0,
+        "retry_metadata": {},
         "hitl": None,
         "hitl_resume": None,
     }
@@ -243,6 +261,41 @@ def test_chat_response_accepts_optional_hitl_waiting_payload() -> None:
     assert payload["hitl"]["allow_freeform_response"] is True
 
 
+def test_workflow_state_machine_accepts_core_success_hitl_and_retry_paths() -> None:
+    assert validate_transition("created", "plan_start") == "planning"
+    assert validate_transition("planning", "run_start") == "running"
+    assert validate_transition("running", "success") == "succeeded"
+    assert validate_transition("created", "run_start") == "running"
+    assert validate_transition("running", "interrupt") == "waiting_user"
+    assert validate_transition("waiting_user", "resume_approve") == "running"
+    assert validate_transition("waiting_user", "resume_respond") == "running"
+    assert validate_transition("waiting_user", "resume_reject") == "cancelled"
+    assert validate_transition("running", "tool_error_retryable") == "retrying"
+    assert validate_transition("retrying", "retry") == "running"
+    assert validate_transition("retrying", "tool_error_final") == "failed"
+    assert is_terminal("succeeded") is True
+    assert is_terminal("failed") is True
+    assert is_terminal("cancelled") is True
+
+
+def test_workflow_state_machine_rejects_unknown_state_and_terminal_resume() -> None:
+    try:
+        validate_transition("unknown", "run_start")
+    except UnknownWorkflowStateError as exc:
+        assert "Unknown workflow state" in str(exc)
+    else:
+        raise AssertionError("unknown workflow state should be rejected")
+
+    for state in ("succeeded", "failed", "cancelled"):
+        try:
+            validate_transition(state, "resume_approve")
+        except InvalidWorkflowTransitionError as exc:
+            assert exc.current_state == state
+            assert exc.event == "resume_approve"
+        else:
+            raise AssertionError(f"{state} should reject resume")
+
+
 def test_runtime_graph_config_binds_thread_id_to_session_id_and_metadata_to_request() -> None:
     config = build_runtime_graph_config(
         session_id="session-config",
@@ -307,6 +360,44 @@ def test_graph_run_lifecycle_records_failed_path_with_thread_request_and_error()
     assert recorder.latest(run) == failed
 
 
+def test_graph_run_lifecycle_records_waiting_cancelled_and_retrying_paths() -> None:
+    recorder = GraphRunLifecycleRecorder()
+    waiting = recorder.create_run(
+        thread_id="session-waiting",
+        request_id="req-waiting",
+        run_id="run-waiting",
+    )
+    recorder.mark_running(waiting)
+    recorder.mark_waiting_user(waiting)
+    assert recorder.statuses(waiting) == ("created", "running", "waiting_user")
+
+    cancelled = recorder.create_run(
+        thread_id="session-cancelled",
+        request_id="req-cancelled",
+        run_id="run-cancelled",
+    )
+    recorder.mark_running(cancelled)
+    recorder.mark_cancelled(cancelled)
+    assert recorder.statuses(cancelled) == ("created", "running", "cancelled")
+
+    retrying = recorder.create_run(
+        thread_id="session-retry",
+        request_id="req-retry",
+        run_id="run-retry",
+    )
+    recorder.mark_running(retrying)
+    recorder.mark_retrying(retrying)
+    recorder.mark_running(retrying)
+    recorder.mark_failed(retrying, "retry exhausted")
+    assert recorder.statuses(retrying) == (
+        "created",
+        "running",
+        "retrying",
+        "running",
+        "failed",
+    )
+
+
 def test_chat_graph_runtime_invokes_answer_graph_and_persists_checkpoint_metadata() -> None:
     runtime = _build_chat_graph_runtime("runtime-graph-checkpoint")
     prepared = _prepared_graph_turn(
@@ -345,6 +436,8 @@ def test_chat_graph_runtime_invokes_answer_graph_and_persists_checkpoint_metadat
     assert restored.metadata["request_id"] == "req-graph"
     assert restored.metadata["session_id"] == "session-graph"
     assert restored.checkpoint["channel_values"]["answer"] == "graph answer"
+    assert restored.checkpoint["channel_values"]["status"] == "succeeded"
+    assert restored.checkpoint["channel_values"]["final_state"] == "succeeded"
 
 
 def test_chat_graph_runtime_seeds_legacy_history_only_without_checkpoint() -> None:
@@ -413,6 +506,7 @@ def test_chat_graph_runtime_creates_hitl_wait_checkpoint() -> None:
     restored = runtime.checkpointer.get_tuple(result.config)
 
     assert result.state["status"] == "waiting_user"
+    assert result.state["state_event"] == "interrupt"
     assert result.state["hitl"]["interrupt_id"] == "interrupt-wait"
     assert restored is not None
     assert restored.checkpoint["channel_values"]["status"] == "waiting_user"
@@ -420,6 +514,7 @@ def test_chat_graph_runtime_creates_hitl_wait_checkpoint() -> None:
         "respond",
         "reject",
     ]
+    assert runtime.lifecycle.events(result.run_id)[-1].status == "waiting_user"
 
 
 def test_chat_graph_runtime_rejects_invalid_hitl_wait_protocol() -> None:
@@ -498,6 +593,7 @@ def test_chat_graph_runtime_resume_approve_executes_proposed_tool_once() -> None
     assert result.tool_result == {"executed": True}
     assert result.config["configurable"]["thread_id"] == "session-hitl-approve"
     assert result.state["status"] == "succeeded"
+    assert result.state["final_state"] == "succeeded"
     assert result.state["hitl"] is None
     assert result.state["hitl_resume"]["action"] == "approve"
     assert result.state["hitl_resume"]["interrupt_id"] == "interrupt-approve"
@@ -516,9 +612,81 @@ def test_chat_graph_runtime_resume_approve_executes_proposed_tool_once() -> None
             or {"executed": True},
         )
     except HitlResumeError as exc:
-        assert "not waiting" in str(exc)
+        assert "terminal" in str(exc)
     else:
         raise AssertionError("duplicate resume should be rejected after HITL is cleared")
+    assert executed_calls == [{"tool_name": "generic_external_webhook_call"}]
+
+
+def test_chat_graph_runtime_resume_consumes_wait_before_tool_side_effect() -> None:
+    runtime = _build_chat_graph_runtime("runtime-graph-hitl-approve-checkpoint-failure")
+    runtime.create_hitl_wait(
+        wait=HitlWaitInput(
+            session_id="session-hitl-side-effect",
+            request_id="req-hitl-side-effect-wait",
+            reason="外部 API 调用需要审批。",
+            pending_action="external_api_approval",
+            proposed_tool_call={"tool_name": "generic_external_webhook_call"},
+            allowed_actions=["approve", "reject"],
+        ),
+        interrupt_id="interrupt-side-effect",
+    )
+    original_persist_state_update = runtime._persist_state_update
+    persist_calls = 0
+
+    def flaky_persist_state_update(**kwargs: Any) -> RuntimeGraphState:
+        nonlocal persist_calls
+        persist_calls += 1
+        if persist_calls == 2:
+            raise RuntimeError("final checkpoint failed")
+        return original_persist_state_update(**kwargs)
+
+    runtime._persist_state_update = flaky_persist_state_update  # type: ignore[method-assign]
+    executed_calls: list[dict[str, Any]] = []
+
+    try:
+        runtime.resume_hitl(
+            resume=HitlResumeInput(
+                session_id="session-hitl-side-effect",
+                request_id="req-hitl-side-effect-resume",
+                interrupt_id="interrupt-side-effect",
+                action="approve",
+            ),
+            approve_executor=lambda tool_call: executed_calls.append(dict(tool_call))
+            or {"executed": True},
+        )
+    except RuntimeError as exc:
+        assert "final checkpoint failed" in str(exc)
+    else:
+        raise AssertionError("final checkpoint failure should be surfaced")
+
+    restored = runtime.checkpointer.get_tuple(
+        {
+            "configurable": {
+                "thread_id": "session-hitl-side-effect",
+                "checkpoint_ns": DEFAULT_RUNTIME_CHECKPOINT_NS,
+            }
+        }
+    )
+    assert restored is not None
+    assert restored.checkpoint["channel_values"]["status"] == "failed"
+    assert restored.checkpoint["channel_values"]["hitl"] is None
+    assert executed_calls == [{"tool_name": "generic_external_webhook_call"}]
+
+    try:
+        runtime.resume_hitl(
+            resume=HitlResumeInput(
+                session_id="session-hitl-side-effect",
+                request_id="req-hitl-side-effect-duplicate",
+                interrupt_id="interrupt-side-effect",
+                action="approve",
+            ),
+            approve_executor=lambda tool_call: executed_calls.append(dict(tool_call)),
+        )
+    except HitlResumeError as exc:
+        assert "terminal" in str(exc)
+    else:
+        raise AssertionError("failed terminal checkpoint should reject duplicate resume")
     assert executed_calls == [{"tool_name": "generic_external_webhook_call"}]
 
 
@@ -548,7 +716,8 @@ def test_chat_graph_runtime_resume_reject_skips_proposed_tool() -> None:
     )
 
     assert result.tool_result is None
-    assert result.state["status"] == "succeeded"
+    assert result.state["status"] == "cancelled"
+    assert result.state["final_state"] == "cancelled"
     assert result.state["hitl"] is None
     assert "未执行" in result.state["answer"]
     assert result.state["hitl_resume"]["action"] == "reject"
@@ -595,6 +764,7 @@ def test_chat_graph_runtime_resume_respond_records_source_and_suggestion() -> No
     )
 
     assert result.state["status"] == "succeeded"
+    assert result.state["final_state"] == "succeeded"
     assert result.state["hitl"] is None
     assert result.state["answer"] == "继续检索：安全合规政策"
     assert result.state["hitl_resume"]["source"] == "suggested_response"

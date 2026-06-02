@@ -47,6 +47,11 @@
 
 - `status`: `active`、`expired`
 
+边界说明：
+
+- `sessions.status` 只表示聊天会话是否仍可使用，不表示某一次 Agent graph run 的执行状态。
+- Workflow run 状态保存在 LangGraph checkpoint 的 graph state 中，并通过 runtime lifecycle 记录状态转移；一个 session 可以包含多次 workflow run。
+
 ### 2. `chat_turns`
 
 一句话说明：按“一问一答”保存聊天轮次以及引用片段。
@@ -84,6 +89,8 @@
 一句话说明：LangGraph runtime 的持久化状态表，由 `SQLiteLangGraphCheckpointer` 在 `langgraph.db` 中创建，`thread_id` 固定使用聊天 `session_id`。
 
 这些表不反向依赖 `SQLiteSessionStore`。删除 session 时由 application runtime facade 先按 `thread_id=session_id` 清理 checkpoint，再删除 `sessions` / `chat_turns` / `chat_messages` 兼容读模型。
+
+checkpoint 的 channel values 中会保存当前可恢复的 workflow state。最小状态集合为 `created`、`planning`、`running`、`waiting_user`、`retrying`、`succeeded`、`failed`、`cancelled`。其中 `succeeded`、`failed`、`cancelled` 是终态；`waiting_user` 表示等待人工输入，不是失败；人工 `reject` 或 `cancel` 进入 `cancelled`，不进入 `failed`。
 
 #### `langgraph_checkpoints`
 
@@ -389,7 +396,20 @@
 | `knowledge_used` | `bool` |  | 是否命中知识。 |
 | `scene` | `str` |  | 当前场景。 |
 | `agent` | `str \| null` | 可空 | 当前代理标识。 |
+| `status` | `str \| null` | 可空 | 对外兼容 runtime 状态；普通完成可为空，等待态为 `waiting_user`。 |
+| `state` | `str \| null` | 可空 | Workflow run 当前状态。 |
+| `final_state` | `str \| null` | 可空 | Workflow run 终态，如 `succeeded`、`failed`、`cancelled`。 |
+| `run_id` | `str \| null` | 可空 | Runtime lifecycle 中的 run ID。 |
+| `state_event` | `str \| null` | 可空 | 最近一次状态机事件，如 `interrupt`、`resume_reject`、`success`。 |
+| `hitl` | `HitlState \| null` | 可空 | 等待人工输入时的恢复信息；非等待态为空。 |
 | `citations` | `list[Citation]` |  | 引用片段列表。 |
+
+状态说明：
+
+- Workflow run 状态集合为 `created/planning/running/waiting_user/retrying/succeeded/failed/cancelled`。
+- `waiting_user` 是可恢复等待态，不是模型或工具失败。
+- `succeeded/failed/cancelled` 是终态，终态 run 不能继续 resume、retry 或重新写成 running。
+- `sessions.status=active/expired` 与 workflow run state 分离，不能互相替代。
 
 ### 12. `SceneSummary`
 
@@ -843,18 +863,18 @@
 - 知识文档主记录和分块可落在 Chroma 或 Elasticsearch，因此字段是统一逻辑模型，不依赖单一后端。
 - 电商场景数据当前以 JSON 文件形式存在，更接近示例主数据而不是强约束事务模型。
 
-## 七、与 `docs/api-list.md` 的一致性检查
+## 七、与 `docs/documents/reference/api-list.md` 的一致性检查
 
 对照范围：
 
-- `docs/api-list.md`
+- `docs/documents/reference/api-list.md`
 - `backend/application/runtime/api/chat/schemas.py`
 - `backend/application/runtime/api/file/schemas.py`
 - `backend/application/runtime/api/knowledge/schemas.py`
 
 ### 原始不一致点
 
-在本次修复前，`docs/api-list.md` 中提到但 `docs/data-model.md` 未定义或未显式定义的接口实体包括：
+在本次修复前，`docs/documents/reference/api-list.md` 中提到但 `docs/documents/reference/data-model.md` 未定义或未显式定义的接口实体包括：
 
 - `HealthcheckResponse`
 - `Citation`
@@ -884,7 +904,7 @@
 ### 验证结果
 
 - 上述实体都能在对应 `schemas.py` 中找到实际定义，不是“接口文档误写”。
-- 问题根因是 `docs/data-model.md` 之前只覆盖了部分“关键 DTO”，没有覆盖全部对外接口 DTO。
+- 问题根因是 `docs/documents/reference/data-model.md` 之前只覆盖了部分“关键 DTO”，没有覆盖全部对外接口 DTO。
 - 代码层无须修改；需要修复的是文档覆盖范围。
 
 ### 修复结果

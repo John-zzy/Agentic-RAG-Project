@@ -362,5 +362,5 @@ flowchart TD
 - 需要同步检查并更新：
   - `README.md`
   - `AGENTS.md`
-  - `docs/api-list.md`
-  - `docs/data-model.md`
+  - `docs/documents/reference/api-list.md`
+  - `docs/documents/reference/data-model.md`

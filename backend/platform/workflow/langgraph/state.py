@@ -1,13 +1,18 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import Annotated, Any, Literal, NotRequired, TypedDict
+from typing import Annotated, Any, NotRequired, TypedDict
 
 from langchain_core.messages import AnyMessage
 from langgraph.graph import add_messages
 
+from backend.platform.workflow.state_machine import (
+    WorkflowRunEvent,
+    WorkflowRunState,
+    ensure_workflow_state,
+)
 
-RuntimeGraphStatus = Literal["running", "waiting_user", "succeeded", "failed"]
+RuntimeGraphStatus = WorkflowRunState
 
 
 class RuntimeHitlSuggestedResponse(TypedDict, total=False):
@@ -58,6 +63,11 @@ class RuntimeGraphState(TypedDict):
     retrieval_trace: dict[str, Any]
     metadata: dict[str, Any]
     status: NotRequired[RuntimeGraphStatus]
+    run_id: NotRequired[str | None]
+    state_event: NotRequired[WorkflowRunEvent | None]
+    final_state: NotRequired[RuntimeGraphStatus | None]
+    retry_attempt: NotRequired[int]
+    retry_metadata: NotRequired[dict[str, Any]]
     hitl: NotRequired[RuntimeHitlState | None]
     hitl_resume: NotRequired[RuntimeHitlResumePayload | None]
 
@@ -109,6 +119,11 @@ def build_runtime_graph_state(
     retrieval_trace: Mapping[str, Any] | None = None,
     metadata: Mapping[str, Any] | None = None,
     status: RuntimeGraphStatus = "running",
+    run_id: str | None = None,
+    state_event: WorkflowRunEvent | None = None,
+    final_state: RuntimeGraphStatus | None = None,
+    retry_attempt: int = 0,
+    retry_metadata: Mapping[str, Any] | None = None,
     hitl: Mapping[str, Any] | None = None,
     hitl_resume: Mapping[str, Any] | None = None,
 ) -> RuntimeGraphState:
@@ -117,6 +132,10 @@ def build_runtime_graph_state(
         raise ValueError("session_id is required for runtime graph state.")
     if not request_id:
         raise ValueError("request_id is required for runtime graph state.")
+    checked_status = ensure_workflow_state(status)
+    checked_final_state = (
+        ensure_workflow_state(final_state) if final_state is not None else None
+    )
 
     return {
         "session_id": session_id,
@@ -127,7 +146,12 @@ def build_runtime_graph_state(
         "citations": [dict(citation) for citation in citations or ()],
         "retrieval_trace": dict(retrieval_trace or {}),
         "metadata": dict(metadata or {}),
-        "status": status,
+        "status": checked_status,
+        "run_id": run_id,
+        "state_event": state_event,
+        "final_state": checked_final_state,
+        "retry_attempt": retry_attempt,
+        "retry_metadata": dict(retry_metadata or {}),
         "hitl": dict(hitl) if hitl else None,
         "hitl_resume": dict(hitl_resume) if hitl_resume else None,
     }

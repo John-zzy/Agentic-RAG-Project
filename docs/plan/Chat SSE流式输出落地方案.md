@@ -396,7 +396,7 @@ data: <json>
 本次对外契约变化只允许发生在以下范围：
 
 - `stream=true` 从“未支持”改为“支持 SSE”
-- `docs/api-list.md` 更新说明
+- `docs/documents/reference/api-list.md` 更新说明
 - `README.md` 增加最小验证命令
 
 明确不变化的部分：
@@ -499,7 +499,7 @@ data: {"code":"MODEL_INVOCATION_FAILED","message":"...","request_id":"r1"}
 配套最小文档改动：
 
 - `backend/application/runtime/api/chat/schemas.py`
-- `docs/api-list.md`
+- `docs/documents/reference/api-list.md`
 - `README.md`
 
 ### 2. service 内部推荐拆分
@@ -617,7 +617,7 @@ README 至少补一条可人工执行的最小命令路径，建议固定为：
 3. 事件流中至少能看到回答文本分片
 4. 无命中场景下 `stream=true` 仍使用 SSE，而不是退回 JSON
 5. 流结束后 session 中可以查到最终完整 answer 与 retrieval snippets
-6. README 与 `docs/api-list.md` 已反映 `stream=true` 的真实能力
+6. README 与 `docs/documents/reference/api-list.md` 已反映 `stream=true` 的真实能力
 
 ## Assumptions
 

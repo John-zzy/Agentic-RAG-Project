@@ -583,6 +583,8 @@ def test_chat_api_sse_success_path_returns_structured_events() -> None:
     assert start_payload["session_id"]
     assert start_payload["request_id"]
     assert start_payload["knowledge_used"] is True
+    assert start_payload["state"] == "running"
+    assert start_payload["state_event"] == "run_start"
     assert history_payload["message_count"] == 0
     assert history_payload["messages"] == []
     assert tool_payload["knowledge_used"] is True
@@ -605,6 +607,9 @@ def test_chat_api_sse_success_path_returns_structured_events() -> None:
     assert done_payload["answer"] == "推荐 P001，续航表现较好。[1]"
     assert done_payload["knowledge_used"] is True
     assert done_payload["scene"] == "generic_assistant"
+    assert done_payload["state"] == "succeeded"
+    assert done_payload["final_state"] == "succeeded"
+    assert done_payload["run_id"]
     assert len(done_payload["citations"]) == 1
     assert done_payload["retrieval_trace"] == tool_payload["retrieval_trace"]
     assert done_payload["retrieval_trace"]["citations"] == done_payload["citations"]
@@ -614,6 +619,21 @@ def test_chat_api_sse_success_path_returns_structured_events() -> None:
     )
     assert total_turns == 1
     assert saved_turns[0].assistant_answer == "推荐 P001，续航表现较好。[1]"
+    assert tuple(
+        event.status
+        for event in service.graph_runtime.lifecycle.events(done_payload["run_id"])
+    ) == ("created", "running", "succeeded")
+    restored = service.graph_runtime.checkpointer.get_tuple(
+        {
+            "configurable": {
+                "thread_id": done_payload["session_id"],
+                "checkpoint_ns": DEFAULT_RUNTIME_CHECKPOINT_NS,
+            }
+        }
+    )
+    assert restored is not None
+    assert restored.checkpoint["channel_values"]["status"] == "succeeded"
+    assert restored.checkpoint["channel_values"]["run_id"] == done_payload["run_id"]
     assert model.get_runnable_calls == ["simple"]
     assert len(model.stream_runnable_calls) == 1
 
@@ -1185,6 +1205,12 @@ def test_chat_api_sse_error_path_keeps_runtime_event_order() -> None:
     assert error_payload["code"] == "MODEL_EMPTY_RESPONSE"
     assert error_payload["message"] == "Model returned empty response."
     assert error_payload["request_id"] == json.loads(events[0]["data"])["request_id"]
+    assert error_payload["run_id"]
+    assert error_payload["final_state"] == "failed"
+    assert tuple(
+        event.status
+        for event in service.graph_runtime.lifecycle.events(error_payload["run_id"])
+    ) == ("created", "running", "failed")
 
 
 def test_chat_api_non_stream_response_and_session_persistence_do_not_regress() -> None:

@@ -13,12 +13,21 @@ from backend.application.runtime.api.chat.schemas import Citation
 from backend.platform.config.settings import AppSettings
 from backend.platform.workflow.langgraph.checkpointer import SQLiteLangGraphCheckpointer
 from backend.platform.workflow.langgraph.config import build_runtime_graph_config
-from backend.platform.workflow.langgraph.lifecycle import GraphRunLifecycleRecorder
+from backend.platform.workflow.langgraph.lifecycle import (
+    GraphRunLifecycleRecorder,
+    GraphRunRef,
+)
 from backend.platform.workflow.langgraph.state import (
     RuntimeHitlState,
     RuntimeGraphState,
     build_runtime_graph_state,
     build_runtime_hitl_state,
+)
+from backend.platform.workflow.state_machine import (
+    WorkflowRunEvent,
+    WorkflowRunState,
+    is_terminal,
+    validate_transition,
 )
 
 
@@ -96,6 +105,20 @@ class RuntimeGraphResult:
     run_id: str
 
 
+@dataclass(frozen=True)
+class RuntimeGraphRunHandle:
+    """流式路径持有的 graph run 句柄，用于后续完成或失败状态写入。"""
+
+    run: GraphRunRef
+    state: RuntimeGraphState
+    config: dict[str, Any]
+
+    @property
+    def run_id(self) -> str:
+        """返回当前 graph run ID，方便 API/SSE 关联。"""
+        return self.run.run_id
+
+
 class ChatGraphRuntime:
     """ChatService 使用的 LangGraph 入口，负责保存和读取会话运行状态。"""
 
@@ -139,6 +162,7 @@ class ChatGraphRuntime:
                     prepared=prepared,
                     history_loader=history_loader,
                     config=config,
+                    run_id=run.run_id,
                 ),
                 config,
             )
@@ -154,6 +178,94 @@ class ChatGraphRuntime:
             config=config,
             run_id=run.run_id,
         )
+
+    def start_stream_run(
+        self,
+        *,
+        prepared: PreparedGraphTurn,
+        history_loader: HistoryLoader,
+    ) -> RuntimeGraphRunHandle:
+        """为流式回答创建真实 runtime run，并先写入 running checkpoint。"""
+        config = self.build_config(prepared)
+        run = self.lifecycle.create_run(
+            thread_id=prepared.session_id,
+            request_id=prepared.request_id,
+            metadata=dict(config["metadata"]),
+        )
+        self.lifecycle.mark_running(run)
+        state = self.build_input_state(
+            prepared=prepared,
+            history_loader=history_loader,
+            config=config,
+            run_id=run.run_id,
+        )
+        output = self._persist_state_update(
+            state=state,
+            config=config,
+            update={
+                "request_id": prepared.request_id,
+                "status": "running",
+                "run_id": run.run_id,
+                "state_event": "run_start",
+                "final_state": None,
+            },
+        )
+        return RuntimeGraphRunHandle(run=run, state=output, config=config)
+
+    def complete_stream_run(
+        self,
+        *,
+        handle: RuntimeGraphRunHandle,
+        answer: str,
+        citations: Sequence[Citation],
+        knowledge_used: bool,
+    ) -> RuntimeGraphState:
+        """流式回答成功后写入最终 checkpoint，并记录 succeeded lifecycle。"""
+        output = self._persist_state_update(
+            state=handle.state,
+            config=handle.config,
+            update={
+                "answer": answer,
+                "citations": [citation.model_dump() for citation in citations],
+                "knowledge_used": knowledge_used,
+                "messages": [AIMessage(content=answer)],
+                "status": "succeeded",
+                "run_id": handle.run_id,
+                "state_event": "success",
+                "final_state": "succeeded",
+            },
+        )
+        self.lifecycle.mark_succeeded(handle.run)
+        return output
+
+    def fail_stream_run(
+        self,
+        *,
+        handle: RuntimeGraphRunHandle,
+        error: BaseException | str,
+    ) -> None:
+        """流式回答失败后尽量写入 failed checkpoint，并记录 failed lifecycle。"""
+        self.lifecycle.mark_failed(handle.run, error)
+        try:
+            self._persist_state_update(
+                state=handle.state,
+                config=handle.config,
+                update={
+                    "status": "failed",
+                    "run_id": handle.run_id,
+                    "state_event": "fail",
+                    "final_state": "failed",
+                    "metadata": {
+                        **dict(handle.state.get("metadata") or {}),
+                        "error": self.lifecycle.latest(handle.run).error
+                        if self.lifecycle.latest(handle.run)
+                        else str(error),
+                    },
+                },
+            )
+        except Exception:
+            # 失败路径不能掩盖原始模型/流式错误；checkpoint 写失败时 lifecycle 仍保留失败事实。
+            return
 
     def create_hitl_wait(
         self,
@@ -196,6 +308,9 @@ class ChatGraphRuntime:
                 update={
                     "request_id": wait.request_id,
                     "status": "waiting_user",
+                    "run_id": run.run_id,
+                    "state_event": "interrupt",
+                    "final_state": None,
                     "hitl": hitl,
                     "metadata": {
                         **dict(state.get("metadata") or {}),
@@ -207,7 +322,7 @@ class ChatGraphRuntime:
             self.lifecycle.mark_failed(run, exc)
             raise
 
-        self.lifecycle.mark_succeeded(run)
+        self.lifecycle.mark_waiting_user(run)
         return HitlRuntimeResult(state=output, config=config, run_id=run.run_id)
 
     def resume_hitl(
@@ -244,6 +359,7 @@ class ChatGraphRuntime:
             metadata=dict(config["metadata"]),
         )
         self.lifecycle.mark_running(run)
+        accepted_state: RuntimeGraphState | None = None
         try:
             state = self._load_or_build_thread_state(
                 session_id=resume.session_id,
@@ -253,26 +369,50 @@ class ChatGraphRuntime:
             )
             hitl = self._validate_hitl_resume(state=state, resume=resume)
             resume_payload = self._build_resume_payload(resume=resume, hitl=hitl)
+            resume_event = self._event_for_resume_action(resume.action)
+            resumed_state = validate_transition(str(state.get("status")), resume_event)
             tool_result: dict[str, Any] | None = None
             response_result: dict[str, Any] = {}
             next_answer = str(state.get("answer") or "")
-            next_status = "running"
+            next_status: WorkflowRunState = resumed_state
+            state_event: WorkflowRunEvent = resume_event
 
             if resume.action == "approve":
+                accepted_state = self._persist_resume_acceptance(
+                    state=state,
+                    config=config,
+                    run_id=run.run_id,
+                    resume_payload=resume_payload,
+                    resumed_state=resumed_state,
+                    resume_event=resume_event,
+                )
                 tool_result = self._execute_approved_tool(
                     hitl=hitl,
                     approve_executor=approve_executor,
                 )
-                next_status = "succeeded"
+                next_status = validate_transition(resumed_state, "success")
+                state_event = "success"
                 next_answer = "已批准并执行待审批操作。"
             elif resume.action == "reject":
-                next_status = "succeeded"
+                next_status = resumed_state
+                state_event = "resume_reject"
                 next_answer = "已拒绝该人工等待项，未执行待审批调用。"
             elif resume.action == "respond":
                 if respond_handler is None:
                     raise HitlResumeError("respond_handler is required for respond action.")
+                accepted_state = self._persist_resume_acceptance(
+                    state=state,
+                    config=config,
+                    run_id=run.run_id,
+                    resume_payload=resume_payload,
+                    resumed_state=resumed_state,
+                    resume_event=resume_event,
+                )
                 response_result = dict(respond_handler(resume_payload) or {})
-                next_status = str(response_result.get("status", "running"))
+                next_status, state_event = self._resolve_running_result_state(
+                    current_state=resumed_state,
+                    requested_state=str(response_result.get("status") or "succeeded"),
+                )
                 next_answer = str(response_result.get("answer", next_answer))
             elif resume.action == "edit":
                 raise HitlResumeError("edit action is not supported yet.")
@@ -284,16 +424,19 @@ class ChatGraphRuntime:
                 response_result=response_result,
             )
             output = self._persist_state_update(
-                state=state,
+                state=accepted_state or state,
                 config=config,
                 update={
                     "request_id": resume.request_id,
                     "answer": next_answer,
                     "status": next_status,
+                    "run_id": run.run_id,
+                    "state_event": state_event,
+                    "final_state": next_status if is_terminal(next_status) else None,
                     "hitl": None,
                     "hitl_resume": resume_payload,
                     "metadata": {
-                        **dict(state.get("metadata") or {}),
+                        **dict((accepted_state or state).get("metadata") or {}),
                         **dict(config["metadata"]),
                         "hitl_resume": resume_payload,
                         "hitl_tool_result": tool_result,
@@ -302,10 +445,22 @@ class ChatGraphRuntime:
                 },
             )
         except Exception as exc:
+            if accepted_state is not None:
+                self._persist_failed_after_accepted_resume(
+                    state=accepted_state,
+                    config=config,
+                    run_id=run.run_id,
+                    error=exc,
+                )
             self.lifecycle.mark_failed(run, exc)
             raise
 
-        self.lifecycle.mark_succeeded(run)
+        if next_status == "cancelled":
+            self.lifecycle.mark_cancelled(run)
+        elif next_status == "failed":
+            self.lifecycle.mark_failed(run, next_answer or "resume failed")
+        elif next_status == "succeeded":
+            self.lifecycle.mark_succeeded(run)
         return HitlRuntimeResult(
             state=output,
             config=config,
@@ -337,6 +492,7 @@ class ChatGraphRuntime:
         prepared: PreparedGraphTurn,
         history_loader: HistoryLoader,
         config: dict[str, Any],
+        run_id: str,
     ) -> RuntimeGraphState:
         history_messages = self._history_seed(
             prepared=prepared,
@@ -354,6 +510,9 @@ class ChatGraphRuntime:
             citations=[citation.model_dump() for citation in prepared.citations],
             retrieval_trace=prepared.retrieval_trace.model_dump(),
             metadata=dict(config["metadata"]),
+            status="running",
+            run_id=run_id,
+            state_event="run_start",
         )
 
     def _compile_answer_graph(
@@ -373,6 +532,9 @@ class ChatGraphRuntime:
                 "citations": [citation.model_dump() for citation in citations],
                 "knowledge_used": prepared.knowledge_used,
                 "messages": [AIMessage(content=answer)],
+                "status": "succeeded",
+                "final_state": "succeeded",
+                "state_event": "success",
             }
 
         builder.add_node("answer", answer_node)
@@ -456,6 +618,11 @@ class ChatGraphRuntime:
             retrieval_trace=dict(values.get("retrieval_trace") or {}),
             metadata=dict(values.get("metadata") or {}),
             status=values.get("status", "running"),
+            run_id=values.get("run_id"),
+            state_event=values.get("state_event"),
+            final_state=values.get("final_state"),
+            retry_attempt=int(values.get("retry_attempt") or 0),
+            retry_metadata=dict(values.get("retry_metadata") or {}),
             hitl=values.get("hitl"),
             hitl_resume=values.get("hitl_resume"),
         )
@@ -467,6 +634,11 @@ class ChatGraphRuntime:
         resume: HitlResumeInput,
     ) -> RuntimeHitlState:
         """确认用户要恢复的等待点就是当前正在等待的那个。"""
+        status = str(state.get("status") or "running")
+        if is_terminal(status):
+            raise HitlResumeError(
+                f"Current workflow is already terminal: {status}."
+            )
         if state.get("status") != "waiting_user":
             raise HitlResumeError("Current thread is not waiting for user input.")
         hitl = state.get("hitl")
@@ -478,6 +650,95 @@ class ChatGraphRuntime:
         if resume.action not in allowed_actions:
             raise HitlResumeError("action is not allowed for current HITL state.")
         return hitl
+
+    def _persist_resume_acceptance(
+        self,
+        *,
+        state: RuntimeGraphState,
+        config: dict[str, Any],
+        run_id: str,
+        resume_payload: Mapping[str, Any],
+        resumed_state: WorkflowRunState,
+        resume_event: WorkflowRunEvent,
+    ) -> RuntimeGraphState:
+        """先消费等待点再执行副作用，避免 checkpoint 失败后重复 resume。"""
+        return self._persist_state_update(
+            state=state,
+            config=config,
+            update={
+                "request_id": str(resume_payload.get("request_id") or state["request_id"]),
+                "status": resumed_state,
+                "run_id": run_id,
+                "state_event": resume_event,
+                "final_state": None,
+                "hitl": None,
+                "hitl_resume": dict(resume_payload),
+                "metadata": {
+                    **dict(state.get("metadata") or {}),
+                    "hitl_resume": dict(resume_payload),
+                },
+            },
+        )
+
+    def _persist_failed_after_accepted_resume(
+        self,
+        *,
+        state: RuntimeGraphState,
+        config: dict[str, Any],
+        run_id: str,
+        error: BaseException,
+    ) -> None:
+        """已接受 resume 后发生错误时，尽量把 checkpoint 收敛到 failed 终态。"""
+        try:
+            self._persist_state_update(
+                state=state,
+                config=config,
+                update={
+                    "status": "failed",
+                    "run_id": run_id,
+                    "state_event": "fail",
+                    "final_state": "failed",
+                    "metadata": {
+                        **dict(state.get("metadata") or {}),
+                        "error": self._summarize_resume_error(error),
+                    },
+                },
+            )
+        except Exception:
+            # checkpoint 失败不能覆盖原始副作用或 handler 错误，调用方仍按原错误返回。
+            return
+
+    def _summarize_resume_error(self, error: BaseException) -> str:
+        """把 resume 副作用错误压缩成可写入 checkpoint metadata 的短文本。"""
+        message = str(error)
+        return f"{type(error).__name__}: {message}" if message else type(error).__name__
+
+    def _event_for_resume_action(self, action: str) -> WorkflowRunEvent:
+        """把用户动作映射为状态机事件，所有 resume 入口共用同一套语义。"""
+        if action == "approve":
+            return "resume_approve"
+        if action == "respond":
+            return "resume_respond"
+        if action == "reject":
+            return "resume_reject"
+        if action == "edit":
+            raise HitlResumeError("edit action is not supported yet.")
+        raise HitlResumeError("resume action is not supported.")
+
+    def _resolve_running_result_state(
+        self,
+        *,
+        current_state: WorkflowRunState,
+        requested_state: str,
+    ) -> tuple[WorkflowRunState, WorkflowRunEvent]:
+        """把继续执行后的结果状态收敛到合法转移，避免 handler 直接写任意状态。"""
+        if requested_state == "succeeded":
+            return validate_transition(current_state, "success"), "success"
+        if requested_state == "failed":
+            return validate_transition(current_state, "fail"), "fail"
+        if requested_state == "running":
+            return current_state, "resume_respond"
+        raise HitlResumeError(f"resume handler returned unsupported status: {requested_state}.")
 
     def _build_resume_payload(
         self,

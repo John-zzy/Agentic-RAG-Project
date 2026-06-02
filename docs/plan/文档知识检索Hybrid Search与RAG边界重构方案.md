@@ -220,7 +220,7 @@ provider 层要求：
   - 不允许再把召回算法塞回 `knowledge` 或 scene service
 - 前端本期不展示调试字段，但后端接口与历史存储必须完整支持
 - 继续保持本地可运行，不引入在线 embedding 依赖前提
-- 文档说明后续还需同步到 `README.md`、`docs/api-list.md`、`docs/data-model.md` 与相关架构图
+- 文档说明后续还需同步到 `README.md`、`docs/documents/reference/api-list.md`、`docs/documents/reference/data-model.md` 与相关架构图
 
 ## Implementation Conclusion
 

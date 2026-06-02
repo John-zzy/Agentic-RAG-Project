@@ -4,6 +4,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from backend.platform.workflow.state_machine import WorkflowRunEvent, WorkflowRunState
+
 
 class ChatRequest(BaseModel):
     """聊天接口请求体。"""
@@ -20,7 +22,7 @@ class ChatRequest(BaseModel):
     )
 
 
-ChatRuntimeStatus = Literal["running", "waiting_user", "succeeded", "failed"]
+ChatRuntimeStatus = WorkflowRunState
 HitlPendingAction = Literal["tool_approval", "external_api_approval", "clarification"]
 HitlAllowedAction = Literal["approve", "edit", "reject", "respond"]
 HitlResumeSource = Literal["suggested_response", "freeform", "system"]
@@ -99,6 +101,10 @@ class ChatResumeResponse(BaseModel):
     session_id: str = Field(description="被恢复的会话 ID。")
     request_id: str = Field(description="本次 resume 请求 ID。")
     status: ChatRuntimeStatus = Field(description="resume 后的 runtime 状态。")
+    state: ChatRuntimeStatus | None = Field(default=None, description="当前 workflow run 状态。")
+    final_state: ChatRuntimeStatus | None = Field(default=None, description="终止时的 workflow 状态。")
+    run_id: str | None = Field(default=None, description="本次 workflow run ID。")
+    state_event: WorkflowRunEvent | None = Field(default=None, description="产生当前状态的状态机事件。")
     answer: str | None = Field(default=None, description="resume 后形成的最终说明或回答。")
     knowledge_used: bool = Field(default=False, description="resume 后的结果是否使用知识证据。")
     citations: list[dict[str, Any]] = Field(
@@ -246,6 +252,10 @@ class ChatResponse(BaseModel):
         default=None,
         description="可选 runtime 状态；普通完成请求可为空，HITL 等待时为 waiting_user。",
     )
+    state: ChatRuntimeStatus | None = Field(default=None, description="当前 workflow run 状态。")
+    final_state: ChatRuntimeStatus | None = Field(default=None, description="终止时的 workflow 状态。")
+    run_id: str | None = Field(default=None, description="本次 workflow run ID。")
+    state_event: WorkflowRunEvent | None = Field(default=None, description="产生当前状态的状态机事件。")
     hitl: HitlState | None = Field(
         default=None,
         description="可选 HITL 等待态；非人工等待场景为空。",

@@ -26,19 +26,23 @@
     - `knowledge_used`: 是否使用了知识检索结果。
     - `scene`: 当前响应所属场景。
     - `agent`: 代理/角色标识，可为空。
-    - `status`: 可选 runtime 状态；普通完成请求为空，HITL 等待时为 `"waiting_user"`，resume 后可为 `"succeeded"`。
+    - `status`: 可选 runtime 状态；普通完成请求为空，HITL 等待时为 `"waiting_user"`。
+    - `state`: 可选 workflow run 当前状态，取值为 `created`、`planning`、`running`、`waiting_user`、`retrying`、`succeeded`、`failed`、`cancelled`。
+    - `final_state`: 可选 workflow run 终态；`done` 常见为 `"succeeded"` 或 `"cancelled"`，`error` 为 `"failed"`。
+    - `run_id`: 可选 workflow run ID，用于关联 runtime lifecycle。
+    - `state_event`: 可选状态机事件，如 `run_start`、`interrupt`、`resume_respond`、`resume_reject`、`success`。
     - `hitl`: 可选 HITL 等待态；非等待场景为空。等待态包含 `interrupt_id`、`thread_id`、`reason`、`pending_action`、`proposed_tool_call`、`allowed_actions`、`suggested_responses`、`allow_freeform_response`、`resume_payload`。
     - `citations`: 统一引用列表，每项包含 `index`、`citation_id`、`namespace`、`source_kind`、`source_name`、`source_path`、`document_id`、`chunk_id`、`chunk_index`、`snippet`、`score`、`vector_score`、`keyword_score`、`vector_rank`、`keyword_rank`、`matched_by`、`rank`。
   - 流式 `stream=true`：
     - 响应头为 `Content-Type: text/event-stream`。
     - 事件类型为 `start`、`history`、`tool`、`chunk`、`waiting_user`、`done`、`error`，且 `data` 一律为 JSON。
-    - `start.data` 包含 `session_id`、`request_id`、`knowledge_used`、`scene`、`agent`。
+    - `start.data` 包含 `session_id`、`request_id`、`knowledge_used`、`scene`、`agent`、`state`、`state_event`。
     - `history.data` 包含 `session_id`、`request_id`、`window_size`、`message_count`、`messages`，用于暴露本轮注入模型前的历史消息窗口；`messages` 每项包含 `type` 与 `content`。
     - `tool.data` 包含 retrieval 阶段的结构化结果，固定补充 `session_id`、`request_id`、`knowledge_used`、`citations`；当前常见字段还包括 `stage`、`mode`、`retrieval_policy`、`candidate_tools`、`documents`、`rounds`。
     - `chunk.data` 包含 `delta`，表示最终回答文本增量。
-    - `waiting_user.data` 包含 `session_id`、`request_id`、`status="waiting_user"`、`hitl`；客户端需要使用 `hitl.interrupt_id` 调用 `/chat/resume`。
-    - `done.data` 与非流式 `ChatResponse` 结构一致，客户端应以 `done.answer` 作为最终权威文本。
-    - `error.data` 包含 `code`、`message`、`request_id`。
+    - `waiting_user.data` 包含 `session_id`、`request_id`、`status="waiting_user"`、`state="waiting_user"`、`state_event="interrupt"`、`run_id`、`hitl`；客户端需要使用 `hitl.interrupt_id` 调用 `/chat/resume`。
+    - `done.data` 与非流式 `ChatResponse` 结构一致，客户端应以 `done.answer` 作为最终权威文本，并可读取 `final_state`。
+    - `error.data` 包含 `code`、`message`、`request_id`、`final_state="failed"`。
 
 补充说明：
 
@@ -47,8 +51,8 @@
 - `tool.data.retrieval_policy` 只包含可观测的策略配置摘要：`top_k`、`min_relevance_score`、`recall_strategy`、`no_hit_strategy`、`rerank_enabled`、`rerank_top_n`。
 - 命中知识时，成功路径事件顺序通常为 `start -> history -> tool -> chunk... -> done`。
 - 无知识命中时，仍返回 SSE 成功态，事件顺序为 `start -> history -> tool -> chunk -> done`，其中 `tool.documents = 0`，`done.knowledge_used = false`。
-- HITL 澄清等待路径事件顺序为 `start -> history -> tool -> waiting_user`，不会在等待用户时生成 `chunk` 或 `done`。
-- 失败路径事件顺序为 `start -> history -> tool -> error`。
+- HITL 澄清等待路径事件顺序为 `start -> history -> tool -> waiting_user`，不会在等待用户时生成 `chunk` 或 `done`；`waiting_user` 不是失败。
+- 失败路径事件顺序为 `start -> history -> tool -> error`，`final_state=failed`。
 
 ### `POST /chat/resume`
 
@@ -62,7 +66,11 @@
 - 返回结构：
   - `session_id`: 被恢复的会话 ID。
   - `request_id`: 本次 resume 请求 ID。
-  - `status`: resume 后状态，正常完成时为 `"succeeded"`。
+  - `status`: resume 后状态；approve/respond 成功为 `"succeeded"`，reject/cancel 为 `"cancelled"`。
+  - `state`: 当前 workflow run 状态。
+  - `final_state`: 终止时 workflow run 状态，常见为 `"succeeded"` 或 `"cancelled"`。
+  - `run_id`: 本次 workflow run ID。
+  - `state_event`: 产生当前状态的状态机事件。
   - `answer`: resume 后形成的最终说明或回答；`reject` 会明确说明未执行待审批调用。
   - `knowledge_used`: resume 后结果是否使用知识证据。
   - `citations`: resume 后结果使用的引用；无证据、拒绝或审批说明时为空。
@@ -72,9 +80,9 @@
 - 流式 `stream=true`：
   - 响应头为 `Content-Type: text/event-stream`。
   - 成功路径事件顺序为 `resume -> done`。
-  - `resume.data` 包含 `session_id`、`request_id`、`interrupt_id`、`action`。
-  - `done.data` 与非流式 `ChatResumeResponse` 结构一致。
-  - 失败路径事件顺序为 `resume -> error`。
+  - `resume.data` 包含 `session_id`、`request_id`、`interrupt_id`、`action`、`state_event`。
+  - `done.data` 与非流式 `ChatResumeResponse` 结构一致；reject/cancel 使用 `done` 且 `final_state="cancelled"`，不是 `error`。
+  - 失败路径如果 resume 未被接受，事件顺序为 `error`；不会先发看似已恢复的 `resume`。
 - 常见错误：
   - `404 SESSION_NOT_FOUND`: 会话不存在，resume 不会自动创建会话。
   - `409 SESSION_EXPIRED`: 会话已过期。

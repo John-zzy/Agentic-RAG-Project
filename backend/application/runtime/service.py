@@ -1069,6 +1069,8 @@ class ChatService:
                 "knowledge_used": prepared.knowledge_used,
                 "scene": prepared.scene_metadata.scene,
                 "agent": prepared.scene_metadata.agent,
+                "state": "running",
+                "state_event": "run_start",
             },
         )
         yield self._map_graph_stream_event(
@@ -1088,6 +1090,10 @@ class ChatService:
             )
             return
 
+        stream_run = self.graph_runtime.start_stream_run(
+            prepared=prepared,
+            history_loader=self._load_graph_seed_history,
+        )
         try:
             if prepared.answer_mode != "evidence_answer":
                 answer, citations = self._build_non_evidence_answer(prepared)
@@ -1099,36 +1105,37 @@ class ChatService:
                     yield self._map_graph_stream_event("answer_chunk", {"delta": chunk})
                 answer, citations = self._finalize_streamed_answer(prepared, answer_parts)
         except ChatServiceError as exc:
+            self.graph_runtime.fail_stream_run(handle=stream_run, error=exc)
             yield self._map_graph_stream_event(
                 "graph_run_failed",
                 {
                     "code": exc.code,
                     "message": exc.message,
                     "request_id": exc.request_id,
+                    "run_id": stream_run.run_id,
+                    "final_state": "failed",
                 },
             )
             return
 
+        self.graph_runtime.complete_stream_run(
+            handle=stream_run,
+            answer=answer,
+            citations=citations,
+            knowledge_used=prepared.knowledge_used,
+        )
         self._persist_turn(prepared=prepared, answer=answer, citations=citations)
         response = self._build_chat_response(
             prepared=prepared,
             answer=answer,
             citations=citations,
+            run_id=stream_run.run_id,
         )
         yield self._map_graph_stream_event("graph_run_succeeded", response.model_dump())
 
     def resume_stream(self, payload: ChatResumeRequest) -> Iterator[ChatStreamEvent]:
-        """流式恢复 HITL 等待点，先通知 resume，再返回 done 或 error。"""
+        """流式恢复 HITL 等待点；只有恢复被接受后才发送 resume 事件。"""
         request_id = uuid4().hex
-        yield self._map_graph_stream_event(
-            "human_resume",
-            {
-                "session_id": payload.session_id,
-                "request_id": request_id,
-                "interrupt_id": payload.interrupt_id,
-                "action": payload.action,
-            },
-        )
         try:
             result = self._run_hitl_resume(payload=payload, request_id=request_id)
         except ChatServiceError as exc:
@@ -1138,10 +1145,21 @@ class ChatService:
                     "code": exc.code,
                     "message": exc.message,
                     "request_id": exc.request_id,
+                    "final_state": "failed",
                 },
             )
             return
 
+        yield self._map_graph_stream_event(
+            "human_resume",
+            {
+                "session_id": payload.session_id,
+                "request_id": request_id,
+                "interrupt_id": payload.interrupt_id,
+                "action": payload.action,
+                "state_event": f"resume_{payload.action}",
+            },
+        )
         response = self._build_resume_response(
             payload=payload,
             request_id=request_id,
@@ -1249,7 +1267,9 @@ class ChatService:
             request_id=request_id,
             timestamp=timestamp,
             message=payload.message,
-            hitl_clarification_enabled=payload.hitl_clarification_enabled,
+            hitl_clarification_enabled=bool(
+                getattr(payload, "hitl_clarification_enabled", False)
+            ),
         )
 
     def _prepare_existing_session_turn(
@@ -1396,6 +1416,7 @@ class ChatService:
         return self._build_hitl_wait_response(
             prepared=prepared,
             hitl=HitlState(**hitl_payload),
+            result_state=result.state,
         )
 
     def _build_hitl_wait_input(
@@ -1428,6 +1449,7 @@ class ChatService:
             *,
             prepared: PreparedChatTurn,
             hitl: HitlState,
+            result_state: Mapping[str, Any],
     ) -> ChatResponse:
         """返回等待态响应；这里不生成模型答案，也不写最终对话轮次。"""
         return ChatResponse(
@@ -1438,6 +1460,9 @@ class ChatService:
             scene=prepared.scene_metadata.scene,
             agent=prepared.scene_metadata.agent,
             status="waiting_user",
+            state="waiting_user",
+            run_id=str(result_state.get("run_id") or "") or None,
+            state_event="interrupt",
             hitl=hitl,
             citations=[],
             retrieval_trace=prepared.retrieval_trace.model_copy(
@@ -1465,6 +1490,9 @@ class ChatService:
             "session_id": response.session_id,
             "request_id": response.request_id,
             "status": response.status,
+            "state": response.state,
+            "run_id": response.run_id,
+            "state_event": response.state_event,
             "hitl": hitl,
         }
 
@@ -1565,6 +1593,22 @@ class ChatService:
             session_id=payload.session_id,
             request_id=request_id,
             status=str(result_state.get("status") or "succeeded"),
+            state=str(result_state.get("status") or "succeeded"),
+            final_state=(
+                str(result_state.get("final_state"))
+                if result_state.get("final_state") is not None
+                else None
+            ),
+            run_id=(
+                str(result_state.get("run_id"))
+                if result_state.get("run_id") is not None
+                else None
+            ),
+            state_event=(
+                str(result_state.get("state_event"))
+                if result_state.get("state_event") is not None
+                else None
+            ),
             answer=(
                 str(result_state.get("answer"))
                 if result_state.get("answer") is not None
@@ -1834,6 +1878,7 @@ class ChatService:
             prepared: PreparedChatTurn,
             answer: str,
             citations: list[Citation],
+            run_id: str | None = None,
     ) -> ChatResponse:
         """统一构造聊天响应。"""
         return ChatResponse(
@@ -1843,6 +1888,10 @@ class ChatService:
             knowledge_used=prepared.knowledge_used,
             scene=prepared.scene_metadata.scene,
             agent=prepared.scene_metadata.agent,
+            state="succeeded",
+            final_state="succeeded",
+            run_id=run_id,
+            state_event="success",
             citations=citations,
             retrieval_trace=prepared.retrieval_trace.model_copy(
                 update={

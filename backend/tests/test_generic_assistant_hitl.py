@@ -314,6 +314,8 @@ def test_generic_assistant_ask_user_creates_clarification_wait_when_hitl_enabled
     response = service.chat(ChatRequest(message="你好"))
 
     assert response.status == "waiting_user"
+    assert response.state == "waiting_user"
+    assert response.state_event == "interrupt"
     assert response.answer == response.hitl.reason
     assert response.knowledge_used is False
     assert response.citations == []
@@ -401,6 +403,7 @@ def test_generic_assistant_chat_resume_api_accepts_suggested_response() -> None:
     resume_payload = resume_response.json()
     assert resume_payload["session_id"] == waiting_payload["session_id"]
     assert resume_payload["status"] == "succeeded"
+    assert resume_payload["final_state"] == "succeeded"
     assert resume_payload["hitl"] is None
     assert resume_payload["resume_payload"]["action"] == "respond"
     assert resume_payload["resume_payload"]["source"] == "suggested_response"
@@ -435,6 +438,7 @@ def test_generic_assistant_chat_resume_respond_continues_retrieval_with_clarific
     )
 
     assert response.status == "succeeded"
+    assert response.final_state == "succeeded"
     assert response.answer == "根据安全合规政策，需要记录审批动作。[1]"
     assert response.knowledge_used is True
     assert len(response.citations) == 1
@@ -484,6 +488,7 @@ def test_generic_assistant_chat_resume_api_approves_test_write_tool() -> None:
     )
 
     assert response.status == "succeeded"
+    assert response.final_state == "succeeded"
     assert response.hitl is None
     assert response.answer == "已批准并执行待审批操作。"
     assert response.resume_payload is not None
@@ -499,6 +504,7 @@ def test_generic_assistant_chat_resume_api_approves_test_write_tool() -> None:
     assert restored is not None
     checkpoint_values = restored.checkpoint["channel_values"]
     assert checkpoint_values["status"] == "succeeded"
+    assert checkpoint_values["final_state"] == "succeeded"
     assert checkpoint_values["metadata"]["hitl_tool_result"]["metadata"]["side_effect"] == (
         "local_write"
     )
@@ -554,11 +560,13 @@ def test_generic_assistant_chat_resume_api_rejects_invalid_or_stale_interrupt() 
     assert illegal_action_response.status_code == 409
     assert "action is not allowed" in illegal_action_response.json()["detail"]["message"]
     assert accepted_response.status_code == 200
+    assert accepted_response.json()["status"] == "cancelled"
+    assert accepted_response.json()["final_state"] == "cancelled"
     assert accepted_response.json()["answer"] == "已拒绝该人工等待项，未执行待审批调用。"
     assert accepted_response.json()["knowledge_used"] is False
     assert accepted_response.json()["citations"] == []
     assert duplicate_response.status_code == 409
-    assert "not waiting" in duplicate_response.json()["detail"]["message"]
+    assert "terminal" in duplicate_response.json()["detail"]["message"]
 
 
 def test_generic_assistant_sse_emits_waiting_user_for_clarification() -> None:
@@ -610,7 +618,34 @@ def test_generic_assistant_sse_resume_emits_resume_then_done() -> None:
     assert [event["event"] for event in events] == ["resume", "done"]
     assert waiting_payload["hitl"]["interrupt_id"] in events[0]["data"]
     assert '"action": "reject"' in events[0]["data"]
-    assert '"status": "succeeded"' in events[1]["data"]
+    assert '"status": "cancelled"' in events[1]["data"]
+    assert '"final_state": "cancelled"' in events[1]["data"]
+
+
+def test_generic_assistant_sse_resume_invalid_interrupt_emits_error_only() -> None:
+    service = _build_chat_service(
+        "generic-hitl-sse-resume-invalid",
+        hitl_clarification_enabled=True,
+    )
+    app = create_app(chat_service=service)
+
+    with TestClient(app) as client:
+        waiting_response = client.post("/chat", json={"message": "你好"})
+        waiting_payload = waiting_response.json()
+        response = client.post(
+            "/chat/resume",
+            json={
+                "session_id": waiting_payload["session_id"],
+                "interrupt_id": "stale-interrupt",
+                "action": "reject",
+                "stream": True,
+            },
+        )
+
+    assert response.status_code == 200
+    events = _parse_sse_events(response.text)
+    assert [event["event"] for event in events] == ["error"]
+    assert "interrupt_id does not match" in events[0]["data"]
 
 
 def test_generic_write_tool_waits_until_approve_before_execution() -> None:
@@ -649,6 +684,7 @@ def test_generic_write_tool_waits_until_approve_before_execution() -> None:
 
     assert write_tool.calls == [{"item_id": "item-1", "content": "需要审批后写入"}]
     assert result.state["status"] == "succeeded"
+    assert result.state["final_state"] == "succeeded"
     assert result.tool_result is not None
     assert result.tool_result["metadata"]["side_effect"] == "local_write"
 
@@ -684,7 +720,8 @@ def test_generic_external_api_reject_skips_side_effect() -> None:
     )
 
     assert external_tool.calls == []
-    assert result.state["status"] == "succeeded"
+    assert result.state["status"] == "cancelled"
+    assert result.state["final_state"] == "cancelled"
     assert "未执行" in result.state["answer"]
 
 
