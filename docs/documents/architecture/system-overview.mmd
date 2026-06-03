@@ -11,24 +11,39 @@ flowchart LR
         APP2["Runtime Bootstrap<br/>装配 chat service、knowledge services、scene registry"]
         APP3["ActiveSceneChatService<br/>按 session 解析 scene 并分发请求"]
         APP4["SceneRegistry<br/>注册 generic_assistant / ecommerce scene definitions"]
-        APP5["ChatGraphRuntime<br/>最小 answer graph / thread_id=session_id"]
-        APP6["GraphStreamEventMapper<br/>LangGraph 内部事件映射为 SSE 业务事件"]
+        APP5["ChatService<br/>准备 turn、选择 Agent mode、组装工具、持久化回答"]
+        APP6["ChatGraphRuntime<br/>LangGraph run lifecycle / checkpoint / final answer graph"]
+        APP7["GraphStreamEventMapper<br/>LangGraph 内部事件映射为 SSE 业务事件"]
     end
 
     subgraph SCENE["Scenes"]
         direction TB
         SC1["Generic Assistant SceneDefinition<br/>默认 docs-first 主链"]
         SC2["Ecommerce SceneDefinition<br/>复用 generic 主链并补充电商工具"]
-        SC3["Business Extensions<br/>例如 EcommerceBusinessExtension"]
+        SC3["Scene Tools / HITL Policy<br/>ask_user、写操作审批、外部 API 调用"]
+        SC4["Business Extensions<br/>例如 EcommerceBusinessExtension"]
     end
 
     subgraph PLATFORM["Platform"]
         direction TB
+        subgraph AGENT["platform.agent_runtime<br/>Top-level Agent Runtime"]
+            direction TB
+            AR1["ModeSelector<br/>简单问题 ReAct，复杂问题 Plan"]
+            AR2["ReActRuntime<br/>turn / action / observation"]
+            AR3["MinimalPlanner + PlanExecutor<br/>PlanRun / PlanStep / retry / waiting_user"]
+            AR4["ToolExecutor<br/>按 scene 白名单执行工具"]
+            AR5["RAG Tool Adapters<br/>native_rag_search / agentic_rag_search"]
+        end
+        subgraph TOOLS["platform.tools<br/>Neutral Tool Protocol"]
+            direction TB
+            T1["base.py<br/>ToolContext / ToolResult / approval metadata"]
+            T2["registry.py / adapters.py<br/>工具注册、StructuredTool、RetrievalTool adapter"]
+        end
         subgraph RAG["platform.rag<br/>Modular RAG"]
             direction TB
             RAG0["contracts.py<br/>RetrievalTool / RetrievalResult / RetrievalPlan"]
             RAG1["pre_retrieval<br/>QueryRewriter / QueryRewrite"]
-            RAG2["orchestration<br/>AgenticRetriever / SufficiencyDecision"]
+            RAG2["orchestration<br/>AgenticRetriever / SufficiencyDecision / no-hit fallback"]
             RAG3["retrieval.documents<br/>DocumentRetrievalService / semantic / keyword / fusion"]
             RAG4["post_retrieval<br/>RetrievalReranker / IdentityReranker"]
         end
@@ -39,8 +54,8 @@ flowchart LR
         end
         subgraph WF["platform.workflow.langgraph<br/>LangGraph Runtime Foundation"]
             direction TB
-            WF1["RuntimeGraphState / Config<br/>session_id、request_id、messages、answer、trace"]
-            WF2["GraphRunLifecycleRecorder<br/>created / running / succeeded / failed"]
+            WF1["RuntimeGraphState / Config<br/>session_id、request_id、messages、answer、trace、agent audit"]
+            WF2["GraphRunLifecycleRecorder + State Machine<br/>created / planning / running / waiting_user / retrying / terminal"]
             WF3["SQLiteLangGraphCheckpointer<br/>checkpoints / blobs / pending writes"]
         end
         PL3["KnowledgeDocumentApplicationService / QueryService<br/>预处理预览、注册、重处理、重分块、查询"]
@@ -70,20 +85,33 @@ flowchart LR
     APP1 --> PL3
     APP3 --> APP4
     APP3 --> APP5
-    APP3 --> APP6
     APP3 --> PL4
-    APP3 --> PL5
+    APP5 --> APP6
+    APP5 --> APP7
+    APP5 --> PL4
+    APP5 --> PL5
 
     APP4 --> SC1
     APP4 --> SC2
-    SC2 -. 注入业务扩展 .-> SC3
+    SC1 --> SC3
+    SC2 --> SC3
+    SC2 -. 注入业务扩展 .-> SC4
 
-    SC1 --> RAG2
-    SC1 --> RAG3
-    SC2 --> RAG2
-    SC2 --> RAG3
-    SC3 --> RAG2
-    SC3 --> DB4
+    APP5 --> AR1
+    APP5 --> AR2
+    APP5 --> AR3
+    AR1 --> AR2
+    AR1 --> AR3
+    AR2 --> AR4
+    AR3 --> AR4
+    AR4 --> AR5
+    AR4 --> T1
+    AR4 --> T2
+    AR4 --> SC3
+    AR5 --> RAG2
+    AR5 --> RAG3
+    SC4 --> RAG2
+    SC4 --> DB4
 
     RAG2 --> RAG0
     RAG2 --> RAG1
@@ -96,10 +124,10 @@ flowchart LR
     PL3 --> DB2
     PL3 --> DB3
     PL4 --> DB1
-    APP5 --> WF1
-    APP5 --> WF2
-    APP5 --> WF3
-    APP5 -. 首次 graph run 从兼容读模型种子化 .-> PL4
-    APP6 -. 对外保持 start / history / tool / chunk / done / error .-> APP1
+    APP6 --> WF1
+    APP6 --> WF2
+    APP6 --> WF3
+    APP6 -. 首次 graph run 从兼容读模型种子化 .-> PL4
+    APP7 -. 对外保持 start / history / tool / chunk / waiting_user / done / error .-> APP1
     WF3 --> DB5
     PL5 --> EX1

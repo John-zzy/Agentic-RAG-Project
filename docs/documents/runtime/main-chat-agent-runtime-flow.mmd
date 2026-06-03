@@ -1,0 +1,54 @@
+flowchart TD
+    A["POST /chat<br/>用户发送聊天请求"] --> B["ActiveSceneChatService.chat<br/>按 session.scene 找到 ChatService"]
+    B --> C["ChatService._prepare_chat_turn<br/>准备 request_id、session、消息"]
+    C --> C1["ChatTurnPreparationMixin._prepare_existing_session_turn<br/>读取 mounted_knowledge_sources"]
+    C1 --> C2["MinimalModeSelector.select<br/>判断简单问题还是复杂问题"]
+
+    C2 -->|react| R1["ReActRuntime.run<br/>简单问题直接选择下一次工具调用"]
+    C2 -->|plan| P1["MinimalPlanner.create_plan<br/>复杂问题先生成 PlanRun / PlanStep"]
+    P1 --> P2["PlanExecutor.execute<br/>按 depends_on 顺序执行步骤"]
+
+    R1 --> T["ToolExecutor.execute<br/>只调用当前场景允许的工具"]
+    P2 --> T
+    T --> T1{"tool_name"}
+
+    T1 -->|agentic_rag_search| G1["AgenticRagToolAdapter.execute<br/>把 Agentic RAG 包装成工具"]
+    T1 -->|native_rag_search| G0["NativeRagToolAdapter.execute<br/>把 Native RAG 包装成工具"]
+    T1 -->|scene tool| G2["Scene Tool.execute<br/>业务查询、写操作或 ask_user"]
+    G2 --> G3{"requires_user?"}
+    G3 -->|true| H1["ChatGraphRuntime.create_hitl_wait<br/>暂停并进入 waiting_user"]
+    G3 -->|false| O1["ToolObservation<br/>记录工具输出"]
+
+    subgraph ARAG["RAG 工具内部怎么查资料"]
+        direction TB
+        G1 --> A1["AgenticRetriever.retrieve_with_trace<br/>开始多轮检索并记录 trace"]
+        G0 --> A4
+        A1 --> A2["GenericAssistantQueryRewriter.rewrite<br/>改写用户问题"]
+        A2 --> A3["AgenticRetriever.next_action<br/>选择检索入口或继续改写"]
+        A3 --> A4["DocumentRetrievalService.retrieve<br/>语义检索 + 关键词检索 + 合并排序"]
+        A4 --> A5["RetrievalReranker.rerank<br/>重排并过滤低分结果"]
+        A5 --> A6["GenericAssistantSufficiencyJudge.judge<br/>判断证据够不够回答"]
+        A6 --> A7{"SufficiencyDecision.next_action"}
+        A7 -->|rewrite_query / switch_tool| A2
+        A7 -->|answer_with_evidence| A8["AgenticRetrievalOutcome<br/>输出 documents、citations、rounds"]
+        A7 -->|ask_user / no_evidence| A9["AgenticRetrievalOutcome<br/>输出 follow_up 或 fallback decision"]
+    end
+
+    A8 --> O1
+    A9 --> O1
+    O1 --> S1["ChatAgentRuntimeMixin._agent_execution_result_from_observation<br/>整理 react_run 或 plan_run"]
+    S1 --> S2["PreparedChatTurn<br/>保存 citations、retrieval_trace、answer_mode"]
+
+    S2 --> L1["ChatGraphRuntime.invoke / start_stream_run<br/>创建 LangGraph run"]
+    L1 --> L2["AnswerGraphMixin._compile_answer_graph<br/>编译 answer node"]
+    L2 --> L3["SQLiteLangGraphCheckpointer.put<br/>保存 checkpoint，支持恢复"]
+    L3 --> L4["ChatAnsweringMixin._generate_answer<br/>生成证据回答、追问或兜底"]
+    L4 --> L5["ChatResponseMixin._persist_turn<br/>保存到聊天历史"]
+    L5 --> L6["ChatResponse / ChatStreamEvent<br/>返回 JSON 或 SSE done"]
+
+    H1 --> H2["HitlRuntimeMixin.create_hitl_wait<br/>保存 interrupt_id、turn_id 或 step_id"]
+    H2 --> H3["POST /chat/resume<br/>用户恢复等待点"]
+    H3 --> H4{"ChatResumeRequest.action"}
+    H4 -->|respond| C
+    H4 -->|approve| T
+    H4 -->|reject| H5["HitlRuntimeMixin.resume_hitl<br/>workflow=cancelled，turn 或 step 取消"]

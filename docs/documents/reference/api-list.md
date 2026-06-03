@@ -31,14 +31,14 @@
     - `final_state`: 可选 workflow run 终态；`done` 常见为 `"succeeded"` 或 `"cancelled"`，`error` 为 `"failed"`。
     - `run_id`: 可选 workflow run ID，用于关联 runtime lifecycle。
     - `state_event`: 可选状态机事件，如 `run_start`、`interrupt`、`resume_respond`、`resume_reject`、`success`。
-    - `hitl`: 可选 HITL 等待态；非等待场景为空。等待态包含 `interrupt_id`、`thread_id`、`reason`、`pending_action`、`proposed_tool_call`、`allowed_actions`、`suggested_responses`、`allow_freeform_response`、`resume_payload`。
+    - `hitl`: 可选 HITL 等待态；非等待场景为空。等待态包含 `interrupt_id`、`thread_id`、`reason`、`pending_action`、`proposed_tool_call`、`allowed_actions`、`suggested_responses`、`allow_freeform_response`、`resume_payload`、`metadata`；顶层 Agent wait 会在 `metadata` 中写入 `mode`、`react_run_id/current_turn_id` 或 `plan_run_id/current_step_id`。
     - `citations`: 统一引用列表，每项包含 `index`、`citation_id`、`namespace`、`source_kind`、`source_name`、`source_path`、`document_id`、`chunk_id`、`chunk_index`、`snippet`、`score`、`vector_score`、`keyword_score`、`vector_rank`、`keyword_rank`、`matched_by`、`rank`。
   - 流式 `stream=true`：
     - 响应头为 `Content-Type: text/event-stream`。
     - 事件类型为 `start`、`history`、`tool`、`chunk`、`waiting_user`、`done`、`error`，且 `data` 一律为 JSON。
-    - `start.data` 包含 `session_id`、`request_id`、`knowledge_used`、`scene`、`agent`、`state`、`state_event`。
+    - `start.data` 包含 `session_id`、`request_id`、`knowledge_used`、`scene`、`agent`、`agent_mode`、`state`、`state_event`。
     - `history.data` 包含 `session_id`、`request_id`、`window_size`、`message_count`、`messages`，用于暴露本轮注入模型前的历史消息窗口；`messages` 每项包含 `type` 与 `content`。
-    - `tool.data` 包含 retrieval 阶段的结构化结果，固定补充 `session_id`、`request_id`、`knowledge_used`、`citations`；当前常见字段还包括 `stage`、`mode`、`retrieval_policy`、`candidate_tools`、`documents`、`rounds`。
+    - `tool.data` 包含顶层 Agent 工具进度和 retrieval 阶段结构化结果，固定补充 `session_id`、`request_id`、`agent_mode`、`knowledge_used`、`citations`；`stage` 取 `react_turn` 或 `plan_step`，原检索阶段保存在 `retrieval_stage`；ReAct payload 包含 `react_run_id`、`turn_id`、`turn_status`、`action`、`tool_name`，Plan payload 包含 `plan_run_id`、`step_id`、`step_status`、`tool_name`；RAG 细节继续保存在 `retrieval_trace` 和 `rounds`。
     - `chunk.data` 包含 `delta`，表示最终回答文本增量。
     - `waiting_user.data` 包含 `session_id`、`request_id`、`status="waiting_user"`、`state="waiting_user"`、`state_event="interrupt"`、`run_id`、`hitl`；客户端需要使用 `hitl.interrupt_id` 调用 `/chat/resume`。
     - `done.data` 与非流式 `ChatResponse` 结构一致，客户端应以 `done.answer` 作为最终权威文本，并可读取 `final_state`。

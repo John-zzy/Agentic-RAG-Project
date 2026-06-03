@@ -6,7 +6,7 @@
 
 - 文档总索引：[docs/documents/README.md](./docs/documents/README.md)
 - 系统架构图：[docs/documents/architecture/system-overview.svg](./docs/documents/architecture/system-overview.svg)
-- LangGraph Runtime 图：[docs/documents/architecture/langgraph-runtime-current.svg](./docs/documents/architecture/langgraph-runtime-current.svg)
+- Main Chat Agent Runtime Flow：[docs/documents/runtime/main-chat-agent-runtime-flow.svg](./docs/documents/runtime/main-chat-agent-runtime-flow.svg)
 - 知识管理流程图：[docs/documents/knowledge/knowledge-document-flow.svg](./docs/documents/knowledge/knowledge-document-flow.svg)
 - Agentic RAG 流程图：[docs/documents/rag/agentic-rag-retrieval-flow.svg](./docs/documents/rag/agentic-rag-retrieval-flow.svg)
 - API 文档：[docs/documents/reference/api-list.md](./docs/documents/reference/api-list.md)

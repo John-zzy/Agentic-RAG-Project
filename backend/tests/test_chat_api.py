@@ -11,6 +11,7 @@ from langchain_core.runnables import RunnableLambda, RunnableSerializable
 
 from backend.application.runtime.api.app import create_app
 from backend.application.runtime import ChatService, SceneChatService, build_default_scene_registry
+from backend.platform.agent_runtime.tool_executor import ToolExecutor
 from backend.platform.config.settings import AppSettings
 from backend.platform.knowledge.repositories import VectorStoreFactory
 from backend.platform.memory.base.session_store import SQLiteSessionStore
@@ -533,6 +534,53 @@ def test_chat_api_success_path() -> None:
     assert len(model.invoke_runnable_calls) == 1
 
 
+def test_chat_api_rag_evidence_is_produced_through_tool_executor(monkeypatch) -> None:
+    knowledge = FakeKnowledgeService()
+    document_retrieval_service = FakeDocumentRetrievalService(
+        documents=[
+            _result(
+                doc_id="doc-tool-executor",
+                content="ToolExecutor 负责执行顶层 RAG 工具。",
+                score=0.94,
+                metadata={
+                    "document_id": "doc-tool-executor",
+                    "source_path": "tool-executor.md",
+                    "namespace": "documents",
+                    "is_managed_document": True,
+                    "chunk_id": "chunk-tool-executor",
+                    "chunk_index": 0,
+                },
+            )
+        ]
+    )
+    model = FakeModel(answer="ToolExecutor 已返回证据。")
+    calls: list[dict[str, Any]] = []
+    original_execute = ToolExecutor.execute
+
+    def _spy_execute(self: ToolExecutor, **kwargs: Any):
+        calls.append(dict(kwargs))
+        return original_execute(self, **kwargs)
+
+    monkeypatch.setattr(ToolExecutor, "execute", _spy_execute)
+    service = _build_chat_service(
+        "chat-api-tool-executor-rag-path",
+        knowledge,
+        document_retrieval_service,
+        model,
+    )
+    app = create_app(chat_service=service)
+
+    with TestClient(app) as client:
+        response = client.post("/chat", json={"message": "说明 ToolExecutor"})
+
+    payload = response.json()
+    assert response.status_code == 200
+    assert payload["knowledge_used"] is True
+    assert calls
+    assert calls[0]["tool_name"] == "agentic_rag_search"
+    assert calls[0]["input_payload"]["query"] == "说明 ToolExecutor"
+
+
 def test_chat_api_sse_success_path_returns_structured_events() -> None:
     knowledge = FakeKnowledgeService()
     document_retrieval_service = FakeDocumentRetrievalService(
@@ -583,11 +631,19 @@ def test_chat_api_sse_success_path_returns_structured_events() -> None:
     assert start_payload["session_id"]
     assert start_payload["request_id"]
     assert start_payload["knowledge_used"] is True
+    assert start_payload["agent_mode"] == "react"
     assert start_payload["state"] == "running"
     assert start_payload["state_event"] == "run_start"
     assert history_payload["message_count"] == 0
     assert history_payload["messages"] == []
     assert tool_payload["knowledge_used"] is True
+    assert tool_payload["stage"] == "react_turn"
+    assert tool_payload["retrieval_stage"] == "retrieval"
+    assert tool_payload["agent_mode"] == "react"
+    assert tool_payload["react_run_id"].startswith("react-")
+    assert tool_payload["turn_id"] == "turn-1"
+    assert tool_payload["turn_status"] == "succeeded"
+    assert tool_payload["tool_name"] == "agentic_rag_search"
     assert tool_payload["final_decision"] == "answer_with_evidence"
     assert tool_payload["answer_mode"] == "evidence_answer"
     assert tool_payload["documents"] == 1
@@ -634,8 +690,61 @@ def test_chat_api_sse_success_path_returns_structured_events() -> None:
     assert restored is not None
     assert restored.checkpoint["channel_values"]["status"] == "succeeded"
     assert restored.checkpoint["channel_values"]["run_id"] == done_payload["run_id"]
+    assert restored.checkpoint["channel_values"]["agent_mode"] == "react"
+    assert restored.checkpoint["channel_values"]["react_run"]["turns"][0]["observation"]["trace"][
+        "retrieval_trace"
+    ]["final_decision"] == "answer_with_evidence"
     assert model.get_runnable_calls == ["simple"]
     assert len(model.stream_runnable_calls) == 1
+
+
+def test_chat_api_sse_plan_request_uses_plan_step_tool_stage() -> None:
+    knowledge = FakeKnowledgeService()
+    document_retrieval_service = FakeDocumentRetrievalService(
+        documents=[
+            _result(
+                doc_id="doc-plan",
+                content="Planner Runtime 支持步骤化执行和最终汇总。",
+                score=0.93,
+                metadata={
+                    "document_id": "doc-plan",
+                    "source_path": "plan.md",
+                    "namespace": "documents",
+                    "is_managed_document": True,
+                    "chunk_id": "chunk-plan",
+                    "chunk_index": 0,
+                },
+            )
+        ]
+    )
+    service = _build_chat_service(
+        "chat-api-sse-plan-stage",
+        knowledge,
+        document_retrieval_service,
+        FakeModel(answer="Planner Runtime 支持步骤化执行。[1]"),
+    )
+    app = create_app(chat_service=service)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/chat",
+            json={"message": "请分步骤制定计划并汇总 Planner Runtime", "stream": True},
+        )
+
+    assert response.status_code == 200
+    events = _parse_sse_events(response.text)
+    assert [event["event"] for event in events] == ["start", "history", "tool", "chunk", "done"]
+    start_payload = json.loads(events[0]["data"])
+    tool_payload = json.loads(events[2]["data"])
+    done_payload = json.loads(events[-1]["data"])
+    assert start_payload["agent_mode"] == "plan"
+    assert tool_payload["stage"] == "plan_step"
+    assert tool_payload["agent_mode"] == "plan"
+    assert tool_payload["plan_run_id"].startswith("plan-")
+    assert tool_payload["step_id"] == "step-1"
+    assert tool_payload["step_status"] == "succeeded"
+    assert tool_payload["retrieval_trace"]["rounds"][0]["tool_name"] == "knowledge_document_search"
+    assert done_payload["final_state"] == "succeeded"
 
 
 def test_chat_api_validation_error_when_message_missing() -> None:

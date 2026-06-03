@@ -64,6 +64,7 @@ class _PreparedGraphTurn:
     citations: list[Citation]
     retrieval_trace: RetrievalTrace
     scene_metadata: _SceneMetadata = _SceneMetadata()
+    agent_mode: str = "react"
 
 
 class _SearchRetriever:
@@ -116,6 +117,12 @@ def test_runtime_graph_state_exposes_minimal_chat_execution_fields() -> None:
         "retry_metadata",
         "hitl",
         "hitl_resume",
+        "agent_mode",
+        "react_run",
+        "plan_run",
+        "current_turn_id",
+        "current_step_id",
+        "current_tool_call",
     }
 
     state = build_runtime_graph_state(
@@ -143,6 +150,12 @@ def test_runtime_graph_state_exposes_minimal_chat_execution_fields() -> None:
     assert state["retry_attempt"] == 0
     assert state["hitl"] is None
     assert state["hitl_resume"] is None
+    assert state["agent_mode"] is None
+    assert state["react_run"] is None
+    assert state["plan_run"] is None
+    assert state["current_turn_id"] is None
+    assert state["current_step_id"] is None
+    assert state["current_tool_call"] is None
 
 
 def test_runtime_graph_state_defaults_keep_non_evidence_branches_representable() -> None:
@@ -170,6 +183,12 @@ def test_runtime_graph_state_defaults_keep_non_evidence_branches_representable()
         "retry_metadata": {},
         "hitl": None,
         "hitl_resume": None,
+        "agent_mode": None,
+        "react_run": None,
+        "plan_run": None,
+        "current_turn_id": None,
+        "current_step_id": None,
+        "current_tool_call": None,
     }
 
 
@@ -207,6 +226,7 @@ def test_runtime_hitl_state_preserves_serializable_protocol_fields() -> None:
         "suggested_responses",
         "allow_freeform_response",
         "resume_payload",
+        "metadata",
     }
     assert state["hitl"] == {
         "interrupt_id": "interrupt-1",
@@ -224,6 +244,7 @@ def test_runtime_hitl_state_preserves_serializable_protocol_fields() -> None:
         ],
         "allow_freeform_response": True,
         "resume_payload": None,
+        "metadata": {},
     }
 
 
@@ -438,6 +459,86 @@ def test_chat_graph_runtime_invokes_answer_graph_and_persists_checkpoint_metadat
     assert restored.checkpoint["channel_values"]["answer"] == "graph answer"
     assert restored.checkpoint["channel_values"]["status"] == "succeeded"
     assert restored.checkpoint["channel_values"]["final_state"] == "succeeded"
+    checkpoint_values = restored.checkpoint["channel_values"]
+    assert checkpoint_values["agent_mode"] == "react"
+    assert checkpoint_values["react_run"]["workflow_status"] == "succeeded"
+    assert checkpoint_values["react_run"]["turns"][0]["status"] == "succeeded"
+    assert checkpoint_values["react_run"]["turns"][0]["observation"]["trace"]["retrieval_trace"][
+        "final_decision"
+    ] == "answer_with_evidence"
+    assert checkpoint_values["current_turn_id"] is None
+    assert checkpoint_values["current_tool_call"] is None
+
+
+def test_chat_graph_runtime_persists_plan_run_for_plan_mode() -> None:
+    runtime = _build_chat_graph_runtime("runtime-graph-plan-checkpoint")
+    prepared = _PreparedGraphTurn(
+        session_id="session-plan",
+        request_id="req-plan",
+        user_message="请分步骤规划并汇总 graph runtime",
+        answer_mode="evidence_answer",
+        final_decision="answer_with_evidence",
+        knowledge_used=True,
+        citations=[_citation()],
+        retrieval_trace=_retrieval_trace(citations=[_citation()]),
+        agent_mode="plan",
+    )
+
+    result = runtime.invoke(
+        prepared=prepared,
+        answer_builder=lambda turn: ("plan graph answer", turn.citations),
+        history_loader=lambda _: [],
+    )
+
+    assert result.state["agent_mode"] == "plan"
+    assert result.state["plan_run"]["workflow_status"] == "succeeded"
+    assert result.state["plan_run"]["steps"][0]["status"] == "succeeded"
+    assert result.state["plan_run"]["steps"][0]["tool_name"] == "native_rag_search"
+    assert result.state["react_run"] is None
+
+
+def test_chat_graph_runtime_tolerates_legacy_checkpoint_without_agent_fields() -> None:
+    runtime = _build_chat_graph_runtime("runtime-graph-legacy-agent-fields")
+    config = build_runtime_graph_config(
+        session_id="session-legacy-agent",
+        request_id="req-legacy-agent",
+    )
+    state = build_runtime_graph_state(
+        session_id="session-legacy-agent",
+        request_id="req-legacy-agent",
+        answer="legacy answer",
+    )
+    # 模拟旧 checkpoint：channel values 不包含 orchestration 字段。
+    legacy_values = {
+        key: value
+        for key, value in state.items()
+        if key
+        not in {
+            "agent_mode",
+            "react_run",
+            "plan_run",
+            "current_turn_id",
+            "current_step_id",
+            "current_tool_call",
+        }
+    }
+    runtime._persist_state_update(  # noqa: SLF001 - 测试旧 checkpoint 读取边界。
+        state=state,
+        config=config,
+        update=legacy_values,
+    )
+
+    loaded = runtime._load_or_build_thread_state(  # noqa: SLF001 - 验证容忍旧字段缺失。
+        session_id="session-legacy-agent",
+        request_id="req-legacy-agent",
+        config=config,
+        require_checkpoint=True,
+    )
+
+    assert loaded["answer"] == "legacy answer"
+    assert loaded["agent_mode"] is None
+    assert loaded["react_run"] is None
+    assert loaded["plan_run"] is None
 
 
 def test_chat_graph_runtime_seeds_legacy_history_only_without_checkpoint() -> None:
@@ -515,6 +616,200 @@ def test_chat_graph_runtime_creates_hitl_wait_checkpoint() -> None:
         "reject",
     ]
     assert runtime.lifecycle.events(result.run_id)[-1].status == "waiting_user"
+
+
+def test_chat_graph_runtime_creates_plan_hitl_wait_checkpoint() -> None:
+    runtime = _build_chat_graph_runtime("runtime-graph-plan-hitl-wait")
+
+    result = runtime.create_hitl_wait(
+        wait=HitlWaitInput(
+            session_id="session-plan-hitl",
+            request_id="req-plan-hitl-wait",
+            reason="计划步骤需要人工审批。",
+            pending_action="tool_approval",
+            proposed_tool_call={
+                "tool_name": "native_rag_search",
+                "args": {"query": "审批后继续"},
+            },
+            allowed_actions=["approve", "reject"],
+            metadata={
+                "mode": "plan",
+                "plan_run_id": "plan-wait",
+                "current_step_id": "step-approval",
+                "user_goal": "审批后继续",
+            },
+        ),
+        interrupt_id="interrupt-plan-hitl",
+    )
+
+    assert result.state["agent_mode"] == "plan"
+    assert result.state["current_step_id"] == "step-approval"
+    assert result.state["current_tool_call"]["tool_name"] == "native_rag_search"
+    assert result.state["hitl"]["metadata"]["mode"] == "plan"
+    assert result.state["plan_run"]["workflow_status"] == "waiting_user"
+    assert result.state["plan_run"]["steps"][0]["status"] == "waiting_user"
+
+
+def test_chat_graph_runtime_plan_reject_cancels_waiting_step() -> None:
+    runtime = _build_chat_graph_runtime("runtime-graph-plan-hitl-reject")
+    runtime.create_hitl_wait(
+        wait=HitlWaitInput(
+            session_id="session-plan-reject",
+            request_id="req-plan-reject-wait",
+            reason="计划步骤需要人工审批。",
+            pending_action="tool_approval",
+            proposed_tool_call={
+                "tool_name": "native_rag_search",
+                "args": {"query": "拒绝后不执行"},
+            },
+            allowed_actions=["approve", "reject"],
+            metadata={
+                "mode": "plan",
+                "plan_run_id": "plan-reject",
+                "current_step_id": "step-reject",
+                "user_goal": "拒绝后不执行",
+            },
+        ),
+        interrupt_id="interrupt-plan-reject",
+    )
+    executed = False
+
+    result = runtime.resume_hitl(
+        resume=HitlResumeInput(
+            session_id="session-plan-reject",
+            request_id="req-plan-reject-resume",
+            interrupt_id="interrupt-plan-reject",
+            action="reject",
+        ),
+        approve_executor=lambda _: {"executed": executed},
+    )
+
+    assert executed is False
+    assert result.state["status"] == "cancelled"
+    assert result.state["plan_run"]["workflow_status"] == "cancelled"
+    assert result.state["plan_run"]["steps"][0]["status"] == "cancelled"
+    assert result.state["current_step_id"] is None
+    assert result.state["current_tool_call"] is None
+
+
+def test_chat_graph_runtime_creates_react_clarification_wait_metadata() -> None:
+    runtime = _build_chat_graph_runtime("runtime-graph-react-hitl-wait")
+
+    result = runtime.create_hitl_wait(
+        wait=HitlWaitInput(
+            session_id="session-react-hitl",
+            request_id="req-react-hitl",
+            reason="需要补充文档主题。",
+            pending_action="clarification",
+            allowed_actions=["respond", "reject"],
+            suggested_responses=[{"suggestion_id": "topic", "label": "主题", "value": "安全"}],
+            allow_freeform_response=True,
+            metadata={
+                "mode": "react",
+                "react_run_id": "react-req-react-hitl",
+                "current_turn_id": "turn-1",
+                "user_goal": "查询制度",
+            },
+        ),
+        interrupt_id="interrupt-react-hitl",
+    )
+
+    assert result.state["agent_mode"] == "react"
+    assert result.state["current_turn_id"] == "turn-1"
+    assert result.state["hitl"]["metadata"]["mode"] == "react"
+    assert result.state["hitl"]["metadata"]["react_run_id"] == "react-req-react-hitl"
+    assert result.state["react_run"]["react_run_id"] == "react-req-react-hitl"
+    assert result.state["react_run"]["turns"][0]["status"] == "waiting_user"
+
+
+def test_chat_graph_runtime_creates_plan_approval_wait_metadata_and_approve_resumes_step() -> None:
+    runtime = _build_chat_graph_runtime("runtime-graph-plan-hitl-approve")
+
+    runtime.create_hitl_wait(
+        wait=HitlWaitInput(
+            session_id="session-plan-hitl",
+            request_id="req-plan-hitl",
+            reason="计划步骤需要审批。",
+            pending_action="tool_approval",
+            proposed_tool_call={"tool_name": "generic_write", "args": {"query": "publish"}},
+            allowed_actions=["approve", "reject"],
+            metadata={
+                "mode": "plan",
+                "plan_run_id": "plan-req-plan-hitl",
+                "current_step_id": "step-1",
+                "user_goal": "发布文档",
+            },
+        ),
+        interrupt_id="interrupt-plan-hitl",
+    )
+
+    result = runtime.resume_hitl(
+        resume=HitlResumeInput(
+            session_id="session-plan-hitl",
+            request_id="req-plan-hitl-resume",
+            interrupt_id="interrupt-plan-hitl",
+            action="approve",
+        ),
+        approve_executor=lambda tool_call: {"executed_tool": tool_call["tool_name"]},
+    )
+
+    assert result.state["status"] == "succeeded"
+    assert result.state["plan_run"]["workflow_status"] == "succeeded"
+    assert result.state["plan_run"]["steps"][0]["status"] == "succeeded"
+    assert result.state["hitl_resume"]["metadata"]["mode"] == "plan"
+    assert result.tool_result == {"executed_tool": "generic_write"}
+
+
+def test_chat_graph_runtime_rejects_stale_agent_runtime_hitl_identity() -> None:
+    runtime = _build_chat_graph_runtime("runtime-graph-stale-agent-hitl")
+
+    runtime.create_hitl_wait(
+        wait=HitlWaitInput(
+            session_id="session-stale-agent-hitl",
+            request_id="req-stale-agent-hitl",
+            reason="需要补充文档主题。",
+            pending_action="clarification",
+            allowed_actions=["respond", "reject"],
+            allow_freeform_response=True,
+            metadata={
+                "mode": "react",
+                "react_run_id": "react-expected",
+                "current_turn_id": "turn-1",
+            },
+        ),
+        interrupt_id="interrupt-stale-agent-hitl",
+    )
+    config = build_runtime_graph_config(
+        session_id="session-stale-agent-hitl",
+        request_id="req-stale-agent-hitl",
+    )
+    state = runtime._load_or_build_thread_state(  # noqa: SLF001 - stale checkpoint setup.
+        session_id="session-stale-agent-hitl",
+        request_id="req-stale-agent-hitl",
+        config=config,
+        require_checkpoint=True,
+    )
+    runtime._persist_state_update(  # noqa: SLF001 - stale checkpoint setup.
+        state=state,
+        config=config,
+        update={"current_turn_id": "turn-stale"},
+    )
+
+    try:
+        runtime.resume_hitl(
+            resume=HitlResumeInput(
+                session_id="session-stale-agent-hitl",
+                request_id="req-stale-agent-hitl-resume",
+                interrupt_id="interrupt-stale-agent-hitl",
+                action="respond",
+                payload={"response": "安全", "source": "freeform"},
+            ),
+            respond_handler=lambda _: {"status": "succeeded", "answer": "should not run"},
+        )
+    except HitlResumeError as exc:
+        assert "current_turn_id" in str(exc)
+    else:
+        raise AssertionError("stale ReAct turn id should reject resume")
 
 
 def test_chat_graph_runtime_rejects_invalid_hitl_wait_protocol() -> None:

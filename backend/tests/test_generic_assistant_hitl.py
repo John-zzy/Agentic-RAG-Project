@@ -324,6 +324,9 @@ def test_generic_assistant_ask_user_creates_clarification_wait_when_hitl_enabled
     assert response.hitl.pending_action == "clarification"
     assert response.hitl.allowed_actions == ["respond", "reject"]
     assert response.hitl.allow_freeform_response is True
+    assert response.hitl.metadata["mode"] == "react"
+    assert response.hitl.metadata["react_run_id"]
+    assert response.hitl.metadata["current_turn_id"] == "turn-1"
     assert {item.suggestion_id for item in response.hitl.suggested_responses} == {
         "clarify_topic",
         "clarify_term",
@@ -587,6 +590,8 @@ def test_generic_assistant_sse_emits_waiting_user_for_clarification() -> None:
         "tool",
         "waiting_user",
     ]
+    tool_payload = events[2]["data"]
+    assert '"turn_status": "waiting_user"' in tool_payload
     waiting_payload = events[-1]["data"]
     assert '"status": "waiting_user"' in waiting_payload
     assert '"pending_action": "clarification"' in waiting_payload

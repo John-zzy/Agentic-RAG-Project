@@ -28,6 +28,8 @@
 
 ## 架构概览
 
+![系统架构图](./docs/documents/architecture/system-overview-high-end.png)
+
 ```text
 backend/
 ├─ application/        # FastAPI runtime、API 路由、服务装配
@@ -79,7 +81,9 @@ openspec/              # 变更提案、规格与归档记录
 - [x] LangGraph Runtime 骨架：接入 graph state、`thread_id`、checkpointer、stream event 映射和 graph run 生命周期管理。
 - [x] Human-in-the-Loop：基于 LangGraph interrupt/resume 支持 `approve / reject / respond`，覆盖 generic 写操作测试工具、外部 API 测试工具和 `ask_user` 澄清场景；`edit` 保留协议占位。
 - [x] Workflow State Machine：基于 LangGraph 节点和持久化状态表达 `created / planning / running / waiting_user / retrying / succeeded / failed / cancelled`。
-- [ ] Planner / Executor：支持计划生成、步骤拆解、工具调用链执行、步骤结果沉淀和最终汇总，并保留人工介入点。
+- [x] ReAct / Plan Agent Runtime 最小结构：新增顶层 `ReActRun` / `PlanRun` / `PlanStep` / `ToolObservation` 合同、ModeSelector、ToolExecutor、RAG tool adapter、checkpoint orchestration 字段、HITL metadata 和 SSE `tool.stage=react_turn/plan_step` 兼容扩展。
+- [x] `/chat` 真实 Agent Runtime Graph 接入：将当前“检索前置 + Agent audit/checkpoint 桥接”替换为 `ModeSelector -> ReActRuntime / Planner / PlanExecutor -> ToolExecutor -> final synthesis` 的真实执行路径，确保 ReAct/Plan 在 `/chat` 中实际选择并调用工具。
+- [ ] Planner / Executor 深化：在真实 graph 接入后，完善计划生成、步骤拆解、依赖执行、步骤结果沉淀、失败恢复和最终汇总，并保留人工介入点。
 - [ ] Agentic RAG Subgraph：将 `AgenticRetriever` 中手写的 `while` 循环、`next_action` 路由、query rewrite、工具切换、rerank、充分性判断和 no-hit fallback 迁移为可复用 LangGraph 子图。
 - [ ] LangChain / LangGraph 重构审计：逐项识别当前自造状态机、streaming glue、history glue、tool routing glue，能用 LangGraph graph / node / conditional edge / interrupt 表达的优先迁移。
 - [ ] Business Handoff Subgraph：将 `generic_assistant` 到 `ecommerce` 的 handoff / followup 逻辑从 scene 内部判断迁移为 LangGraph router 或业务子图。
@@ -191,7 +195,7 @@ backend\.venv\Scripts\python.exe backend\evals\run_http_eval.py --base-url http:
 
 - [文档总索引](./docs/documents/README.md)
 - [系统架构图](./docs/documents/architecture/system-overview.svg)
-- [LangGraph Runtime 图](./docs/documents/architecture/langgraph-runtime-current.svg)
+- [Main Chat Agent Runtime Flow](./docs/documents/runtime/main-chat-agent-runtime-flow.svg)
 - [知识管理流程图](./docs/documents/knowledge/knowledge-document-flow.svg)
 - [Agentic RAG 流程图](./docs/documents/rag/agentic-rag-retrieval-flow.svg)
 - [Agentic RAG 设计说明](./docs/documents/rag/agentic-rag.md)

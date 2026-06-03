@@ -49,6 +49,7 @@ class RuntimeHitlState(TypedDict, total=False):
     suggested_responses: list[RuntimeHitlSuggestedResponse]
     allow_freeform_response: bool
     resume_payload: RuntimeHitlResumePayload | None
+    metadata: dict[str, Any]
 
 
 class RuntimeGraphState(TypedDict):
@@ -70,6 +71,12 @@ class RuntimeGraphState(TypedDict):
     retry_metadata: NotRequired[dict[str, Any]]
     hitl: NotRequired[RuntimeHitlState | None]
     hitl_resume: NotRequired[RuntimeHitlResumePayload | None]
+    agent_mode: NotRequired[str | None]
+    react_run: NotRequired[dict[str, Any] | None]
+    plan_run: NotRequired[dict[str, Any] | None]
+    current_turn_id: NotRequired[str | None]
+    current_step_id: NotRequired[str | None]
+    current_tool_call: NotRequired[dict[str, Any] | None]
 
 
 def build_runtime_hitl_state(
@@ -83,6 +90,7 @@ def build_runtime_hitl_state(
     suggested_responses: Sequence[Mapping[str, Any]] | None = None,
     allow_freeform_response: bool = False,
     resume_payload: Mapping[str, Any] | None = None,
+    metadata: Mapping[str, Any] | None = None,
 ) -> RuntimeHitlState:
     """创建等待用户处理的状态，保证各入口使用同一组字段。"""
     if not interrupt_id:
@@ -105,6 +113,7 @@ def build_runtime_hitl_state(
         ],
         "allow_freeform_response": allow_freeform_response,
         "resume_payload": dict(resume_payload) if resume_payload else None,
+        "metadata": dict(metadata or {}),
     }
 
 
@@ -126,6 +135,12 @@ def build_runtime_graph_state(
     retry_metadata: Mapping[str, Any] | None = None,
     hitl: Mapping[str, Any] | None = None,
     hitl_resume: Mapping[str, Any] | None = None,
+    agent_mode: str | None = None,
+    react_run: Mapping[str, Any] | None = None,
+    plan_run: Mapping[str, Any] | None = None,
+    current_turn_id: str | None = None,
+    current_step_id: str | None = None,
+    current_tool_call: Mapping[str, Any] | None = None,
 ) -> RuntimeGraphState:
     """创建一份可以保存到 checkpoint 的 graph 状态。"""
     if not session_id:
@@ -154,4 +169,10 @@ def build_runtime_graph_state(
         "retry_metadata": dict(retry_metadata or {}),
         "hitl": dict(hitl) if hitl else None,
         "hitl_resume": dict(hitl_resume) if hitl_resume else None,
+        "agent_mode": agent_mode,
+        "react_run": dict(react_run) if react_run else None,
+        "plan_run": dict(plan_run) if plan_run else None,
+        "current_turn_id": current_turn_id,
+        "current_step_id": current_step_id,
+        "current_tool_call": dict(current_tool_call) if current_tool_call else None,
     }

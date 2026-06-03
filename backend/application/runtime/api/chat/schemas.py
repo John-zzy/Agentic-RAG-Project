@@ -80,6 +80,10 @@ class HitlState(BaseModel):
         default=None,
         description="已恢复时记录的人工输入；初始等待态为空。",
     )
+    metadata: dict[str, Any] = Field(
+        default_factory=dict,
+        description="HITL 扩展元数据，例如 ReAct/Plan 恢复点标识。",
+    )
 
 
 class ChatResumeRequest(BaseModel):

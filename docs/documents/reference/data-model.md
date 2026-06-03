@@ -92,6 +92,8 @@
 
 checkpoint 的 channel values 中会保存当前可恢复的 workflow state。最小状态集合为 `created`、`planning`、`running`、`waiting_user`、`retrying`、`succeeded`、`failed`、`cancelled`。其中 `succeeded`、`failed`、`cancelled` 是终态；`waiting_user` 表示等待人工输入，不是失败；人工 `reject` 或 `cancel` 进入 `cancelled`，不进入 `failed`。
 
+Agent Runtime 接入后，checkpoint channel values 还可以保存可选 orchestration 字段：`agent_mode`、`react_run`、`plan_run`、`current_turn_id`、`current_step_id`、`current_tool_call`。这些字段用于恢复顶层 ReAct turn 或 Plan step，旧 checkpoint 缺少这些字段时按空值读取；Workflow state 仍只表示 run 级状态，不用 turn/step/tool 内部状态替代。
+
 #### `langgraph_checkpoints`
 
 保存每个 graph checkpoint 的主体 payload 和 metadata。
