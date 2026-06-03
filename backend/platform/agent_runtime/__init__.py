@@ -12,6 +12,7 @@ from backend.platform.agent_runtime.contracts import (
     RetryMetadata,
     ToolExecutionMetadata,
     ToolObservation,
+    collect_successful_tool_observations,
 )
 from backend.platform.agent_runtime.mode_selector import (
     MinimalModeSelector,
@@ -46,11 +47,14 @@ from backend.platform.agent_runtime.rag_tools import (
     retrieval_result_to_observation,
 )
 from backend.platform.agent_runtime.react import (
+    LLMReActActionOutput,
+    LLMReActActionSelector,
     ObservationSummarySynthesizer,
     ReActActionContext,
     ReActActionSelector,
     ReActFinalSynthesizer,
     ReActRuntime,
+    ReActScenePolicy,
     ReActSynthesisContext,
     ReActSynthesisResult,
 )
@@ -108,8 +112,11 @@ __all__ = [
     "ReActActionSelector",
     "ReActFinalSynthesizer",
     "ReActActionType",
+    "LLMReActActionOutput",
+    "LLMReActActionSelector",
     "ReActRuntime",
     "ReActRun",
+    "ReActScenePolicy",
     "ReActSynthesisContext",
     "ReActSynthesisResult",
     "ReActTurn",
@@ -124,6 +131,7 @@ __all__ = [
     "agentic_outcome_to_observation",
     "build_rag_tool_adapters",
     "build_retry_metadata",
+    "collect_successful_tool_observations",
     "ensure_tool_allowed",
     "retrieval_result_to_observation",
     "validate_plan_dependencies",

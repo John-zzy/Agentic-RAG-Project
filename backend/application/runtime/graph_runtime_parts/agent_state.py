@@ -41,7 +41,7 @@ class AgentRuntimeStateProjectionMixin:
             knowledge_used=knowledge_used,
         )
         if agent_mode == "plan":
-            step_id = str(state.get("current_step_id") or "step-1")
+            step_id = str(state.get("current_step_id") or "")
             plan_run = _build_plan_run_payload(
                 state=state,
                 answer=answer,
@@ -59,7 +59,7 @@ class AgentRuntimeStateProjectionMixin:
                 "current_tool_call": None,
             }
 
-        turn_id = str(state.get("current_turn_id") or "turn-1")
+        turn_id = str(state.get("current_turn_id") or "")
         react_run = _build_react_run_payload(
             state=state,
             answer=answer,
@@ -83,7 +83,7 @@ class AgentRuntimeStateProjectionMixin:
         wait: HitlWaitInput,
         hitl: RuntimeHitlState,
     ) -> dict[str, Any]:
-        """HITL wait 写入顶层 ReAct/Plan 恢复点，旧式 wait 没有 metadata 时保持空。"""
+        """HITL wait 写入顶层 ReAct/Plan 恢复点。"""
         metadata = dict(wait.metadata or {})
         mode = _coerce_optional_agent_mode(metadata.get("mode"))
         if mode is None:
@@ -95,7 +95,7 @@ class AgentRuntimeStateProjectionMixin:
             else None
         )
         if mode == "plan":
-            step_id = str(metadata.get("current_step_id") or "step-1")
+            step_id = str(metadata.get("current_step_id") or "")
             plan_run = _build_plan_wait_payload(
                 wait=wait,
                 hitl=hitl,
@@ -111,7 +111,7 @@ class AgentRuntimeStateProjectionMixin:
                 "current_tool_call": tool_call,
             }
 
-        turn_id = str(metadata.get("current_turn_id") or "turn-1")
+        turn_id = str(metadata.get("current_turn_id") or "")
         react_run = _build_react_wait_payload(
             wait=wait,
             hitl=hitl,
@@ -134,9 +134,10 @@ class AgentRuntimeStateProjectionMixin:
         action: str,
         resume_payload: Mapping[str, Any],
         next_status: WorkflowRunState,
+        final_answer: str | None = None,
+        tool_result: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         """resume 后同步顶层 turn/step 状态，reject 不执行副作用。"""
-        del resume_payload
         agent_mode = _coerce_optional_agent_mode(state.get("agent_mode"))
         if agent_mode is None:
             return {}
@@ -148,6 +149,7 @@ class AgentRuntimeStateProjectionMixin:
                 next_status=next_status,
                 action=action,
                 current_step_id=state.get("current_step_id"),
+                final_answer=final_answer,
             )
             clear_current = is_terminal(next_status)
             return {
@@ -157,11 +159,24 @@ class AgentRuntimeStateProjectionMixin:
             }
 
         react_run = dict(state.get("react_run") or {})
+        _record_react_resume_metadata(
+            react_run=react_run,
+            action=action,
+            resume_payload=resume_payload,
+            current_turn_id=state.get("current_turn_id"),
+        )
+        if action == "approve" and tool_result is not None:
+            _append_approved_tool_observation(
+                react_run=react_run,
+                current_turn_id=state.get("current_turn_id"),
+                tool_result=tool_result,
+            )
         _update_react_run_status(
             react_run=react_run,
             next_status=next_status,
             action=action,
             current_turn_id=state.get("current_turn_id"),
+            final_answer=final_answer,
         )
         clear_current = is_terminal(next_status)
         return {
@@ -357,6 +372,7 @@ def _build_react_run_payload(
                 "metadata": {},
             }
         ],
+        "observations": [dict(observation)],
         "current_turn_id": None,
         "current_tool_call": None,
         "final_answer": answer,
@@ -385,6 +401,7 @@ def _build_plan_run_payload(
         "request_id": state["request_id"],
         "mode": "plan",
         "user_goal": _last_user_goal(state),
+        "context_summary": "Graph success projection from retrieval observation.",
         "workflow_status": status,
         "steps": [
             {
@@ -401,6 +418,7 @@ def _build_plan_run_payload(
                 "metadata": {},
             }
         ],
+        "observations": [dict(observation)],
         "current_step_id": None,
         "current_tool_call": None,
         "final_answer": answer,
@@ -458,6 +476,7 @@ def _build_react_wait_payload(
                 "metadata": {"hitl": dict(hitl)},
             }
         ],
+        "observations": [],
         "current_turn_id": turn_id,
         "current_tool_call": dict(tool_call) if tool_call else None,
         "final_answer": None,
@@ -482,6 +501,7 @@ def _build_plan_wait_payload(
         "request_id": wait.request_id,
         "mode": "plan",
         "user_goal": user_goal,
+        "context_summary": "HITL wait projection from graph runtime.",
         "workflow_status": "waiting_user",
         "steps": [
             {
@@ -498,6 +518,7 @@ def _build_plan_wait_payload(
                 "metadata": {"hitl": dict(hitl)},
             }
         ],
+        "observations": [],
         "current_step_id": step_id,
         "current_tool_call": dict(tool_call) if tool_call else None,
         "final_answer": None,
@@ -520,6 +541,7 @@ def _update_react_run_status(
     next_status: WorkflowRunState,
     action: str,
     current_turn_id: Any,
+    final_answer: str | None = None,
 ) -> None:
     react_run["workflow_status"] = next_status
     terminal_turn_status = _terminal_child_status(next_status)
@@ -529,6 +551,69 @@ def _update_react_run_status(
                 turn["status"] = terminal_turn_status
         react_run["current_turn_id"] = None
         react_run["current_tool_call"] = None
+    _settle_run_result(run=react_run, status=next_status, final_answer=final_answer)
+
+
+def _record_react_resume_metadata(
+    *,
+    react_run: dict[str, Any],
+    action: str,
+    resume_payload: Mapping[str, Any],
+    current_turn_id: Any,
+) -> None:
+    """把 application resume 输入投影到 ReActRun，便于 checkpoint 审计。"""
+    if not react_run:
+        return
+    metadata = dict(react_run.get("metadata") or {})
+    continuation = {
+        "mode": "react",
+        "action": action,
+        "react_run_id": react_run.get("react_run_id"),
+        "waiting_turn_id": current_turn_id,
+        "continued_from_turn_id": current_turn_id,
+        "response": resume_payload.get("response"),
+        "source": resume_payload.get("source"),
+        "suggestion_id": resume_payload.get("suggestion_id"),
+        "reason": resume_payload.get("reason"),
+        "metadata": dict(resume_payload.get("metadata") or {}),
+    }
+    metadata["resume"] = continuation
+    history = list(metadata.get("continuations") or [])
+    history.append(continuation)
+    metadata["continuations"] = history
+    react_run["metadata"] = metadata
+    for turn in react_run.get("turns") or []:
+        if isinstance(turn, dict) and turn.get("turn_id") == current_turn_id:
+            turn_metadata = dict(turn.get("metadata") or {})
+            turn_metadata["continuation"] = continuation
+            turn["metadata"] = turn_metadata
+            break
+
+
+def _append_approved_tool_observation(
+    *,
+    react_run: dict[str, Any],
+    current_turn_id: Any,
+    tool_result: Mapping[str, Any],
+) -> None:
+    """把 approve 后执行的工具结果写回等待 turn 和 run 级 observations。"""
+    if not react_run or not tool_result:
+        return
+    observation = dict(tool_result)
+    metadata = dict(observation.get("metadata") or {})
+    metadata["continued_from_turn_id"] = current_turn_id
+    metadata["resume_action"] = "approve"
+    observation["metadata"] = metadata
+    observations = list(react_run.get("observations") or [])
+    observations.append(observation)
+    react_run["observations"] = observations
+    for turn in react_run.get("turns") or []:
+        if isinstance(turn, dict) and turn.get("turn_id") == current_turn_id:
+            turn["observation"] = observation
+            turn["observation_summary"] = str(observation.get("result_summary") or "")
+            turn["result_summary"] = str(observation.get("result_summary") or "")
+            turn["error"] = observation.get("error")
+            break
 
 
 def _update_plan_run_status(
@@ -537,6 +622,7 @@ def _update_plan_run_status(
     next_status: WorkflowRunState,
     action: str,
     current_step_id: Any,
+    final_answer: str | None = None,
 ) -> None:
     plan_run["workflow_status"] = next_status
     terminal_step_status = _terminal_child_status(next_status)
@@ -546,6 +632,7 @@ def _update_plan_run_status(
                 step["status"] = terminal_step_status
         plan_run["current_step_id"] = None
         plan_run["current_tool_call"] = None
+    _settle_run_result(run=plan_run, status=next_status, final_answer=final_answer)
 
 
 def _terminal_child_status(status: WorkflowRunState) -> str | None:
@@ -556,6 +643,24 @@ def _terminal_child_status(status: WorkflowRunState) -> str | None:
     if status == "cancelled":
         return "cancelled"
     return None
+
+
+def _settle_run_result(
+    *,
+    run: dict[str, Any],
+    status: WorkflowRunState,
+    final_answer: str | None,
+) -> None:
+    """终态 resume 要把结果同步到 nested Agent run，避免 checkpoint 审计断层。"""
+    if not is_terminal(status):
+        return
+    summary = str(final_answer or run.get("result_summary") or "")
+    if status == "succeeded":
+        run["final_answer"] = summary
+        run["error"] = None
+    elif status == "failed":
+        run["error"] = summary or run.get("error")
+    run["result_summary"] = summary
 
 
 def _react_run_id(state: RuntimeGraphState) -> str:

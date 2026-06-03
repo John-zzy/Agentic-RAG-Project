@@ -11,11 +11,14 @@ from langchain_core.runnables import RunnableLambda, RunnableSerializable
 
 from backend.application.runtime.api.app import create_app
 from backend.application.runtime import ChatService, SceneChatService, build_default_scene_registry
+from backend.platform.agent_runtime.contracts import ReActAction, ReActRun, ReActTurn, ToolObservation
+from backend.platform.agent_runtime.rag_tools import AGENTIC_RAG_TOOL_NAME, NATIVE_RAG_TOOL_NAME
 from backend.platform.agent_runtime.tool_executor import ToolExecutor
 from backend.platform.config.settings import AppSettings
 from backend.platform.knowledge.repositories import VectorStoreFactory
 from backend.platform.memory.base.session_store import SQLiteSessionStore
 from backend.platform.memory.chat.prompt_context import PromptContextBuilder
+from backend.platform.rag.contracts import RetrievalResult
 from backend.platform.rag.retrieval.documents import DocumentChunkRetrievalResult
 from backend.platform.rag.retrieval.documents.service import DocumentRetrievalService
 from backend.platform.search_foundation import VectorSearchResult, VectorStoreDocument
@@ -167,6 +170,8 @@ class FakeModel:
         output_parser: Any | None = None,
     ):
         del output_parser
+        if _is_react_selector_prompt(prompt_template):
+            return FakeReactSelectorRunnable()
         self.get_runnable_calls.append(complexity)
         if prompt_template is None:
             return FakeAnswerRunnable(
@@ -181,6 +186,8 @@ class FakeModel:
         )
 
     def invoke_runnable(self, runnable: Any, input: Any, *, config: Any | None = None) -> str:
+        if isinstance(runnable, FakeReactSelectorRunnable):
+            return runnable.invoke(input, config=config)
         self.invoke_runnable_calls.append({"runnable": runnable, "input": input, "config": config})
         return runnable.invoke(input, config=config)
 
@@ -274,6 +281,124 @@ class FakeAnswerRunnable(RunnableSerializable[Any, str]):
             if isinstance(message, BaseMessage) and message.type in {"human", "ai"}
         ]
         self.history_recorder.snapshots.append(history_messages)
+
+
+class FakeReactSelectorRunnable(RunnableSerializable[Any, str]):
+    """测试用 LLM 调度器：只为 ReAct selector 返回结构化 action。"""
+
+    def invoke(
+        self,
+        input: Any,
+        config: Any | None = None,
+        **kwargs: Any,
+    ) -> str:
+        del config, kwargs
+        if isinstance(input, dict):
+            return self._invoke_from_variables(input)
+        prompt_text = _prompt_text(input)
+        if _react_previous_turn_count(prompt_text) > 0:
+            return json.dumps(
+                {
+                    "action_type": "final_answer",
+                    "rationale_summary": "已有工具观察，进入最终汇总。",
+                },
+                ensure_ascii=False,
+            )
+        tool_name = _first_react_preferred_tool(prompt_text)
+        return json.dumps(
+            {
+                "action_type": "tool_call",
+                "tool_name": tool_name,
+                "input": {},
+                "rationale_summary": "首轮先调用允许的 RAG 工具。",
+            },
+            ensure_ascii=False,
+        )
+
+    def _invoke_from_variables(self, variables: dict[str, Any]) -> str:
+        previous_turns = _loads_json_value(variables.get("react_previous_turns_json"))
+        if isinstance(previous_turns, list) and previous_turns:
+            return json.dumps(
+                {
+                    "action_type": "final_answer",
+                    "rationale_summary": "已有工具观察，进入最终汇总。",
+                },
+                ensure_ascii=False,
+            )
+        policy = _loads_json_value(variables.get("react_scene_policy_json"))
+        tool_name = AGENTIC_RAG_TOOL_NAME
+        if isinstance(policy, dict):
+            preferred_tools = policy.get("preferred_tools")
+            if isinstance(preferred_tools, list) and preferred_tools:
+                tool_name = str(preferred_tools[0])
+        return json.dumps(
+            {
+                "action_type": "tool_call",
+                "tool_name": tool_name,
+                "input": {},
+                "rationale_summary": "首轮先调用允许的 RAG 工具。",
+            },
+            ensure_ascii=False,
+        )
+
+
+def _is_react_selector_prompt(prompt_template: Any | None) -> bool:
+    template = str(getattr(prompt_template, "template", "") or "")
+    return "REACT_SELECTOR" in template
+
+
+def _prompt_text(input: Any) -> str:
+    if isinstance(input, ChatPromptValue):
+        return "\n".join(str(message.content) for message in input.to_messages())
+    if isinstance(input, list) and all(isinstance(message, BaseMessage) for message in input):
+        return "\n".join(str(message.content) for message in input)
+    return str(input)
+
+
+def _react_previous_turn_count(prompt_text: str) -> int:
+    payload = _json_after_label(prompt_text, "历史 turn 摘要：")
+    return len(payload) if isinstance(payload, list) else 0
+
+
+def _first_react_preferred_tool(prompt_text: str) -> str:
+    policy = _json_after_label(prompt_text, "scene 策略：")
+    if isinstance(policy, dict):
+        preferred_tools = policy.get("preferred_tools")
+        if isinstance(preferred_tools, list) and preferred_tools:
+            return str(preferred_tools[0])
+    allowed_tools = _json_after_label(prompt_text, "允许工具：")
+    if isinstance(allowed_tools, list) and allowed_tools:
+        return str(allowed_tools[0])
+    return AGENTIC_RAG_TOOL_NAME
+
+
+def _json_after_label(prompt_text: str, label: str) -> Any:
+    start = prompt_text.find(label)
+    if start < 0:
+        return None
+    start += len(label)
+    lines = prompt_text[start:].splitlines()
+    raw_json = ""
+    for line in lines:
+        stripped = line.strip()
+        if stripped:
+            raw_json = stripped
+            break
+    if not raw_json:
+        return None
+    try:
+        return json.loads(raw_json)
+    except json.JSONDecodeError:
+        return None
+
+
+def _loads_json_value(value: Any) -> Any:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        return json.loads(value)
+    except json.JSONDecodeError:
+        return None
 
 
 class HistoryRecorder:
@@ -438,6 +563,91 @@ def _build_forced_outcome_chat_service(
         session_store=SQLiteSessionStore(sqlite_path=sqlite_path),
         context_builder=PromptContextBuilder(window_size=3),
         model=model,
+    )
+
+
+class _MultiStepPlanRetriever:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+
+    def retrieve(self, query: str, **kwargs: Any) -> RetrievalResult:
+        self.calls.append({"method": "retrieve", "query": query, "kwargs": kwargs})
+        document = _agent_runtime_document(
+            document_id="doc-plan-native",
+            chunk_id="chunk-plan-native",
+            content="Plan 第一步证据：Native RAG 找到了计划背景。",
+            source_path="plan-native.md",
+            score=0.91,
+        )
+        return RetrievalResult.ok(
+            tool_name="knowledge_document_search",
+            query=query,
+            records=[
+                {
+                    "citation_id": "chunk-plan-native",
+                    "content": document.page_content,
+                    "metadata": dict(document.metadata),
+                }
+            ],
+            documents=[document],
+            metadata={
+                "document_retrieval_trace": {
+                    "raw_candidates_count": 1,
+                    "filtered_candidates_count": 1,
+                }
+            },
+        )
+
+    def retrieve_with_trace(self, query: str, *, candidate_tools: tuple[str, ...], **kwargs: Any):
+        self.calls.append(
+            {
+                "method": "retrieve_with_trace",
+                "query": query,
+                "candidate_tools": candidate_tools,
+                "kwargs": kwargs,
+            }
+        )
+        return _ForcedOutcome(
+            documents=[
+                _agent_runtime_document(
+                    document_id="doc-plan-agentic",
+                    chunk_id="chunk-plan-agentic",
+                    content="Plan 第二步证据：Agentic RAG 补充了执行结论。",
+                    source_path="plan-agentic.md",
+                    score=0.92,
+                )
+            ],
+            success=True,
+            exit_reason="sufficient",
+            final_decision=_ForcedDecision(
+                next_action="finish",
+                is_sufficient=True,
+            ),
+        )
+
+
+def _agent_runtime_document(
+    *,
+    document_id: str,
+    chunk_id: str,
+    content: str,
+    source_path: str,
+    score: float,
+) -> Document:
+    return Document(
+        page_content=content,
+        metadata={
+            "document_id": document_id,
+            "source_path": source_path,
+            "namespace": "documents",
+            "is_managed_document": True,
+            "chunk_id": chunk_id,
+            "chunk_index": 0,
+            "score": score,
+            "vector_score": score,
+            "vector_rank": 1,
+            "matched_by": ["vector"],
+        },
     )
 
 
@@ -643,7 +853,24 @@ def test_chat_api_sse_success_path_returns_structured_events() -> None:
     assert tool_payload["react_run_id"].startswith("react-")
     assert tool_payload["turn_id"] == "turn-1"
     assert tool_payload["turn_status"] == "succeeded"
+    assert tool_payload["workflow_status"] == "succeeded"
+    assert tool_payload["action_type"] == "tool_call"
+    assert tool_payload["rationale_summary"] == "首轮先调用允许的 RAG 工具。"
     assert tool_payload["tool_name"] == "agentic_rag_search"
+    assert tool_payload["turn_count"] == 2
+    assert tool_payload["max_turns"] == 2
+    assert tool_payload["attempted_tools"] == ["agentic_rag_search"]
+    assert tool_payload["active_turn"]["turn_id"] == "turn-1"
+    assert tool_payload["latest_action_selection"]["status"] == "validated"
+    assert tool_payload["latest_action_selection"]["action_type"] == "final_answer"
+    assert tool_payload["latest_action_selection"]["tool_name"] is None
+    assert tool_payload["action_validation_result"] == "passed"
+    assert tool_payload["current_turn_id"] == "turn-1"
+    assert tool_payload["current_step_id"] is None
+    assert tool_payload["react_run"]["react_run_id"] == tool_payload["react_run_id"]
+    assert tool_payload["plan_run"] is None
+    assert tool_payload["tool_observation"]["tool_name"] == "agentic_rag_search"
+    assert tool_payload["current_tool_call"]["tool_name"] == "agentic_rag_search"
     assert tool_payload["final_decision"] == "answer_with_evidence"
     assert tool_payload["answer_mode"] == "evidence_answer"
     assert tool_payload["documents"] == 1
@@ -743,8 +970,266 @@ def test_chat_api_sse_plan_request_uses_plan_step_tool_stage() -> None:
     assert tool_payload["plan_run_id"].startswith("plan-")
     assert tool_payload["step_id"] == "step-1"
     assert tool_payload["step_status"] == "succeeded"
+    assert tool_payload["workflow_status"] == "succeeded"
+    assert tool_payload["step_count"] == 1
+    assert tool_payload["execution_order"] == ["step-1"]
+    assert tool_payload["current_step_id"] == "step-1"
+    assert tool_payload["current_turn_id"] is None
+    assert tool_payload["plan_run"]["plan_run_id"] == tool_payload["plan_run_id"]
+    assert tool_payload["react_run"] is None
+    assert tool_payload["tool_observation"]["tool_name"] == "agentic_rag_search"
+    assert tool_payload["current_tool_call"]["tool_name"] == "agentic_rag_search"
     assert tool_payload["retrieval_trace"]["rounds"][0]["tool_name"] == "knowledge_document_search"
     assert done_payload["final_state"] == "succeeded"
+    restored = service.graph_runtime.checkpointer.get_tuple(
+        {
+            "configurable": {
+                "thread_id": done_payload["session_id"],
+                "checkpoint_ns": DEFAULT_RUNTIME_CHECKPOINT_NS,
+            }
+        }
+    )
+    assert restored is not None
+    planner_metadata = restored.checkpoint["channel_values"]["plan_run"]["metadata"]["planner"]
+    assert planner_metadata["step_source"] == "scene_policy.plan_tools"
+
+
+def test_chat_api_plan_mode_uses_scene_policy_multi_step_plan() -> None:
+    runtime_dir = make_test_runtime_dir("chat-api-plan-multi-step")
+    sqlite_path = runtime_dir / "chat-sessions.db"
+    retriever = _MultiStepPlanRetriever()
+    scene_definition = SceneDefinition(
+        scene="plan_scene",
+        name="Plan Scene",
+        description="Use explicit multi-step plan policy.",
+        build_retriever=lambda: retriever,  # type: ignore[return-value]
+        build_tools=lambda: (),
+        candidate_retrieval_tools_resolver=lambda mounted: ("knowledge_document_search",),
+        system_prompt="你是测试助手。",
+        fallback_policy=SceneFallbackPolicy(no_hit_message="没有证据。"),
+        infer_complexity=lambda _: "complex",
+        retrieval_policy=SceneRetrievalPolicy(min_relevance_score=0.0),
+        metadata={
+            "agent_runtime": {
+                "plan": {
+                    "plan_steps": [
+                        {
+                            "step_id": "collect-native",
+                            "goal": "先做 native 检索",
+                            "tool_name": NATIVE_RAG_TOOL_NAME,
+                            "input": {"query": "第一步"},
+                        },
+                        {
+                            "step_id": "collect-agentic",
+                            "goal": "再做 agentic 检索",
+                            "tool_name": AGENTIC_RAG_TOOL_NAME,
+                            "input": {"query": "第二步"},
+                            "depends_on": ["collect-native"],
+                        },
+                    ]
+                }
+            }
+        },
+    )
+    service = ChatService(
+        scene_definition=scene_definition,
+        app_settings=AppSettings(
+            data_dir=runtime_dir,
+            app={"active_scene": "plan_scene"},
+            session={"sqlite_path": sqlite_path, "window_size": 3},
+        ),
+        session_store=SQLiteSessionStore(sqlite_path=sqlite_path),
+        context_builder=PromptContextBuilder(window_size=3),
+        model=FakeModel(answer="按计划汇总完成。"),
+    )
+    app = create_app(chat_service=service)
+
+    with TestClient(app) as client:
+        response = client.post("/chat", json={"message": "请分步骤完成计划任务"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["knowledge_used"] is True
+    assert [citation["citation_id"] for citation in payload["citations"]] == [
+        "chunk-plan-native",
+        "chunk-plan-agentic",
+    ]
+    assert payload["retrieval_trace"]["top_k_chunks"][0]["citation_id"] == "chunk-plan-native"
+    assert payload["retrieval_trace"]["top_k_chunks"][1]["citation_id"] == "chunk-plan-agentic"
+    restored = service.graph_runtime.checkpointer.get_tuple(
+        {
+            "configurable": {
+                "thread_id": payload["session_id"],
+                "checkpoint_ns": DEFAULT_RUNTIME_CHECKPOINT_NS,
+            }
+        }
+    )
+    assert restored is not None
+    plan_run = restored.checkpoint["channel_values"]["plan_run"]
+    assert plan_run["workflow_status"] == "succeeded"
+    assert [step["step_id"] for step in plan_run["steps"]] == ["collect-native", "collect-agentic"]
+    assert [step["status"] for step in plan_run["steps"]] == ["succeeded", "succeeded"]
+    assert plan_run["metadata"]["execution_order"] == ["collect-native", "collect-agentic"]
+    assert len(plan_run["observations"]) == 2
+    assert plan_run["metadata"]["planner"]["step_source"] == "scene_policy.plan_steps"
+    assert retriever.calls[0]["method"] == "retrieve"
+    assert retriever.calls[1]["method"] == "retrieve_with_trace"
+
+
+def test_chat_api_react_aggregation_uses_all_successful_observations(monkeypatch) -> None:
+    service = _build_chat_service(
+        "chat-api-react-aggregate-all-observations",
+        FakeKnowledgeService(),
+        FakeDocumentRetrievalService(),
+        FakeModel(answer="汇总两条证据。"),
+    )
+    app = create_app(chat_service=service)
+
+    first_observation = ToolObservation(
+        tool_name=AGENTIC_RAG_TOOL_NAME,
+        success=True,
+        output={
+            "documents": [
+                {
+                    "page_content": "第一条证据：制度范围。",
+                    "metadata": {
+                        "document_id": "doc-react-1",
+                        "source_path": "react-1.md",
+                        "namespace": "documents",
+                        "chunk_id": "chunk-react-1",
+                        "chunk_index": 0,
+                        "score": 0.91,
+                        "vector_score": 0.91,
+                        "vector_rank": 1,
+                        "matched_by": ["vector"],
+                    },
+                }
+            ]
+        },
+        result_summary="第一轮检索成功。",
+        citations=[{"citation_id": "chunk-react-1"}],
+        trace={
+            "retrieval_trace": {
+                "original_query": "聚合测试",
+                "final_query": "聚合测试",
+                "tool_call_count": 1,
+                "candidate_tools": ["knowledge_document_search"],
+                "exit_reason": "sufficient",
+                "final_decision": "answer_with_evidence",
+                "success": True,
+                "raw_candidates_count": 1,
+                "filtered_candidates_count": 1,
+                "rounds": [{"round_index": 1, "tool_name": "knowledge_document_search", "query": "聚合测试", "decision": "finish", "is_sufficient": True, "result_count": 1, "document_count": 1, "success": True}],
+            }
+        },
+        metadata={"final_decision": "answer_with_evidence", "knowledge_used": True},
+    )
+    second_observation = ToolObservation(
+        tool_name=NATIVE_RAG_TOOL_NAME,
+        success=True,
+        output={
+            "documents": [
+                {
+                    "page_content": "第二条证据：实施细节。",
+                    "metadata": {
+                        "document_id": "doc-react-2",
+                        "source_path": "react-2.md",
+                        "namespace": "documents",
+                        "chunk_id": "chunk-react-2",
+                        "chunk_index": 0,
+                        "score": 0.92,
+                        "vector_score": 0.92,
+                        "vector_rank": 1,
+                        "matched_by": ["vector"],
+                    },
+                }
+            ]
+        },
+        result_summary="第二轮检索成功。",
+        citations=[{"citation_id": "chunk-react-2"}],
+        trace={
+            "retrieval_trace": {
+                "original_query": "聚合测试",
+                "final_query": "聚合测试",
+                "tool_call_count": 1,
+                "candidate_tools": ["knowledge_document_search"],
+                "exit_reason": "sufficient",
+                "final_decision": "answer_with_evidence",
+                "success": True,
+                "raw_candidates_count": 1,
+                "filtered_candidates_count": 1,
+                "rounds": [{"round_index": 1, "tool_name": "knowledge_document_search", "query": "聚合测试", "decision": "finish", "is_sufficient": True, "result_count": 1, "document_count": 1, "success": True}],
+            }
+        },
+        metadata={"final_decision": "answer_with_evidence", "knowledge_used": True},
+    )
+    react_run = ReActRun(
+        react_run_id="react-aggregate",
+        session_id="session-react-aggregate",
+        request_id="request-react-aggregate",
+        user_goal="聚合测试",
+        workflow_status="succeeded",
+        turns=[
+            ReActTurn(
+                turn_id="turn-1",
+                round_index=1,
+                goal="聚合测试",
+                action=ReActAction(action_type="tool_call", tool_name=AGENTIC_RAG_TOOL_NAME),
+                status="succeeded",
+                tool_name=AGENTIC_RAG_TOOL_NAME,
+                observation=first_observation,
+                result_summary=first_observation.result_summary,
+            ),
+            ReActTurn(
+                turn_id="turn-2",
+                round_index=2,
+                goal="聚合测试",
+                action=ReActAction(action_type="tool_call", tool_name=NATIVE_RAG_TOOL_NAME),
+                status="succeeded",
+                tool_name=NATIVE_RAG_TOOL_NAME,
+                observation=second_observation,
+                result_summary=second_observation.result_summary,
+            ),
+        ],
+        observations=[first_observation, second_observation],
+        final_answer="汇总两条证据。",
+        result_summary="汇总两条证据。",
+        metadata={"citations": [{"citation_id": "chunk-react-1"}, {"citation_id": "chunk-react-2"}]},
+    )
+
+    def _fake_run_react_agent(**kwargs: Any) -> ReActRun:
+        session_id = kwargs["session_id"]
+        request_id = kwargs["request_id"]
+        message = kwargs["message"]
+        return react_run.model_copy(
+            update={
+                "session_id": session_id,
+                "request_id": request_id,
+                "user_goal": message,
+            }
+        )
+
+    inner_service = service._get_scene_service("generic_assistant")
+    monkeypatch.setattr(inner_service, "_run_react_agent", _fake_run_react_agent)
+
+    with TestClient(app) as client:
+        response = client.post("/chat", json={"message": "聚合测试"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["knowledge_used"] is True
+    assert [citation["citation_id"] for citation in payload["citations"]] == [
+        "chunk-react-1",
+        "chunk-react-2",
+    ]
+    assert payload["retrieval_trace"]["tool_call_count"] == 2
+    assert payload["retrieval_trace"]["raw_candidates_count"] == 2
+    assert payload["retrieval_trace"]["filtered_candidates_count"] == 2
+    assert [chunk["citation_id"] for chunk in payload["retrieval_trace"]["top_k_chunks"]] == [
+        "chunk-react-1",
+        "chunk-react-2",
+    ]
+    assert payload["answer"].endswith("参考来源：[1][2]")
 
 
 def test_chat_api_validation_error_when_message_missing() -> None:
@@ -952,6 +1437,136 @@ def test_chat_api_sse_ask_user_matches_json_semantics_without_stream_model() -> 
     assert model.get_runnable_calls == []
     assert model.stream_runnable_calls == []
     assert model.invoke_runnable_calls == []
+
+
+def test_chat_api_react_ask_user_without_observation_enters_hitl_wait(monkeypatch) -> None:
+    model = FakeModel(answer="unused")
+    service = _build_chat_service(
+        "chat-api-react-ask-user-no-observation",
+        FakeKnowledgeService(),
+        FakeDocumentRetrievalService(documents=[]),
+        model,
+    )
+    app = create_app(chat_service=service)
+
+    def _fake_run_react_agent(**kwargs: Any) -> ReActRun:
+        session_id = kwargs["session_id"]
+        request_id = kwargs["request_id"]
+        message = kwargs["message"]
+        return ReActRun(
+            react_run_id=f"react-{request_id}",
+            session_id=session_id,
+            request_id=request_id,
+            user_goal=message,
+            workflow_status="waiting_user",
+            turns=[
+                ReActTurn(
+                    turn_id="turn-1",
+                    round_index=1,
+                    goal=message,
+                    action=ReActAction(
+                        action_type="ask_user",
+                        instruction="请补充需要查询的知识范围。",
+                    ),
+                    status="waiting_user",
+                    result_summary="请补充需要查询的知识范围。",
+                )
+            ],
+            observations=[],
+            current_turn_id="turn-1",
+            metadata={
+                "hitl": {
+                    "mode": "react",
+                    "react_run_id": f"react-{request_id}",
+                    "current_turn_id": "turn-1",
+                    "user_prompt": "请补充需要查询的知识范围。",
+                    "source": "react_action",
+                }
+            },
+        )
+
+    inner_service = service._get_scene_service("generic_assistant")
+    monkeypatch.setattr(inner_service, "_run_react_agent", _fake_run_react_agent)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/chat",
+            json={
+                "message": "查资料",
+                "hitl_clarification_enabled": True,
+            },
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["state"] == "waiting_user"
+    assert payload["knowledge_used"] is False
+    assert payload["hitl"]["metadata"]["mode"] == "react"
+    assert payload["hitl"]["metadata"]["current_turn_id"] == "turn-1"
+    assert payload["retrieval_trace"]["tool_call_count"] == 0
+    assert payload["retrieval_trace"]["final_decision"] == "ask_user"
+    assert payload["retrieval_trace"]["follow_up_question"] == "请补充需要查询的知识范围。"
+    assert model.stream_runnable_calls == []
+
+
+def test_chat_api_sse_hitl_reject_resume_returns_done_cancelled() -> None:
+    model = FakeModel(answer="unused", stream_chunks=["unused"])
+    service = _build_chat_service(
+        "chat-api-sse-hitl-reject-resume",
+        FakeKnowledgeService(),
+        FakeDocumentRetrievalService(documents=[]),
+        model,
+    )
+    app = create_app(chat_service=service)
+
+    with TestClient(app) as client:
+        wait_response = client.post(
+            "/chat",
+            json={
+                "message": "查资料",
+                "stream": True,
+                "hitl_clarification_enabled": True,
+            },
+        )
+
+    assert wait_response.status_code == 200
+    wait_events = _parse_sse_events(wait_response.text)
+    assert [event["event"] for event in wait_events] == [
+        "start",
+        "history",
+        "tool",
+        "waiting_user",
+    ]
+    wait_payload = json.loads(wait_events[-1]["data"])
+    assert wait_payload["state"] == "waiting_user"
+    assert wait_payload["hitl"]["metadata"]["mode"] == "react"
+    assert wait_payload["hitl"]["metadata"]["react_run_id"].startswith("react-")
+    assert wait_payload["hitl"]["metadata"]["current_turn_id"] == "turn-1"
+
+    with TestClient(app) as client:
+        resume_response = client.post(
+            "/chat/resume",
+            json={
+                "session_id": wait_payload["session_id"],
+                "interrupt_id": wait_payload["hitl"]["interrupt_id"],
+                "action": "reject",
+                "payload": {"reason": "用户取消"},
+                "stream": True,
+            },
+        )
+
+    assert resume_response.status_code == 200
+    resume_events = _parse_sse_events(resume_response.text)
+    assert [event["event"] for event in resume_events] == ["resume", "done"]
+    resume_payload = json.loads(resume_events[0]["data"])
+    done_payload = json.loads(resume_events[1]["data"])
+    assert resume_payload["action"] == "reject"
+    assert resume_payload["state_event"] == "resume_reject"
+    assert done_payload["status"] == "cancelled"
+    assert done_payload["state"] == "cancelled"
+    assert done_payload["final_state"] == "cancelled"
+    assert done_payload["state_event"] == "resume_reject"
+    assert done_payload["resume_payload"]["action"] == "reject"
 
 
 def test_chat_api_max_rounds_with_documents_does_not_use_intermediate_citations() -> None:

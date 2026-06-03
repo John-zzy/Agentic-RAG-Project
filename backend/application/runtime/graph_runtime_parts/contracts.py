@@ -32,7 +32,7 @@ class PreparedGraphTurn(Protocol):
 AnswerBuilder = Callable[[PreparedGraphTurn], tuple[str, list[Citation]]]
 HistoryLoader = Callable[[PreparedGraphTurn], Sequence[BaseMessage]]
 HitlApproveExecutor = Callable[[Mapping[str, Any]], Mapping[str, Any] | None]
-HitlRespondHandler = Callable[[Mapping[str, Any]], Mapping[str, Any] | None]
+HitlRespondHandler = Callable[[Mapping[str, Any], RuntimeGraphState], Mapping[str, Any] | None]
 _HITL_PENDING_ACTIONS = {"tool_approval", "external_api_approval", "clarification"}
 _HITL_ALLOWED_ACTIONS = {"approve", "edit", "reject", "respond"}
 

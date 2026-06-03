@@ -6,8 +6,8 @@
 
 ## 核心能力
 
-- **统一对话入口**：`/chat` 按会话 scene 和 mounted knowledge sources 动态选择检索工具，支持普通 JSON 和 SSE 流式输出。
-- **Agentic RAG 主链路**：先做 query rewrite 和工具决策，再多轮检索、判断证据是否足够，最后生成带引用的回答。
+- **统一对话入口**：`/chat` 由顶层 Agent Runtime 编排 ReAct / Plan，再按会话 scene 和 mounted knowledge sources 选择工具，支持普通 JSON 和 SSE 流式输出。
+- **Agentic RAG 工具链路**：先做 query rewrite 和工具决策，再多轮检索、判断证据是否足够，最后生成带引用的回答。它是顶层 Agent 可调用的工具能力，不是唯一入口。
 - **Hybrid Search**：文档检索支持语义召回、BM25 关键词召回、融合排序、相关性过滤和 no-hit fallback。
 - **引用与可观测性**：回答返回结构化 `citations`、正文引用编号、`retrieval_trace`、rerank trace 和 SSE `tool / waiting_user / done` 事件。
 - **Human-in-the-Loop**：支持澄清等待、工具审批、外部 API 审批，以及 `approve / reject / respond` 恢复。
@@ -46,11 +46,12 @@ openspec/              # 变更提案、规格与归档记录
 ```text
 用户问题
   -> 会话与场景解析
-  -> Query Rewrite
-  -> Agentic Retrieval Tool Decision
-  -> Hybrid Search / Business Tool
+  -> Agent mode 选择
+  -> ReAct / Plan
+  -> ToolExecutor
+  -> RAG / Business Tool
   -> 低相关过滤 / no-hit fallback / HITL interrupt
-  -> LLM Answer
+  -> final synthesis
   -> citations + retrieval_trace + workflow state
 ```
 
@@ -82,13 +83,16 @@ openspec/              # 变更提案、规格与归档记录
 - [x] Human-in-the-Loop：基于 LangGraph interrupt/resume 支持 `approve / reject / respond`，覆盖 generic 写操作测试工具、外部 API 测试工具和 `ask_user` 澄清场景；`edit` 保留协议占位。
 - [x] Workflow State Machine：基于 LangGraph 节点和持久化状态表达 `created / planning / running / waiting_user / retrying / succeeded / failed / cancelled`。
 - [x] ReAct / Plan Agent Runtime 最小结构：新增顶层 `ReActRun` / `PlanRun` / `PlanStep` / `ToolObservation` 合同、ModeSelector、ToolExecutor、RAG tool adapter、checkpoint orchestration 字段、HITL metadata 和 SSE `tool.stage=react_turn/plan_step` 兼容扩展。
-- [x] `/chat` 真实 Agent Runtime Graph 接入：将当前“检索前置 + Agent audit/checkpoint 桥接”替换为 `ModeSelector -> ReActRuntime / Planner / PlanExecutor -> ToolExecutor -> final synthesis` 的真实执行路径，确保 ReAct/Plan 在 `/chat` 中实际选择并调用工具。
-- [ ] Planner / Executor 深化：在真实 graph 接入后，完善计划生成、步骤拆解、依赖执行、步骤结果沉淀、失败恢复和最终汇总，并保留人工介入点。
+- [ ] 顶层 `ChatGraph` 接入：把 `prepare_turn -> select_mode -> route_mode -> react_subgraph / plan_subgraph -> final_synthesis -> persist_turn` 显式 graph 化，替代现在的手写编排壳层。
+- [ ] ReAct Subgraph：把 `ReActRuntime` 的 action 选择、tool 调用、HITL、final synthesis 和 loop/finish 收敛到可复用 LangGraph 子图。
+- [ ] Plan Subgraph：把 `MinimalPlanner` / `PlanExecutor` 的 plan create、step execute、retry、waiting_user 和 synthesis 收敛到可复用 LangGraph 子图。
 - [ ] Agentic RAG Subgraph：将 `AgenticRetriever` 中手写的 `while` 循环、`next_action` 路由、query rewrite、工具切换、rerank、充分性判断和 no-hit fallback 迁移为可复用 LangGraph 子图。
 - [ ] LangChain / LangGraph 重构审计：逐项识别当前自造状态机、streaming glue、history glue、tool routing glue，能用 LangGraph graph / node / conditional edge / interrupt 表达的优先迁移。
 - [ ] Business Handoff Subgraph：将 `generic_assistant` 到 `ecommerce` 的 handoff / followup 逻辑从 scene 内部判断迁移为 LangGraph router 或业务子图。
 - [ ] Failure Recovery：为工具调用、模型调用和长链路任务补齐超时、重试、失败补偿、可恢复执行和幂等控制。
 - [ ] Reflection / Critique：在多步任务中加入结果校验、失败原因归类和必要时的自我修正。
+
+> 说明：上面这些 `[]` 不是说当前能力不存在，而是说“还没有被显式 graph 化”。当前 ReAct / Plan / Agentic RAG 都已经能跑，只是执行拓扑还停留在手写 loop。
 
 ### P1：平台化 Tool、Memory 和 Evaluation 能力
 
@@ -196,6 +200,7 @@ backend\.venv\Scripts\python.exe backend\evals\run_http_eval.py --base-url http:
 - [文档总索引](./docs/documents/README.md)
 - [系统架构图](./docs/documents/architecture/system-overview.svg)
 - [Main Chat Agent Runtime Flow](./docs/documents/runtime/main-chat-agent-runtime-flow.svg)
+- [ReAct / Plan Agent Runtime](./docs/documents/runtime/react-plan-agent-runtime.md)
 - [知识管理流程图](./docs/documents/knowledge/knowledge-document-flow.svg)
 - [Agentic RAG 流程图](./docs/documents/rag/agentic-rag-retrieval-flow.svg)
 - [Agentic RAG 设计说明](./docs/documents/rag/agentic-rag.md)

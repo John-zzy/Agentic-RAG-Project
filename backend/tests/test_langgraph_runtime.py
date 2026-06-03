@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 from typing import Any
 
 from langchain_core.documents import Document
@@ -89,6 +90,8 @@ class _FakeModel:
         output_parser: Any | None = None,
     ) -> Any:
         del complexity, output_parser
+        if _is_react_selector_prompt(prompt_template):
+            return RunnableLambda(_fake_react_selector_output)
         answer = RunnableLambda(lambda _: self.answer)
         if prompt_template is None:
             return answer
@@ -97,6 +100,57 @@ class _FakeModel:
     def invoke_runnable(self, runnable: Any, input: Any, *, config: Any | None = None) -> str:
         self.invoke_runnable_calls.append({"input": input, "config": config})
         return str(runnable.invoke(input, config=config))
+
+
+def _is_react_selector_prompt(prompt_template: Any | None) -> bool:
+    template = str(getattr(prompt_template, "template", "") or "")
+    return "REACT_SELECTOR" in template
+
+
+def _fake_react_selector_output(input: Any) -> str:
+    if isinstance(input, dict):
+        previous_turns = _loads_json_value(input.get("react_previous_turns_json"))
+        if isinstance(previous_turns, list) and previous_turns:
+            return json.dumps(
+                {
+                    "action_type": "final_answer",
+                    "rationale_summary": "已有工具观察，进入最终汇总。",
+                },
+                ensure_ascii=False,
+            )
+        policy = _loads_json_value(input.get("react_scene_policy_json"))
+        tool_name = "agentic_rag_search"
+        if isinstance(policy, dict):
+            preferred_tools = policy.get("preferred_tools")
+            if isinstance(preferred_tools, list) and preferred_tools:
+                tool_name = str(preferred_tools[0])
+        return json.dumps(
+            {
+                "action_type": "tool_call",
+                "tool_name": tool_name,
+                "input": {},
+                "rationale_summary": "首轮先调用允许的 RAG 工具。",
+            },
+            ensure_ascii=False,
+        )
+    return json.dumps(
+        {
+            "action_type": "tool_call",
+            "tool_name": "agentic_rag_search",
+            "input": {},
+            "rationale_summary": "首轮先调用允许的 RAG 工具。",
+        },
+        ensure_ascii=False,
+    )
+
+
+def _loads_json_value(value: Any) -> Any:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        return json.loads(value)
+    except json.JSONDecodeError:
+        return None
 
 
 def test_runtime_graph_state_exposes_minimal_chat_execution_fields() -> None:
@@ -756,8 +810,94 @@ def test_chat_graph_runtime_creates_plan_approval_wait_metadata_and_approve_resu
     assert result.state["status"] == "succeeded"
     assert result.state["plan_run"]["workflow_status"] == "succeeded"
     assert result.state["plan_run"]["steps"][0]["status"] == "succeeded"
+    assert result.state["plan_run"]["final_answer"] == "已批准并执行待审批操作。"
+    assert result.state["plan_run"]["result_summary"] == "已批准并执行待审批操作。"
     assert result.state["hitl_resume"]["metadata"]["mode"] == "plan"
     assert result.tool_result == {"executed_tool": "generic_write"}
+
+
+def test_chat_graph_runtime_plan_respond_settles_nested_run_result() -> None:
+    runtime = _build_chat_graph_runtime("runtime-graph-plan-hitl-respond")
+    runtime.create_hitl_wait(
+        wait=HitlWaitInput(
+            session_id="session-plan-respond",
+            request_id="req-plan-respond-wait",
+            reason="需要补充执行范围。",
+            pending_action="clarification",
+            allowed_actions=["respond", "reject"],
+            suggested_responses=[{"suggestion_id": "scope", "label": "范围", "value": "补充范围"}],
+            allow_freeform_response=True,
+            metadata={
+                "mode": "plan",
+                "plan_run_id": "plan-respond",
+                "current_step_id": "step-1",
+                "user_goal": "执行计划",
+            },
+        ),
+        interrupt_id="interrupt-plan-respond",
+    )
+
+    result = runtime.resume_hitl(
+        resume=HitlResumeInput(
+            session_id="session-plan-respond",
+            request_id="req-plan-respond-resume",
+            interrupt_id="interrupt-plan-respond",
+            action="respond",
+            payload={"response": "补充范围", "source": "freeform"},
+        ),
+        respond_handler=lambda payload, state: {
+            "status": "succeeded",
+            "answer": f"继续执行：{payload['response']}",
+        },
+    )
+
+    assert result.state["status"] == "succeeded"
+    assert result.state["plan_run"]["workflow_status"] == "succeeded"
+    assert result.state["plan_run"]["steps"][0]["status"] == "succeeded"
+    assert result.state["plan_run"]["final_answer"] == "继续执行：补充范围"
+    assert result.state["plan_run"]["result_summary"] == "继续执行：补充范围"
+
+
+def test_chat_graph_runtime_react_respond_settles_nested_run_result() -> None:
+    runtime = _build_chat_graph_runtime("runtime-graph-react-hitl-respond")
+    runtime.create_hitl_wait(
+        wait=HitlWaitInput(
+            session_id="session-react-respond",
+            request_id="req-react-respond-wait",
+            reason="需要补充文档主题。",
+            pending_action="clarification",
+            allowed_actions=["respond", "reject"],
+            suggested_responses=[{"suggestion_id": "topic", "label": "主题", "value": "安全"}],
+            allow_freeform_response=True,
+            metadata={
+                "mode": "react",
+                "react_run_id": "react-respond",
+                "current_turn_id": "turn-1",
+                "user_goal": "查询制度",
+            },
+        ),
+        interrupt_id="interrupt-react-respond",
+    )
+
+    result = runtime.resume_hitl(
+        resume=HitlResumeInput(
+            session_id="session-react-respond",
+            request_id="req-react-respond-resume",
+            interrupt_id="interrupt-react-respond",
+            action="respond",
+            payload={"response": "安全制度", "source": "freeform"},
+        ),
+        respond_handler=lambda payload, state: {
+            "status": "succeeded",
+            "answer": f"继续检索：{payload['response']}",
+        },
+    )
+
+    assert result.state["status"] == "succeeded"
+    assert result.state["react_run"]["workflow_status"] == "succeeded"
+    assert result.state["react_run"]["turns"][0]["status"] == "succeeded"
+    assert result.state["react_run"]["final_answer"] == "继续检索：安全制度"
+    assert result.state["react_run"]["result_summary"] == "继续检索：安全制度"
 
 
 def test_chat_graph_runtime_rejects_stale_agent_runtime_hitl_identity() -> None:
@@ -804,7 +944,7 @@ def test_chat_graph_runtime_rejects_stale_agent_runtime_hitl_identity() -> None:
                 action="respond",
                 payload={"response": "安全", "source": "freeform"},
             ),
-            respond_handler=lambda _: {"status": "succeeded", "answer": "should not run"},
+            respond_handler=lambda payload, state: {"status": "succeeded", "answer": "should not run"},
         )
     except HitlResumeError as exc:
         assert "current_turn_id" in str(exc)
@@ -1052,7 +1192,7 @@ def test_chat_graph_runtime_resume_respond_records_source_and_suggestion() -> No
                 "suggestion_id": "topic_scope",
             },
         ),
-        respond_handler=lambda payload: {
+        respond_handler=lambda payload, state: {
             "status": "succeeded",
             "answer": f"继续检索：{payload['response']}",
         },
@@ -1113,7 +1253,7 @@ def test_chat_graph_runtime_resume_respond_requires_handler_and_valid_payload() 
                 action="respond",
                 payload={"response": "自由输入", "source": "freeform"},
             ),
-            respond_handler=lambda payload: {"status": "succeeded", "answer": payload["response"]},
+            respond_handler=lambda payload, state: {"status": "succeeded", "answer": payload["response"]},
         )
     except HitlResumeError as exc:
         assert "freeform response is not allowed" in str(exc)
@@ -1128,7 +1268,7 @@ def test_chat_graph_runtime_resume_respond_requires_handler_and_valid_payload() 
             action="respond",
             payload={"source": "suggested_response", "suggestion_id": "topic_scope"},
         ),
-        respond_handler=lambda payload: {
+        respond_handler=lambda payload, state: {
             "status": "succeeded",
             "answer": f"继续检索：{payload['response']}",
         },

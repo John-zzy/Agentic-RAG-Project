@@ -78,6 +78,7 @@ def test_minimal_planner_creates_single_step_and_executor_succeeds() -> None:
     assert result.steps[0].input == {"query": "查差旅报销制度", "limit": 1}
     assert result.steps[0].output["records"] == [{"policy": "travel"}]
     assert result.steps[0].result_summary == "lookup_policy succeeded with 1 record(s)."
+    assert result.observations == [result.steps[0].observation]
     assert result.final_answer == "lookup_policy succeeded with 1 record(s)."
     assert result.metadata["citations"] == [{"citation_id": "policy-1"}]
     assert calls == [{"query": "查差旅报销制度", "limit": 1}]
@@ -111,6 +112,79 @@ def test_minimal_planner_uses_object_style_plan_tools_policy() -> None:
     )
 
     assert [step.tool_name for step in plan.steps] == ["lookup_inventory"]
+    assert plan.metadata["planner"]["step_source"] == "scene_policy.plan_tools"
+
+
+def test_minimal_planner_uses_explicit_scene_policy_plan_steps() -> None:
+    executor = ToolExecutor(
+        tools={
+            "lookup_policy": _structured_tool(
+                name="lookup_policy",
+                calls=[],
+                records=[{"policy": "travel"}],
+            )
+        },
+        allowed_tools={"lookup_policy"},
+    )
+
+    class _Policy:
+        plan_steps = (
+            {
+                "step_id": "policy-step",
+                "goal": "查制度",
+                "tool_name": "lookup_policy",
+                "input": {"query": "travel", "limit": 2},
+            },
+        )
+
+    plan = MinimalPlanner(tool_executor=executor).create_plan(
+        session_id="session-1",
+        request_id="request-policy-steps",
+        user_goal="按显式步骤查制度",
+        scene_policy=_Policy(),
+    )
+
+    assert plan.metadata["planner"]["step_source"] == "scene_policy.plan_steps"
+    assert plan.steps[0].step_id == "policy-step"
+    assert plan.steps[0].input == {"query": "travel", "limit": 2}
+
+
+def test_minimal_planner_uses_candidate_tools_and_tool_input_defaults() -> None:
+    executor = ToolExecutor(
+        tools={
+            "lookup_policy": _structured_tool(
+                name="lookup_policy",
+                calls=[],
+                records=[{"policy": "return"}],
+            ),
+            "lookup_inventory": _structured_tool(
+                name="lookup_inventory",
+                calls=[],
+                records=[{"sku": "sku-1"}],
+            ),
+        },
+        allowed_tools={"lookup_policy", "lookup_inventory"},
+    )
+
+    plan = MinimalPlanner(tool_executor=executor).create_plan(
+        session_id="session-1",
+        request_id="request-candidates",
+        user_goal="先查库存再查规则",
+        mounted_knowledge_sources=("documents", "inventory"),
+        candidate_tools=("lookup_inventory", "lookup_policy"),
+        scene_policy={
+            "plan_tool_inputs": {
+                "lookup_inventory": {"query": "sku-1", "limit": 1},
+                "lookup_policy": {"query": "return", "limit": 1},
+            }
+        },
+    )
+
+    assert plan.metadata["planner"]["step_source"] == "candidate_tools"
+    assert [step.tool_name for step in plan.steps] == ["lookup_inventory", "lookup_policy"]
+    assert plan.steps[1].depends_on == ["step-1"]
+    assert plan.steps[0].input == {"query": "sku-1", "limit": 1}
+    assert plan.context_summary
 
 
 def test_plan_executor_runs_multi_step_plan_in_dependency_order() -> None:
@@ -158,6 +232,10 @@ def test_plan_executor_runs_multi_step_plan_in_dependency_order() -> None:
     assert result.workflow_status == "succeeded"
     assert result.metadata["execution_order"] == ["step-1", "step-2"]
     assert [step.status for step in result.steps] == ["succeeded", "succeeded"]
+    assert result.observations == [
+        result.steps[0].observation,
+        result.steps[1].observation,
+    ]
     assert policy_calls == [{"query": "return", "limit": 1}]
     assert inventory_calls == [{"query": "sku-1", "limit": 1}]
 
@@ -202,6 +280,8 @@ def test_plan_executor_retries_retryable_error_and_then_succeeds() -> None:
     assert result.steps[0].status == "succeeded"
     assert result.steps[0].retry_metadata.attempt == 2
     assert result.steps[0].retry_metadata.last_error is None
+    assert len(result.observations) == 2
+    assert result.observations[-1] == result.steps[0].observation
     assert [transition["event"] for transition in result.metadata["workflow_transitions"]] == [
         "run_start",
         "tool_error_retryable",
@@ -233,6 +313,9 @@ def test_plan_executor_fails_after_retry_exhaustion() -> None:
     assert result.error == "timeout exhausted"
     assert result.steps[0].status == "failed"
     assert result.steps[0].retry_metadata.attempt == 2
+    assert len(result.observations) == 2
+    assert result.observations[-1] == result.steps[0].observation
+    assert result.error == result.observations[-1].error
     assert [transition["event"] for transition in result.metadata["workflow_transitions"]] == [
         "run_start",
         "tool_error_retryable",
@@ -244,6 +327,66 @@ def test_plan_executor_fails_after_retry_exhaustion() -> None:
         {"query": "policy", "limit": 1},
         {"query": "policy", "limit": 1},
     ]
+
+
+def test_plan_executor_blocks_steps_when_dependency_fails() -> None:
+    failed_observation = ToolObservation(
+        tool_name="lookup_policy",
+        success=False,
+        retryable=False,
+        error="policy lookup failed",
+        result_summary="policy lookup failed",
+    )
+    failing_tool = _StaticObservationTool(name="lookup_policy", observation=failed_observation)
+    inventory_calls: list[dict[str, Any]] = []
+    executor = ToolExecutor(
+        tools={
+            "lookup_policy": failing_tool,
+            "lookup_inventory": _structured_tool(
+                name="lookup_inventory",
+                calls=inventory_calls,
+                records=[{"sku": "sku-1"}],
+            ),
+        },
+        allowed_tools={"lookup_policy", "lookup_inventory"},
+    )
+    plan = PlanRun(
+        plan_run_id="plan-blocked",
+        session_id="session-1",
+        request_id="request-blocked",
+        user_goal="先查规则再查库存",
+        steps=[
+            PlanStep(
+                step_id="step-1",
+                goal="查规则",
+                tool_name="lookup_policy",
+                input={"query": "return"},
+            ),
+            PlanStep(
+                step_id="step-2",
+                goal="查库存",
+                tool_name="lookup_inventory",
+                input={"query": "sku-1"},
+                depends_on=["step-1"],
+            ),
+            PlanStep(
+                step_id="step-3",
+                goal="复核库存",
+                tool_name="lookup_inventory",
+                input={"query": "sku-1"},
+                depends_on=["step-2"],
+            ),
+        ],
+    )
+
+    result = PlanExecutor(tool_executor=executor).execute(plan)
+
+    assert result.workflow_status == "failed"
+    assert [step.status for step in result.steps] == ["failed", "blocked", "blocked"]
+    assert result.steps[1].metadata["blocked_by"] == ["step-1"]
+    assert result.steps[2].metadata["blocked_by"] == ["step-2"]
+    assert failing_tool.calls == [{"query": "return", "limit": 1}]
+    assert inventory_calls == []
 
 
 def test_plan_final_synthesis_uses_successful_step_summaries_and_citations() -> None:
@@ -274,7 +417,10 @@ def test_plan_final_synthesis_uses_successful_step_summaries_and_citations() -> 
     assert result.metadata["knowledge_used"] is True
     assert result.metadata["final_synthesis"] == {"step_ids": ["step-1"]}
     assert synthesizer.contexts[0].steps == result.steps
+    assert synthesizer.contexts[0].observations == result.observations
     assert synthesizer.contexts[0].citations == [{"citation_id": "policy-1"}]
+    assert synthesizer.contexts[0].context_summary == result.context_summary
+    assert synthesizer.contexts[0].execution_order == ["step-1"]
 
 
 def test_plan_executor_tool_observation_requires_user_creates_wait_metadata() -> None:
@@ -307,6 +453,8 @@ def test_plan_executor_tool_observation_requires_user_creates_wait_metadata() ->
     assert result.steps[0].metadata["hitl"] == result.metadata["hitl"]
     assert result.steps[0].observation is not None
     assert result.steps[0].observation.metadata["hitl"] == result.metadata["hitl"]
+    assert result.observations == [result.steps[0].observation]
+    assert result.observations[0].metadata["hitl"] == result.metadata["hitl"]
     assert tool.calls == [{"query": "approval", "limit": 1}]
 
 

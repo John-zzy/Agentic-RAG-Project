@@ -14,6 +14,9 @@ from backend.application.runtime.api.chat.schemas import (
 )
 from backend.application.runtime.chat_service_parts.contracts import ChatServiceError, PreparedChatTurn
 from backend.application.runtime.graph_runtime import HitlResumeError, HitlResumeInput, HitlWaitInput
+from backend.platform.agent_runtime.contracts import ReActRun
+from backend.platform.agent_runtime.react import LLMReActActionSelector, ReActRuntime
+from backend.platform.workflow.langgraph.state import RuntimeGraphState
 from backend.platform.agent_runtime.tool_executor import ToolExecutor
 from backend.scenes.generic_assistant.hitl import (
     GenericAssistantHitlOptions,
@@ -181,13 +184,26 @@ class ChatHitlMixin:
         observation = executor.execute(tool_name=tool_name, input_payload=dict(args))
         return observation.model_dump()
 
-    def _handle_clarification_response(self, resume_payload: Mapping[str, Any]) -> dict[str, Any]:
+    def _handle_clarification_response(
+            self,
+            resume_payload: Mapping[str, Any],
+            state: RuntimeGraphState,
+    ) -> dict[str, Any]:
         """用用户补充内容继续跑 generic 检索；没有证据时仍走原有 fallback。"""
         session_id = str(resume_payload.get("session_id") or "").strip()
         request_id = str(resume_payload.get("request_id") or "").strip()
         response = str(resume_payload.get("response") or "").strip()
         if not session_id or not request_id:
             raise HitlResumeError("respond resume payload must include session_id and request_id.")
+
+        if state.get("agent_mode") == "react":
+            return self._continue_react_after_clarification(
+                session_id=session_id,
+                request_id=request_id,
+                response=response,
+                resume_payload=resume_payload,
+                state=state,
+            )
 
         prepared = self._prepare_existing_session_turn(
             session_id=session_id,
@@ -203,6 +219,105 @@ class ChatHitlMixin:
             "knowledge_used": prepared.knowledge_used,
             "citations": [citation.model_dump() for citation in citations],
             "retrieval_trace": prepared.retrieval_trace.model_dump(),
+        }
+
+    def _continue_react_after_clarification(
+            self,
+            *,
+            session_id: str,
+            request_id: str,
+            response: str,
+            resume_payload: Mapping[str, Any],
+            state: RuntimeGraphState,
+    ) -> dict[str, Any]:
+        """恢复 checkpoint 中的 ReActRun，并把用户补充交还给平台 continuation。"""
+        raw_run = state.get("react_run")
+        if not isinstance(raw_run, Mapping):
+            raise HitlResumeError("react_run checkpoint is required for ReAct respond.")
+        try:
+            react_run = ReActRun.model_validate(dict(raw_run))
+        except ValueError as exc:
+            raise HitlResumeError("react_run checkpoint is invalid for ReAct respond.") from exc
+
+        session = self.session_store.get_session(session_id)
+        if session is None:
+            raise HitlResumeError("session is required for ReAct respond.")
+        mounted_knowledge_sources = tuple(session.mounted_knowledge_sources)
+        tool_executor = self._build_agent_tool_executor(
+            mounted_knowledge_sources=mounted_knowledge_sources
+        )
+        scene_policy = self._build_react_scene_policy(
+            tool_executor=tool_executor,
+            message=response,
+            mounted_knowledge_sources=mounted_knowledge_sources,
+        ).model_copy(update={"max_turns": react_run.max_turns})
+        runtime = ReActRuntime(
+            tool_executor=tool_executor,
+            action_selector=LLMReActActionSelector(
+                model_client=self.model,
+                model_complexity=self.scene_definition.infer_complexity(response) or "simple",
+            ),
+            scene_policy=scene_policy,
+            turn_id_factory=lambda index: f"turn-{index}",
+            max_turns=react_run.max_turns,
+        )
+        continued_run = runtime.continue_after_respond(
+            run=react_run,
+            response=response,
+            source=str(resume_payload.get("source") or "freeform"),
+            suggestion_id=(
+                str(resume_payload.get("suggestion_id"))
+                if resume_payload.get("suggestion_id") is not None
+                else None
+            ),
+            metadata=dict(resume_payload.get("metadata") or {}),
+        )
+        agent_result = self._agent_execution_result_from_run(
+            message=response,
+            complexity=self.scene_definition.infer_complexity(response),
+            mounted_knowledge_sources=mounted_knowledge_sources,
+            react_run=continued_run,
+        )
+        prepared = PreparedChatTurn(
+            session_id=session_id,
+            request_id=request_id,
+            timestamp=datetime.now(UTC).isoformat(),
+            user_message=response,
+            documents=agent_result.documents,
+            tool_event=agent_result.tool_event,
+            retrieval_trace=agent_result.retrieval_trace,
+            citations=agent_result.citations,
+            knowledge_used=agent_result.knowledge_used,
+            scene_metadata=self._scene_metadata(),
+            complexity=(
+                self.scene_definition.infer_complexity(response)
+                if agent_result.knowledge_used
+                else None
+            ),
+            final_decision=agent_result.final_decision,
+            follow_up_question=agent_result.follow_up_question,
+            answer_mode=agent_result.answer_mode,
+            agent_mode="react",
+            agent_mode_reason="hitl_react_continuation",
+            agent_mode_signals={"resume_action": "respond"},
+            react_run=agent_result.react_run,
+            current_turn_id=agent_result.current_turn_id,
+            current_tool_call=agent_result.current_tool_call,
+            tool_observation=agent_result.tool_observation,
+        )
+        answer, citations = self._generate_answer_direct(prepared)
+        self._persist_turn(prepared=prepared, answer=answer, citations=citations)
+        return {
+            "status": "succeeded",
+            "answer": answer,
+            "knowledge_used": prepared.knowledge_used,
+            "citations": [citation.model_dump() for citation in citations],
+            "retrieval_trace": prepared.retrieval_trace.model_dump(),
+            "agent_mode": "react",
+            "react_run": continued_run.model_dump(),
+            "current_turn_id": agent_result.current_turn_id,
+            "current_tool_call": agent_result.current_tool_call,
+            "tool_observation": agent_result.tool_observation,
         }
 
     def _build_resume_response(

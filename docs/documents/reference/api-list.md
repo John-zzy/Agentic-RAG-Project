@@ -38,7 +38,7 @@
     - 事件类型为 `start`、`history`、`tool`、`chunk`、`waiting_user`、`done`、`error`，且 `data` 一律为 JSON。
     - `start.data` 包含 `session_id`、`request_id`、`knowledge_used`、`scene`、`agent`、`agent_mode`、`state`、`state_event`。
     - `history.data` 包含 `session_id`、`request_id`、`window_size`、`message_count`、`messages`，用于暴露本轮注入模型前的历史消息窗口；`messages` 每项包含 `type` 与 `content`。
-    - `tool.data` 包含顶层 Agent 工具进度和 retrieval 阶段结构化结果，固定补充 `session_id`、`request_id`、`agent_mode`、`knowledge_used`、`citations`；`stage` 取 `react_turn` 或 `plan_step`，原检索阶段保存在 `retrieval_stage`；ReAct payload 包含 `react_run_id`、`turn_id`、`turn_status`、`action`、`tool_name`，Plan payload 包含 `plan_run_id`、`step_id`、`step_status`、`tool_name`；RAG 细节继续保存在 `retrieval_trace` 和 `rounds`。
+    - `tool.data` 包含顶层 Agent 工具进度和 retrieval 阶段结构化结果，固定补充 `session_id`、`request_id`、`agent_mode`、`knowledge_used`、`citations`；`stage` 取 `react_turn` 或 `plan_step`，原检索阶段保存在 `retrieval_stage`；ReAct payload 包含 `react_run_id`、`turn_id`、`active_turn`、`turn_status`、`workflow_status`、`action`、`action_type`、`tool_name`、`turn_count`、`max_turns`、`attempted_tools`、`rationale_summary`、`latest_action_selection`、`action_validation_result`，Plan payload 包含 `plan_run_id`、`step_id`、`step_status`、`workflow_status`、`tool_name`、`step_count`、`execution_order`；RAG 细节继续保存在 `retrieval_trace` 和 `rounds`。
     - `chunk.data` 包含 `delta`，表示最终回答文本增量。
     - `waiting_user.data` 包含 `session_id`、`request_id`、`status="waiting_user"`、`state="waiting_user"`、`state_event="interrupt"`、`run_id`、`hitl`；客户端需要使用 `hitl.interrupt_id` 调用 `/chat/resume`。
     - `done.data` 与非流式 `ChatResponse` 结构一致，客户端应以 `done.answer` 作为最终权威文本，并可读取 `final_state`。
@@ -93,7 +93,8 @@
 
 - `pending_action=clarification` 时，`allowed_actions` 通常为 `["respond", "reject"]`，并可返回 `suggested_responses` 和 `allow_freeform_response=true`。
 - `pending_action=tool_approval` 或 `external_api_approval` 时，`allowed_actions` 通常为 `["approve", "reject"]`，会返回 `proposed_tool_call`，但不会返回澄清建议。
-- `respond` 会使用用户补充内容继续执行 generic 检索；如果仍无证据，会沿用原有 no-hit / ask_user fallback 边界，不伪造 citations。
+- `respond` 会使用用户补充内容恢复同一个 ReAct run，并把补充内容传回 LLM ReAct selector；如果仍无证据，会沿用原有 no-hit / ask_user fallback 边界，不伪造 citations。
+- ReAct resume 会校验当前 checkpoint 中的 `session_id`、`interrupt_id`、`react_run_id` 和 `current_turn_id`，避免恢复过期等待点。
 
 ### `GET /scenes`
 

@@ -176,7 +176,7 @@ class HitlRuntimeMixin:
                     resumed_state=resumed_state,
                     resume_event=resume_event,
                 )
-                response_result = dict(respond_handler(resume_payload) or {})
+                response_result = dict(respond_handler(resume_payload, state) or {})
                 next_status, state_event = self._resolve_running_result_state(
                     current_state=resumed_state,
                     requested_state=str(response_result.get("status") or "succeeded"),
@@ -214,6 +214,8 @@ class HitlRuntimeMixin:
                         action=resume.action,
                         resume_payload=resume_payload,
                         next_status=next_status,
+                        final_answer=next_answer,
+                        tool_result=tool_result,
                     ),
                     **response_state_update,
                 },
@@ -327,9 +329,13 @@ class HitlRuntimeMixin:
             )
         if state.get("status") != "waiting_user":
             raise HitlResumeError("Current thread is not waiting for user input.")
+        if state.get("session_id") != resume.session_id:
+            raise HitlResumeError("session_id does not match current HITL state.")
         hitl = state.get("hitl")
         if not hitl:
             raise HitlResumeError("Current thread has no HITL payload.")
+        if hitl.get("thread_id") != resume.session_id:
+            raise HitlResumeError("HITL thread_id does not match resume session_id.")
         if hitl.get("interrupt_id") != resume.interrupt_id:
             raise HitlResumeError("interrupt_id does not match current HITL state.")
         allowed_actions = set(hitl.get("allowed_actions") or ())
@@ -344,7 +350,7 @@ class HitlRuntimeMixin:
         state: RuntimeGraphState,
         hitl: RuntimeHitlState,
     ) -> None:
-        """校验顶层 Agent 等待点，旧式 HITL metadata 为空时走原有协议。"""
+        """校验顶层 Agent 等待点。"""
         metadata = dict(hitl.get("metadata") or {})
         mode = _coerce_optional_agent_mode(metadata.get("mode"))
         if mode is None:
@@ -353,6 +359,8 @@ class HitlRuntimeMixin:
             raise HitlResumeError("HITL orchestration mode does not match checkpoint.")
         if mode == "react":
             expected_run_id = str(metadata.get("react_run_id") or "")
+            if not expected_run_id:
+                raise HitlResumeError("react_run_id is required for ReAct HITL resume.")
             react_run = state.get("react_run")
             actual_run_id = (
                 str(react_run.get("react_run_id") or "")
@@ -362,6 +370,8 @@ class HitlRuntimeMixin:
             if expected_run_id and actual_run_id != expected_run_id:
                 raise HitlResumeError("react_run_id does not match current HITL state.")
             expected_turn_id = str(metadata.get("current_turn_id") or "")
+            if not expected_turn_id:
+                raise HitlResumeError("current_turn_id is required for ReAct HITL resume.")
             if expected_turn_id and state.get("current_turn_id") != expected_turn_id:
                 raise HitlResumeError("current_turn_id does not match current HITL state.")
             return
@@ -405,6 +415,7 @@ class HitlRuntimeMixin:
                     action=str(resume_payload.get("action") or ""),
                     resume_payload=resume_payload,
                     next_status=resumed_state,
+                    final_answer=None,
                 ),
                 "metadata": {
                     **dict(state.get("metadata") or {}),
@@ -581,6 +592,16 @@ class HitlRuntimeMixin:
             update["citations"] = list(response_result["citations"] or [])
         if "retrieval_trace" in response_result:
             update["retrieval_trace"] = dict(response_result["retrieval_trace"] or {})
+        for key in (
+            "agent_mode",
+            "react_run",
+            "plan_run",
+            "current_turn_id",
+            "current_step_id",
+            "current_tool_call",
+        ):
+            if key in response_result:
+                update[key] = response_result[key]
         return update
 
 

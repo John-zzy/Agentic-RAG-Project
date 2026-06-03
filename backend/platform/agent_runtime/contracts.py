@@ -26,6 +26,7 @@ PlanStepStatus = Literal[
     "succeeded",
     "failed",
     "cancelled",
+    "blocked",
     "skipped",
 ]
 
@@ -148,6 +149,7 @@ class ReActRun(AgentRuntimeModel):
     workflow_status: WorkflowRunState = "running"
     max_turns: int = Field(default=5, ge=1)
     turns: list[ReActTurn] = Field(default_factory=list)
+    observations: list[ToolObservation] = Field(default_factory=list)
     current_turn_id: str | None = None
     current_tool_call: ToolExecutionMetadata | None = None
     final_answer: str | None = None
@@ -181,11 +183,19 @@ class PlanRun(AgentRuntimeModel):
     request_id: str
     mode: Literal["plan"] = "plan"
     user_goal: str
+    context_summary: str = ""
     workflow_status: WorkflowRunState = "planning"
     steps: list[PlanStep] = Field(default_factory=list)
+    observations: list[ToolObservation] = Field(default_factory=list)
     current_step_id: str | None = None
     current_tool_call: ToolExecutionMetadata | None = None
     final_answer: str | None = None
     result_summary: str = ""
     error: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+def collect_successful_tool_observations(run: ReActRun | PlanRun) -> list[ToolObservation]:
+    """从 run 级事实表收集成功工具结果，供汇总、审计和 checkpoint 使用。"""
+
+    return [observation for observation in run.observations if observation.success]

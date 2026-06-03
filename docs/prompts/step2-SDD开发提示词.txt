@@ -54,5 +54,7 @@
    - test agent：补充/修正测试，运行相关 pytest。
    - review agent：检查 bug、耦合、边界破坏、缺失测试和 OpenSpec 偏差。
 4. 每完成一项任务，立即把 checkbox 从 [ ] 改为 [x]。
-5. 代码要求：必要过程中文注释，单一职责，不写兼容式绕路代码，不破坏 platform/application/scenes 边界。
+5. 代码要求：
+   - 必要过程中文注释，单一职责，不写兼容式绕路代码，不破坏 platform/application/scenes 边界。
+   - 必须使用良好的设计模式，不要在同一个类或方法中编写过长的代码，注意拆分。
 6. 最终输出：完成 task、关键文件、测试结果、review findings 与修复摘要、未完成项和阻塞原因。

@@ -18,6 +18,7 @@ from backend.platform.agent_runtime import (
     ToolInputValidationError,
     ToolObservation,
     build_retry_metadata,
+    collect_successful_tool_observations,
     ensure_tool_allowed,
     validate_plan_dependencies,
     validate_plan_tool_allowlist,
@@ -105,6 +106,7 @@ def test_react_contract_records_top_level_turn_without_hidden_reasoning() -> Non
     payload = run.model_dump()
 
     assert payload["mode"] == "react"
+    assert payload["observations"] == []
     assert payload["turns"][0]["tool_name"] == "native_rag_search"
     assert payload["turns"][0]["action"]["rationale_summary"] == "需要先检索制度证据。"
     assert "thought" not in payload["turns"][0]["action"]
@@ -130,6 +132,8 @@ def test_plan_contract_records_required_step_fields() -> None:
     payload = run.model_dump()
 
     assert payload["mode"] == "plan"
+    assert payload["context_summary"] == ""
+    assert payload["observations"] == []
     assert set(payload["steps"][0]) >= {
         "step_id",
         "goal",
@@ -141,6 +145,125 @@ def test_plan_contract_records_required_step_fields() -> None:
         "error",
     }
     assert payload["steps"][0]["status"] == "pending"
+
+
+def test_agent_run_observations_are_serializable_and_restore_old_snapshots() -> None:
+    observation = ToolObservation(
+        tool_name="native_rag_search",
+        success=True,
+        result_summary="命中制度证据。",
+    )
+    react_payload = ReActRun(
+        react_run_id="react-run-observation",
+        session_id="session-react",
+        request_id="request-react",
+        user_goal="查询制度",
+        observations=[observation],
+    ).model_dump()
+    plan_payload = PlanRun(
+        plan_run_id="plan-run-observation",
+        session_id="session-plan",
+        request_id="request-plan",
+        user_goal="拆解查询制度",
+        context_summary="使用文档知识源生成计划。",
+        observations=[observation],
+    ).model_dump()
+
+    assert react_payload["observations"][0]["result_summary"] == "命中制度证据。"
+    assert plan_payload["context_summary"] == "使用文档知识源生成计划。"
+    assert plan_payload["observations"][0]["tool_name"] == "native_rag_search"
+
+    react_payload.pop("observations")
+    plan_payload.pop("observations")
+    plan_payload.pop("context_summary")
+
+    assert ReActRun.model_validate(react_payload).observations == []
+    restored_plan = PlanRun.model_validate(plan_payload)
+    assert restored_plan.observations == []
+    assert restored_plan.context_summary == ""
+
+
+def test_collect_successful_tool_observations_prefers_run_level_results() -> None:
+    failed_step_observation = ToolObservation(
+        tool_name="native_rag_search",
+        success=False,
+        result_summary="步骤旧结果失败。",
+    )
+    successful_run_observation = ToolObservation(
+        tool_name="native_rag_search",
+        success=True,
+        result_summary="run 级结果成功。",
+    )
+    run = PlanRun(
+        plan_run_id="plan-run-collect",
+        session_id="session-plan",
+        request_id="request-plan",
+        user_goal="汇总计划结果",
+        steps=[
+            PlanStep(
+                step_id="step-1",
+                goal="检索资料",
+                tool_name="native_rag_search",
+                observation=failed_step_observation,
+            )
+        ],
+        observations=[successful_run_observation],
+    )
+
+    assert collect_successful_tool_observations(run) == [successful_run_observation]
+
+
+def test_collect_successful_tool_observations_requires_run_level_results() -> None:
+    successful_observation = ToolObservation(
+        tool_name="native_rag_search",
+        success=True,
+        result_summary="turn 结果成功。",
+    )
+    failed_observation = ToolObservation(
+        tool_name="native_rag_search",
+        success=False,
+        result_summary="turn 结果失败。",
+    )
+    run = ReActRun(
+        react_run_id="react-run-collect",
+        session_id="session-react",
+        request_id="request-react",
+        user_goal="汇总 ReAct 结果",
+        turns=[
+            ReActTurn(
+                turn_id="turn-1",
+                round_index=1,
+                goal="检索资料",
+                action=ReActAction(action_type="tool_call", tool_name="native_rag_search"),
+                observation=failed_observation,
+            ),
+            ReActTurn(
+                turn_id="turn-2",
+                round_index=2,
+                goal="检索资料",
+                action=ReActAction(action_type="tool_call", tool_name="native_rag_search"),
+                observation=successful_observation,
+            ),
+        ],
+    )
+
+    assert collect_successful_tool_observations(run) == []
+
+
+def test_plan_step_blocked_status_is_a_serializable_contract() -> None:
+    step = PlanStep(
+        step_id="step-2",
+        goal="汇总前置结果",
+        tool_name="final_synthesizer",
+        depends_on=["step-1"],
+        status="blocked",
+        error="依赖 step-1 未成功，当前步骤无法执行。",
+    )
+
+    payload = step.model_dump()
+
+    assert payload["status"] == "blocked"
+    assert payload["error"] == "依赖 step-1 未成功，当前步骤无法执行。"
 
 
 def test_tool_allowlist_and_input_schema_validation() -> None:
