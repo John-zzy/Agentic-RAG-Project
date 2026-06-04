@@ -1,4 +1,4 @@
-# Generic Assistant LLM Query Rewrite调整方案
+﻿# Generic Assistant LLM Query Rewrite调整方案
 
 ## Summary
 
@@ -258,3 +258,5 @@ backend\.venv\Scripts\python.exe backend\evals\run_http_eval.py --base-url http:
 - 本次只改 `generic_assistant` 的 docs-first query rewrite。
 - 不新增环境变量；继续使用现有模型路由配置。
 - 不在本次实现 ReRank 或额外检索平台。
+
+

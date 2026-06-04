@@ -1,2 +1,0 @@
-"""Chat runtime branch components."""
-

@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import os
 from datetime import datetime
@@ -134,3 +134,4 @@ def download_file(filename: str):
         filename=filename,
         media_type=get_content_type(filename),
     )
+

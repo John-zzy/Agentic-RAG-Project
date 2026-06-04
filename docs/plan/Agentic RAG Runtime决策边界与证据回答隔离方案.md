@@ -1,4 +1,4 @@
-# Agentic RAG Runtime 决策边界与证据回答隔离方案
+﻿# Agentic RAG Runtime 决策边界与证据回答隔离方案
 
 ## Summary
 
@@ -441,3 +441,5 @@ backend\.venv\Scripts\python.exe -m pytest backend\tests\test_document_hybrid_re
 - 旧 `search` / `BaseRetriever` 分支继续兼容，以 documents 是否为空归一化为 `answer_with_evidence` 或 `no_evidence`。
 - 本次不改变 session 数据库结构；如果需要持久化新增 trace 字段，后续单独设计。
 - README roadmap 已将 P0 第一项更新为已完成，并补充 Runtime 边界 Demo Path。
+
+

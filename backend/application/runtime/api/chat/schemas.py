@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from typing import Any, Literal
 
@@ -343,3 +343,4 @@ class SessionDeleteResponse(BaseModel):
 
     session_id: str = Field(description="被删除的会话 ID。")
     deleted_messages: int = Field(description="被删除的消息数量。")
+

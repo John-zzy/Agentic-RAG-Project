@@ -1,4 +1,4 @@
-# PRD-20260603-03 Agentic RAG Subgraph 迁移审计与节点拆分方案
+﻿# PRD-20260603-03 Agentic RAG Subgraph 迁移审计与节点拆分方案
 
 ## 1. 结论
 
@@ -20,11 +20,11 @@
 当前项目里的 LangGraph 定义仍然偏骨架层：
 
 - 普通回答图：`START -> answer -> END`
-  - 位置：`backend/application/runtime/graph_runtime_parts/answer_graph.py`
+  - 位置：`backend/application/runtime/assembly/runtime_parts/answer_graph.py`
 - HITL 状态写入图：`START -> hitl_state_update -> END`
-  - 位置：`backend/application/runtime/graph_runtime_parts/state_store.py`
+  - 位置：`backend/application/runtime/assembly/runtime_parts/state_store.py`
 - `ChatGraphRuntime` 负责 thread/checkpoint/lifecycle/run state 的装配和调用
-  - 位置：`backend/application/runtime/graph_runtime.py`
+  - 位置：`backend/application/runtime/assembly/runtime_factory.py`
 
 也就是说，当前 LangGraph 已经承担了运行时状态能力，但还没有显式表达：
 
@@ -359,11 +359,13 @@ HITL 判断：RAG 内部不应新增顶层人工审批语义，但 `ask_user` / 
 
 这次审计已经按当前代码核对完毕，结论和本方案保持一致：
 
-- `backend/application/runtime/graph_runtime_parts/answer_graph.py` 仍然是 `START -> answer -> END` 的最小图。
-- `backend/application/runtime/graph_runtime_parts/state_store.py` 仍然只负责 checkpoint 写回与状态装配，没有顶层 ChatGraph 拓扑。
-- `backend/application/runtime/graph_runtime.py` 负责 checkpointer、lifecycle、input state、stream state 的统一装配。
+- `backend/application/runtime/assembly/runtime_parts/answer_graph.py` 仍然是 `START -> answer -> END` 的最小图。
+- `backend/application/runtime/assembly/runtime_parts/state_store.py` 仍然只负责 checkpoint 写回与状态装配，没有顶层 ChatGraph 拓扑。
+- `backend/application/runtime/assembly/runtime_factory.py` 负责 checkpointer、lifecycle、input state、stream state 的统一装配。
 - ReAct 的实现已迁移到 `backend/platform/agent_runtime/react/runtime.py`。
 - Plan 的实现已迁移到 `backend/platform/agent_runtime/plan/executor.py`。
 - Agentic RAG 的多轮编排仍在 `backend/platform/rag/orchestration/agentic.py`。
 - `RuntimeGraphState` 目前保留的核心字段包括 `session_id`、`request_id`、`messages`、`answer`、`knowledge_used`、`citations`、`retrieval_trace`、`metadata`，以及 `agent_mode`、`react_run`、`plan_run`、`current_turn_id`、`current_step_id`、`current_tool_call`。
-- `/chat` 的 SSE 和 HITL 兼容仍依赖 `chat_service_parts/events.py`、`chat_service_parts/hitl.py` 和 `graph_runtime_parts/agent_state.py` 这些投影边界。
+- `/chat` 的 SSE 和 HITL 兼容仍依赖 `assembly/service_parts/events.py`、`assembly/service_parts/hitl.py` 和 `assembly/runtime_parts/agent_state.py` 这些投影边界。
+
+

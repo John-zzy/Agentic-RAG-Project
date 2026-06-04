@@ -1,4 +1,4 @@
-# Retrieval Benchmark + UI Eval API Plan
+﻿# Retrieval Benchmark + UI Eval API Plan
 
 ## Summary
 
@@ -130,3 +130,5 @@ UI 接口只暴露 eval 能力：读取历史 run、读取单个 run、获取 la
 - eval run 的 `base_url` 默认由当前请求推导，例如 `http://host:port`，不允许 UI 传任意外部 URL。
 - 本次不新增生成质量 judge、不做性能压测、不覆盖 ecommerce。
 - 非侵入式探针允许 eval 代码 import 现有业务组件，但不得要求业务组件新增 eval-only 参数或字段。
+
+

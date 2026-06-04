@@ -1,4 +1,4 @@
-# PRD-20260601-01 Human-in-the-Loop 最小闭环设计与接入点审计
+﻿# PRD-20260601-01 Human-in-the-Loop 最小闭环设计与接入点审计
 
 ## Summary
 
@@ -49,7 +49,7 @@ user request
 
 | 能力 | 当前位置 | 状态 |
 | --- | --- | --- |
-| LangGraph application facade | `backend/application/runtime/graph_runtime.py` | 已有 `ChatGraphRuntime.invoke()`，但只编译单节点 answer graph |
+| LangGraph application facade | `backend/application/runtime/assembly/runtime_factory.py` | 已有 `ChatGraphRuntime.invoke()`，但只编译单节点 answer graph |
 | Runtime graph state | `backend/platform/workflow/langgraph/state.py` | 已扩展 `status/hitl/hitl_resume`，能保存 `waiting_user` |
 | Graph config | `backend/platform/workflow/langgraph/config.py` | 已绑定 `thread_id=session_id`，`request_id/session_id` 写入 metadata |
 | SQLite checkpointer | `backend/platform/workflow/langgraph/checkpointer.py` | 已支持 checkpoint、blobs、pending writes、thread delete |
@@ -513,3 +513,5 @@ backend\.venv\Scripts\python.exe -m pytest backend\tests\test_chat_api.py backen
 - `edit` 若首轮实现会引入工具参数 schema、表单编辑和重新校验复杂度，建议先做协议占位。
 - lifecycle 若过早扩展完整 Workflow State Machine，会扩大本 PRD 范围；首轮只需要 `waiting_user`。
 - 若误把 `ecommerce` 工具纳入本轮，会把 HITL 设计变成业务工具权限设计，偏离 generic assistant 最小闭环目标。
+
+

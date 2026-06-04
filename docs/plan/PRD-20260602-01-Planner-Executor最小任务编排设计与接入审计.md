@@ -1,4 +1,4 @@
-# PRD-20260602-01 Planner / Executor 最小任务编排设计与接入审计
+﻿# PRD-20260602-01 Planner / Executor 最小任务编排设计与接入审计
 
 ## 0. 一页结论
 
@@ -92,7 +92,7 @@ README 当前已完成 `Human-in-the-Loop`、`Workflow State Machine` 和 LangGr
 | `backend/platform/rag/orchestration/agentic.py` | `AgenticRetriever.retrieve_with_trace()` 执行 RAG 内部多轮检索、rewrite、switch retrieval tool、ask_user | 是 Agentic RAG 工具内部流程，不是顶层 ReAct |
 | `backend/platform/rag/contracts.py` | 定义 `RetrievalPlan`、`RetrievalResult`、`RetrievalContext`、`RetrievalTool` | 可作为 RAG tool output / trace 的底层结构 |
 | `backend/application/runtime/service.py` | `ChatService` 串联检索、回答、HITL、SSE；`RetrievalExecutor` 执行 retriever | 当前 `/chat` 主入口，后续应把顶层编排交给 LangGraph Agent Runtime |
-| `backend/application/runtime/graph_runtime.py` | 创建 graph run、写 checkpoint、处理 HITL wait/resume、保护终态 | 应升级为 ReAct / Plan graph 的承载层 |
+| `backend/application/runtime/assembly/runtime_factory.py` | 创建 graph run、写 checkpoint、处理 HITL wait/resume、保护终态 | 应升级为 ReAct / Plan graph 的承载层 |
 | `backend/platform/workflow/state_machine.py` | 定义 run 级状态和合法转移 | 可复用，但必须清晰区分 run / step / turn / tool call |
 | `backend/platform/workflow/langgraph/state.py` | checkpoint 保存 `messages/answer/retrieval_trace/status/hitl/retry_metadata` | 需要扩展 Agent Runtime 上下文 |
 | `backend/scenes/base.py` | `SceneDefinition` 暴露 `build_retriever()`、`build_tools()`、候选 retrieval tools、复杂度策略 | 说明项目已经具备工具与 retriever 的双装配入口 |
@@ -189,7 +189,7 @@ ChatService
 | `backend/platform/agent_runtime/react/runtime.py` | 顶层 ReAct loop，不等同于 `AgenticRetriever` |
 | `backend/platform/agent_runtime/plan/planner.py` | 最小 Planner，生成 `PlanRun` |
 | `backend/platform/agent_runtime/plan/executor.py` | `PlanExecutor`，按依赖执行 `PlanStep` |
-| `backend/application/runtime/graph_runtime.py` | 组装 LangGraph nodes、checkpoint、HITL resume |
+| `backend/application/runtime/assembly/runtime_factory.py` | 组装 LangGraph nodes、checkpoint、HITL resume |
 
 命名也可以继续使用 `backend/platform/planning/`，但语义上应是 Agent Runtime 编排层，而不是 RAG adapter 层。
 
@@ -679,3 +679,5 @@ backend\.venv\Scripts\python.exe -m pytest backend\tests\test_agentic_retrieval.
 - [x] 说明 HITL、SSE、checkpoint 接入边界。
 - [x] 列出最小验证路径和测试样本。
 - [x] 产出面试卡、八股口径和简历素材。
+
+

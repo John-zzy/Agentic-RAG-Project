@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
@@ -71,3 +71,4 @@ class GraphStreamEventMapper:
     ) -> Iterator[ChatStreamEvent]:
         for event in events:
             yield self.map_event(event)
+

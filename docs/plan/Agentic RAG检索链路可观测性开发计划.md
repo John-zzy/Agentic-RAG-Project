@@ -1,4 +1,4 @@
-# Agentic RAG检索链路可观测性开发计划
+﻿# Agentic RAG检索链路可观测性开发计划
 
 ## Summary
 
@@ -226,3 +226,5 @@ backend\.venv\Scripts\python.exe backend\evals\run_http_eval.py --base-url http:
 - 本次不改变 session 数据库结构，不把完整 trace 落库到历史消息。
 - 本次不改变 retrieval 排序、过滤阈值、query rewrite 策略或 no-hit fallback 策略。
 - `retrieval_trace` 默认作为开发和面试讲解用字段暴露；后续如果需要生产环境开关，再单独加配置。
+
+

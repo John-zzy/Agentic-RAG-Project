@@ -1,4 +1,4 @@
-# PRD-20260603-01 Planner / Executor 深化架构与方案设计
+﻿# PRD-20260603-01 Planner / Executor 深化架构与方案设计
 
 ## 0. 阅读说明
 
@@ -103,9 +103,9 @@ ReAct 当前还没有完全满足的部分：
 | `backend/platform/agent_runtime/validation.py` | 校验工具白名单、输入 schema 和 step 依赖 DAG。 | 依赖合法性校验已经满足。 |
 | `backend/platform/agent_runtime/tool_executor.py` | 统一调用 RAG tool、scene tool、internal tool，并归一化输出。 | 工具执行边界清晰。 |
 | `backend/platform/agent_runtime/plan/executor.py` | 按依赖执行 step，处理重试、失败、等待用户和最终汇总。 | 平台层执行能力已部分满足。 |
-| `backend/application/runtime/chat_service_parts/agent_runtime.py` | 在 `/chat` 中执行 ReAct 或 Plan。 | 关键缺口：plan 模式目前固定生成一个 RAG step。 |
-| `backend/application/runtime/chat_service_parts/events.py` | SSE 中输出 `stage=plan_step` 等进度字段。 | 能输出基础进度，但还不是逐 step 的完整事件流。 |
-| `backend/application/runtime/graph_runtime_parts/agent_state.py` | 将 agent run 写入 checkpoint，并投影 HITL 状态。 | 状态记录已有，resume 后继续执行 plan 的闭环仍需增强。 |
+| `backend/application/runtime/assembly/service_parts/agent_runtime.py` | 在 `/chat` 中执行 ReAct 或 Plan。 | 关键缺口：plan 模式目前固定生成一个 RAG step。 |
+| `backend/application/runtime/assembly/service_parts/events.py` | SSE 中输出 `stage=plan_step` 等进度字段。 | 能输出基础进度，但还不是逐 step 的完整事件流。 |
+| `backend/application/runtime/assembly/runtime_parts/agent_state.py` | 将 agent run 写入 checkpoint，并投影 HITL 状态。 | 状态记录已有，resume 后继续执行 plan 的闭环仍需增强。 |
 
 ## 3. 当前项目已经满足什么
 
@@ -577,3 +577,5 @@ backend\.venv\Scripts\python.exe -m pytest backend\tests\test_langgraph_runtime.
 - `failed`、`blocked`、`retrying`、`waiting_user` 对后续步骤的影响已经明确。
 - 最终回答应该基于步骤结果汇总，而不是模型一次性直接回答。
 - 今日只推进功能深化设计，验证结论和配套材料后续统一沉淀。
+
+

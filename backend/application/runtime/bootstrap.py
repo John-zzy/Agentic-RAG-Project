@@ -1,9 +1,12 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from backend.application.runtime.service import build_default_scene_registry, create_chat_service
+from backend.application.runtime.assembly.service_factory import (
+    build_default_scene_registry,
+    create_chat_service,
+)
 from backend.platform.config.settings import AppSettings, settings
 
 
@@ -39,3 +42,4 @@ def bootstrap_runtime(
         scene_bootstrap_metrics=bootstrap_result.metrics if bootstrap_result else {},
     )
     return chat_service, summary
+

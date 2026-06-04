@@ -1,4 +1,4 @@
-# Agentic RAG 设计说明
+﻿# Agentic RAG 设计说明
 
 这份文档说明本项目当前的 Agentic RAG 实现，重点回答四个问题：
 
@@ -370,3 +370,5 @@ knowledge_document_search
 本项目里的 Agentic RAG 不是“让大模型自己随便检索”，而是：
 
 “把检索做成多轮、可判断、可切换、受会话挂载约束、并能统一回传 citations 的证据编排流程，让系统先把证据找全，再生成回答。”
+
+

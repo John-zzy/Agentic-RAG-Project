@@ -1,4 +1,4 @@
-# API List
+﻿# API List
 
 本文基于 `backend/application/runtime/api/*/routes.py` 与对应 `schemas.py` 整理当前项目实际暴露的 REST 接口。
 
@@ -343,3 +343,5 @@
   - Body `keep_version`: 是否保留旧版本，默认 `false`。
 - 返回结构：
   - 与注册接口一致，返回最新文档详情和 `document_version`。
+
+

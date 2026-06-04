@@ -1,4 +1,4 @@
-# 请求上下文隔离：ChatService 实例级 mutable state 去除方案
+﻿# 请求上下文隔离：ChatService 实例级 mutable state 去除方案
 
 ## 背景
 
@@ -114,3 +114,5 @@ backend\.venv\Scripts\python.exe -m pytest backend\tests\test_chat_api.py backen
 
 - 当前结果：`55 passed, 19 warnings`。
 - warnings 均为 `RunnableWithMessageHistory` 弃用提示，属于后续 LangGraph Persistence 替换范围，不影响本 PRD。
+
+

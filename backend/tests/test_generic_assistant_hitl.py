@@ -12,7 +12,11 @@ from backend.application.runtime.api.chat.schemas import (
     ChatResumeRequest,
     HitlResumePayload,
 )
-from backend.application.runtime.graph_runtime import ChatGraphRuntime, HitlResumeInput, HitlWaitInput
+from backend.application.runtime.assembly.runtime_factory import (
+    ChatGraphRuntime,
+    HitlResumeInput,
+    HitlWaitInput,
+)
 from backend.application.runtime.service import ChatService
 from backend.platform.config.settings import AppSettings
 from backend.platform.memory.base.session_store import SQLiteSessionStore

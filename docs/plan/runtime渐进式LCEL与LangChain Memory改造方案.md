@@ -1,4 +1,4 @@
-# runtime渐进式LCEL与LangChain Memory改造方案
+﻿# runtime渐进式LCEL与LangChain Memory改造方案
 
 > 状态：已完成，已于当前主线代码落地。
 
@@ -325,3 +325,5 @@
 - 下一阶段先只改 `application/runtime`
 - 每个模块完成后暂停，不连续跳过讲解直接进入下一个模块
 - `memory` 包的彻底收敛与兼容层清理，不在这份方案的第一轮实施范围内
+
+

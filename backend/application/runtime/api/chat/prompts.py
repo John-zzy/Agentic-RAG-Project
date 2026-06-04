@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 
@@ -34,3 +34,4 @@ def build_rag_answer_prompt_template(system_prompt: str | None = None) -> ChatPr
             ),
         ]
     )
+

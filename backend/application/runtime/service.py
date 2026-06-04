@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from collections.abc import Iterator
 from typing import Any
@@ -11,10 +11,10 @@ from backend.application.runtime.api.chat.schemas import (
     ChatResumeResponse,
     ChatResponse,
 )
-from backend.application.runtime.chat_service_parts.agent_runtime import ChatAgentRuntimeMixin
-from backend.application.runtime.chat_service_parts.answering import ChatAnsweringMixin
-from backend.application.runtime.chat_service_parts.citations import CitationMapper
-from backend.application.runtime.chat_service_parts.contracts import (
+from backend.application.runtime.assembly.service_parts.agent_runtime import ChatAgentRuntimeMixin
+from backend.application.runtime.assembly.service_parts.answering import ChatAnsweringMixin
+from backend.application.runtime.assembly.service_parts.citations import CitationMapper
+from backend.application.runtime.assembly.service_parts.contracts import (
     AgentRuntimeExecutionResult,
     AnswerMode,
     ChatServiceError,
@@ -23,11 +23,11 @@ from backend.application.runtime.chat_service_parts.contracts import (
     RuntimeFinalDecision,
     SceneMetadata,
 )
-from backend.application.runtime.chat_service_parts.events import ChatStreamEventMixin
-from backend.application.runtime.chat_service_parts.hitl import ChatHitlMixin
-from backend.application.runtime.chat_service_parts.responses import ChatResponseMixin
-from backend.application.runtime.chat_service_parts.turn_preparation import ChatTurnPreparationMixin
-from backend.application.runtime.graph_runtime import ChatGraphRuntime
+from backend.application.runtime.assembly.service_parts.events import ChatStreamEventMixin
+from backend.application.runtime.assembly.service_parts.hitl import ChatHitlMixin
+from backend.application.runtime.assembly.service_parts.responses import ChatResponseMixin
+from backend.application.runtime.assembly.service_parts.turn_preparation import ChatTurnPreparationMixin
+from backend.application.runtime.assembly.runtime_factory import ChatGraphRuntime
 from backend.application.runtime.stream_events import ChatStreamEvent, GraphStreamEventMapper
 from backend.platform.config.settings import AppSettings, settings
 from backend.platform.knowledge.sources import (
@@ -443,6 +443,7 @@ def create_chat_service(
         model=model,
         graph_runtime=graph_runtime,
     )
+
 
 
 

@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 from collections.abc import Iterator
@@ -271,3 +271,4 @@ def _get_chat_service(request: Request) -> Any:
             message="Chat service is not initialized.",
         ),
     )
+

@@ -1,4 +1,4 @@
-# ReRank 模型接入功能最小闭环实施方案
+﻿# ReRank 模型接入功能最小闭环实施方案
 
 ## Summary
 
@@ -63,3 +63,5 @@
 - 参考资料：
   - DashScope embedding 文档：https://platform.qianwenai.com/docs/api-reference/text-embedding/dashscope-embedding
   - LangChain reranker 集成模式：https://docs.langchain.com/oss/python/integrations/document_transformers/cross_encoder_reranker
+
+

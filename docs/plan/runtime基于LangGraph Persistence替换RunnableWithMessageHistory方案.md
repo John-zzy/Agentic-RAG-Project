@@ -1,4 +1,4 @@
-# runtime基于LangGraph Persistence替换RunnableWithMessageHistory方案
+﻿# runtime基于LangGraph Persistence替换RunnableWithMessageHistory方案
 
 ## Summary
 
@@ -238,3 +238,5 @@
 - 现有 `chat_messages / chat_turns` 在本次改造中继续保留，不做立即删除
 - 现有 `/chat`、`/sessions` 对外契约保持不变
 - 本次目标是“彻底移除 `RunnableWithMessageHistory` 的主链依赖”，不是简单过滤 warning
+
+

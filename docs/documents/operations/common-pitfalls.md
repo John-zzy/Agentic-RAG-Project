@@ -1,4 +1,4 @@
-# 常见坑与排障
+﻿# 常见坑与排障
 
 本文记录项目开发和 Agent 协作中最高频的错误。遇到异常时先检查这些项，避免把环境问题误判成业务缺陷。
 
@@ -70,3 +70,5 @@ backend\.venv\Scripts\python.exe -m pytest backend\tests\test_langgraph_runtime.
 ```powershell
 backend\.venv\Scripts\python.exe -m pytest backend\tests\test_agentic_retrieval.py backend\tests\test_document_hybrid_retrieval.py backend\tests\test_chat_api.py -q -c backend\tests\pytest.ini
 ```
+
+

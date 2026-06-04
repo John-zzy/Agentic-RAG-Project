@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from typing import Any, Literal
 
@@ -37,3 +37,4 @@ class EvalRunDetailResponse(BaseModel):
 
 class EvalRunTriggerResponse(EvalRunStatusResponse):
     pass
+

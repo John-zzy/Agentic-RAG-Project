@@ -1,4 +1,4 @@
-# Agentic RAG 工具清单说明
+﻿# Agentic RAG 工具清单说明
 
 本文说明当前项目中，供 `AgenticRetriever` 调用的 retrieval tools 有多少个、分别做什么，以及它们在运行时如何被筛选。
 
@@ -248,3 +248,5 @@ build_agentic_retrieval_tools()
 ## 8. 一句话总结
 
 当前项目中，`AgenticRetriever` 注册的 retrieval tools 总数是 **6 个**；但默认新会话通常只实际开放 **1 个** 文档工具。只有当会话挂载了 `ecommerce` 知识源后，另外 **5 个** 电商相关工具才会进入本次 Agentic RAG 的可调用集合。
+
+

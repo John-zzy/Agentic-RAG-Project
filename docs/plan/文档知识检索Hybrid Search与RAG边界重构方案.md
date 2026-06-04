@@ -1,4 +1,4 @@
-# 文档知识检索 Hybrid Search 与 RAG 边界重构方案
+﻿# 文档知识检索 Hybrid Search 与 RAG 边界重构方案
 
 ## Summary
 
@@ -268,3 +268,5 @@ provider 层要求：
 - scene service 只能依赖 `platform.rag` 暴露的统一检索入口或 retriever/service
 - 不允许把召回算法重新塞回 `platform.knowledge`
 - 不允许把商品、评论、订单的 Hybrid Search 直接堆叠在 `scenes/ecommerce/*` 服务中
+
+

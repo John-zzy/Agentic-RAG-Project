@@ -1,4 +1,4 @@
-# Data Model
+﻿# Data Model
 
 本文基于以下来源整理项目核心数据模型：
 
@@ -912,3 +912,5 @@ Agent Runtime 接入后，checkpoint channel values 还可以保存可选 orches
 ### 修复结果
 
 已将上述缺失 DTO 全部补入本文第三部分“关键 API DTO”，并按代码字段逐项对齐。
+
+

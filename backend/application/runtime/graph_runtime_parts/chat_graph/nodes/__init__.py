@@ -1,2 +1,0 @@
-"""ChatGraph node factories."""
-

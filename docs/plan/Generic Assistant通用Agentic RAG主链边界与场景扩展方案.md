@@ -1,4 +1,4 @@
-# Generic Assistant通用Agentic RAG主链边界与场景扩展方案
+﻿# Generic Assistant通用Agentic RAG主链边界与场景扩展方案
 
 ## Summary
 
@@ -372,3 +372,5 @@ flowchart TD
 - `ecommerce` 是 generic 主链上的业务扩展，而不是 generic 的父层。
 - 默认策略仍是 docs-first，但是否切业务知识源由扩展接口驱动。
 - 本文描述的是目标边界；后续实施时需同步更新相关代码文档与架构图。
+
+

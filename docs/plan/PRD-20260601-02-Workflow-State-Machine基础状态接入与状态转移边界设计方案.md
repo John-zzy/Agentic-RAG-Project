@@ -1,4 +1,4 @@
-# PRD-20260601-02 Workflow State Machine 基础状态接入与状态转移边界设计方案
+﻿# PRD-20260601-02 Workflow State Machine 基础状态接入与状态转移边界设计方案
 
 ## Summary
 
@@ -26,8 +26,8 @@ created / planning / running / waiting_user / retrying / succeeded / failed / ca
 | README P0 路线 | `README.md` | `Workflow State Machine` 明确是 P0 未完成项 | 本 PRD 顺延路线正确 |
 | graph run lifecycle | `backend/platform/workflow/langgraph/lifecycle.py` | `GraphRunStatus = created/running/succeeded/failed`，内存事件记录 | 只有最小生命周期，不是完整状态机 |
 | graph checkpoint state | `backend/platform/workflow/langgraph/state.py` | `RuntimeGraphStatus = running/waiting_user/succeeded/failed`，包含 `hitl/hitl_resume` | 能表达 HITL 等待，但缺 `created/planning/retrying/cancelled` |
-| LangGraph runtime facade | `backend/application/runtime/graph_runtime.py` | 普通 invoke 创建 run 后直接 `running -> succeeded/failed`；HITL wait 写 checkpoint `status=waiting_user` | 已有状态写入点，但缺统一转移校验 |
-| HITL resume | `backend/application/runtime/graph_runtime.py` | resume 只允许当前 checkpoint 为 `waiting_user`，重复 resume 会被拒绝 | 已有局部幂等保护，但不是通用终态保护 |
+| LangGraph runtime facade | `backend/application/runtime/assembly/runtime_factory.py` | 普通 invoke 创建 run 后直接 `running -> succeeded/failed`；HITL wait 写 checkpoint `status=waiting_user` | 已有状态写入点，但缺统一转移校验 |
+| HITL resume | `backend/application/runtime/assembly/runtime_factory.py` | resume 只允许当前 checkpoint 为 `waiting_user`，重复 resume 会被拒绝 | 已有局部幂等保护，但不是通用终态保护 |
 | `/chat` / `/chat/resume` | `backend/application/runtime/service.py`、`backend/application/runtime/api/chat/routes.py` | JSON/SSE 已暴露 `waiting_user`、`resume`、`done/error` | 外部协议已有接入点，但状态字段不完整 |
 | SSE mapper | `backend/application/runtime/stream_events.py` | 映射 `start/history/tool/chunk/waiting_user/resume/done/error` | 事件序列可兼容扩展状态字段 |
 | session persistence | `backend/platform/memory/base/session_store.py` | `sessions.status = active/expired`，保存聊天会话生命周期 | 会话状态与 workflow run 状态应继续分离 |
@@ -333,3 +333,5 @@ backend\.venv\Scripts\python.exe -m pytest backend\tests\test_chat_api.py -q -c 
 - 不迁移 Planner / Executor、Failure Recovery 或 Agentic RAG Subgraph。
 - 不把历史所有会话迁移成 workflow run。
 - 不把 `sessions.status` 扩展成 workflow 状态字段。
+
+

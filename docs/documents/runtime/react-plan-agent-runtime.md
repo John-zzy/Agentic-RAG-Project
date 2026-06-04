@@ -1,4 +1,4 @@
-# ReAct / Plan Agent Runtime
+﻿# ReAct / Plan Agent Runtime
 
 这份文档只讲一件事：`/chat` 是怎么跑起来的。
 
@@ -47,7 +47,7 @@
 
 你可以把这一步理解成“先把场景、上下文、工具范围整理好”，还没开始真正回答问题。
 
-实际的 Agent 编排入口在 [ChatAgentRuntimeMixin](</d:/Programs/interview-projects/ai-rag-project/backend/application/runtime/chat_service_parts/agent_runtime.py:44>)。这里会做三件事：
+实际的 Agent 编排入口在 [ChatAgentRuntimeMixin](</d:/Programs/interview-projects/ai-rag-project/backend/application/runtime/assembly/service_parts/agent_runtime.py:44>)。这里会做三件事：
 
 - 组装可用工具。
 - 选择 ReAct 或 Plan。
@@ -170,7 +170,7 @@ RAG 的顶层工具包装在 [build_rag_tool_adapters](</d:/Programs/interview-p
 
 用户 `approve` 或 `respond` 后，会继续同一个 run；`reject` 则会把这次运行收成 `cancelled`。
 
-`ChatGraphRuntime` 负责把这些状态真正写进 checkpoint，见 [ChatGraphRuntime](</d:/Programs/interview-projects/ai-rag-project/backend/application/runtime/graph_runtime.py:34>)、[invoke](</d:/Programs/interview-projects/ai-rag-project/backend/application/runtime/graph_runtime.py:58>) 和 [start_stream_run](</d:/Programs/interview-projects/ai-rag-project/backend/application/runtime/graph_runtime.py:99>)。
+`ChatGraphRuntime` 负责把这些状态真正写进 checkpoint，见 [ChatGraphRuntime](</d:/Programs/interview-projects/ai-rag-project/backend/application/runtime/assembly/runtime_factory.py:34>)、[invoke](</d:/Programs/interview-projects/ai-rag-project/backend/application/runtime/assembly/runtime_factory.py:58>) 和 [start_stream_run](</d:/Programs/interview-projects/ai-rag-project/backend/application/runtime/assembly/runtime_factory.py:99>)。
 
 ## 两个小例子
 
@@ -203,7 +203,7 @@ RAG 的顶层工具包装在 [build_rag_tool_adapters](</d:/Programs/interview-p
 1. [主链路图](./main-chat-agent-runtime-flow.mmd)
 2. [chat routes](</d:/Programs/interview-projects/ai-rag-project/backend/application/runtime/api/chat/routes.py:46>)
 3. [ChatService](</d:/Programs/interview-projects/ai-rag-project/backend/application/runtime/service.py:83>)
-4. [ChatAgentRuntimeMixin](</d:/Programs/interview-projects/ai-rag-project/backend/application/runtime/chat_service_parts/agent_runtime.py:44>)
+4. [ChatAgentRuntimeMixin](</d:/Programs/interview-projects/ai-rag-project/backend/application/runtime/assembly/service_parts/agent_runtime.py:44>)
 5. [ModeSelector](</d:/Programs/interview-projects/ai-rag-project/backend/platform/agent_runtime/mode_selector.py:30>)
 6. [ReActRuntime](</d:/Programs/interview-projects/ai-rag-project/backend/platform/agent_runtime/react/runtime.py:42>)
 7. [MinimalPlanner](</d:/Programs/interview-projects/ai-rag-project/backend/platform/agent_runtime/plan/planner.py:70>)
@@ -212,3 +212,5 @@ RAG 的顶层工具包装在 [build_rag_tool_adapters](</d:/Programs/interview-p
 10. [AgenticRetriever](</d:/Programs/interview-projects/ai-rag-project/backend/platform/rag/orchestration/agentic.py:54>)
 
 这样读下来，你会先明白“谁负责分流”，再明白“谁负责执行”，最后明白“RAG 为什么只是工具”。
+
+

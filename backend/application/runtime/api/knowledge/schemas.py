@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -166,3 +166,4 @@ class KnowledgeDocumentOperationResponse(KnowledgeDocumentDetailResponse):
 
 class KnowledgeDocumentDeleteResponse(KnowledgeDocumentOperationResponse):
     """文档删除响应。"""
+

@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from typing import Protocol
 
@@ -308,3 +308,4 @@ def _to_response_data(payload: object) -> object:
     if hasattr(payload, "model_dump"):
         return payload.model_dump()  # type: ignore[attr-defined]
     return payload
+

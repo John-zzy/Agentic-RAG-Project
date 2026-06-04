@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
@@ -27,3 +27,4 @@ class FileDeleteResponse(BaseModel):
     success: bool
     message: str
     filename: str
+

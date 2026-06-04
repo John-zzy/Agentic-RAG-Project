@@ -1,4 +1,4 @@
-# PRD-20260530-03 LangGraph Runtime 骨架设计方案
+﻿# PRD-20260530-03 LangGraph Runtime 骨架设计方案
 
 ## Summary
 
@@ -255,3 +255,5 @@ backend\.venv\Scripts\python.exe -m pytest backend\tests\test_chat_api.py backen
 - 删除 session 时有 checkpoint 清理路径。
 - `/chat` JSON、SSE、`/sessions` response schema 不变。
 - SSE mapper 不暴露 LangGraph 原始事件名。
+
+

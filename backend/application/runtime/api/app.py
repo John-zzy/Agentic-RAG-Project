@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -67,3 +67,4 @@ def create_app(
 
 
 app = create_app()
+

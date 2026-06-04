@@ -1,4 +1,4 @@
-"""运行时层导出。"""
+﻿"""运行时层导出。"""
 
 from backend.application.runtime.bootstrap import BootstrapSummary, bootstrap_runtime
 from backend.application.runtime.service import (
@@ -24,3 +24,4 @@ __all__ = [
     "build_default_scene_registry",
     "create_chat_service",
 ]
+
