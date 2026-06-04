@@ -1,122 +1,196 @@
 # PRD-20260603-03 Agentic RAG Subgraph 迁移审计与节点拆分方案
 
-## 1. 范围
+## 1. 结论
 
-这版方案按新的分析重写：不再只讨论 `AgenticRetriever` 的局部子图，而是把 **整个 `/chat` 的 Plan / ReAct / RAG 过程** 放进统一的 LangGraph 视角里审计。
+这版方案不再把问题收窄成“只把 `AgenticRetriever` 改成 LangGraph subgraph”。当前项目真正需要补的是 **顶层 `/chat` ChatGraph + ReAct / Plan 子图 + Agentic RAG 工具内子图** 的分层迁移。
 
-结论先说：
+当前判断：
 
-- 顶层应该有 `ChatGraph`
-- `ReAct` 和 `Plan` 应该逐步变成子图
-- `AgenticRAG` 继续作为工具内的子图
-- 当前代码里的 LangGraph 还只是 checkpoint / lifecycle 壳层，不是完整编排图
+- `LangGraph Runtime` 已有 checkpoint、thread、lifecycle、HITL 状态写回和极小 graph 骨架。
+- `/chat` 的真实 Plan / ReAct / Agentic RAG 执行拓扑仍主要由手写 loop 和 runtime glue 承担。
+- `Agentic RAG` 应该迁移为工具内部嵌套 subgraph，但它不是唯一需要 graph 化的对象。
+- 最小迁移顺序应该先定义顶层 `ChatGraph`，再逐步拆 `Agentic RAG`、`ReAct`、`Plan` 内部循环。
 
-这份文档只做架构审计、节点拆分和迁移顺序，不在本阶段做完整重构。
+对应 OpenSpec change 已创建：
 
-## 2. 当前实现审计
+- `openspec/changes/graphify-chat-agent-runtime-and-rag-subgraph/`
 
-### 2.1 现在的 LangGraph 只负责状态壳
+## 2. 当前 LangGraph 是如何定义的
 
-当前真正编译成 LangGraph 的图很小：
+当前项目里的 LangGraph 定义仍然偏骨架层：
 
-- 普通回答图只有 `START -> answer -> END`，见 [answer_graph.py](</d:/Programs/interview-projects/ai-rag-project/backend/application/runtime/graph_runtime_parts/answer_graph.py:12>)。
-- 状态写入图只有 `START -> hitl_state_update -> END`，见 [state_store.py](</d:/Programs/interview-projects/ai-rag-project/backend/application/runtime/graph_runtime_parts/state_store.py:81>)。
+- 普通回答图：`START -> answer -> END`
+  - 位置：`backend/application/runtime/graph_runtime_parts/answer_graph.py`
+- HITL 状态写入图：`START -> hitl_state_update -> END`
+  - 位置：`backend/application/runtime/graph_runtime_parts/state_store.py`
+- `ChatGraphRuntime` 负责 thread/checkpoint/lifecycle/run state 的装配和调用
+  - 位置：`backend/application/runtime/graph_runtime.py`
 
-也就是说，LangGraph 目前承担的是：
+也就是说，当前 LangGraph 已经承担了运行时状态能力，但还没有显式表达：
 
-- checkpoint 保存
-- lifecycle 记录
-- HITL 状态写回
+- `/chat` turn preparation
+- mode selection
+- ReAct / Plan route
+- tool execution branch
+- Agentic RAG retrieval loop
+- final synthesis
+- persist turn
 
-它还没有接管 `/chat` 的实际策略编排。
+这就是 README 里需要区分“Runtime 骨架已完成”和“真实 Agent Runtime Graph 接入未完成”的原因。
 
-### 2.2 当前 ReAct / Plan / RAG 仍是手写循环
+## 3. 当前手写循环审计
 
-现状如下：
+### 3.1 ReAct
 
-- ReAct 仍在 [runtime.py](</d:/Programs/interview-projects/ai-rag-project/backend/platform/agent_runtime/react_parts/runtime.py:42>) 里用 `while` 循环调 action、tool、HITL、final synthesis。
-- Plan 仍在 [plan_executor.py](</d:/Programs/interview-projects/ai-rag-project/backend/platform/agent_runtime/plan_executor.py:78>) 里用 `while` 循环执行 step。
-- Agentic RAG 仍在 [agentic.py](</d:/Programs/interview-projects/ai-rag-project/backend/platform/rag/orchestration/agentic.py:54>) 里用 `while True` 管理 rewrite、switch_tool、rerank、sufficiency 和 fallback。
+位置：`backend/platform/agent_runtime/react_parts/runtime.py`
 
-所以现在的真相是：
+当前 ReAct 仍然由 runtime 内部循环控制：
 
-`/chat` 的“Agent Runtime”已经跑起来了，但还没有被真正 graph 化。
+- action selection
+- tool call
+- observation 归一化
+- HITL waiting / resume 边界
+- final synthesis
+- max turn / failure / fallback
 
-## 3. 需求差距
+迁移判断：适合下沉为 ReAct subgraph，但第一步可以先作为 `ChatGraph` 的粗粒度 `react_branch` 节点运行。
 
-### 3.1 以这次 PRD 为准的差距
+### 3.2 Plan
 
-如果只看 Agentic RAG 子图这件事，当前仍然是：
+位置：`backend/platform/agent_runtime/planner.py`、`backend/platform/agent_runtime/plan_executor.py`
 
-- 业务能力可运行
-- 图化能力未落地
+当前 Plan 仍然由 planner/executor 类控制：
 
-也就是：
+- plan create
+- step dependency selection
+- step execution
+- retry / failed / waiting_user
+- final plan result synthesis
 
-- `query rewrite` 已有实现
-- `tool decision` 已有实现
-- `retrieval` 已有实现
-- `rerank` 已有实现
-- `sufficiency check` 已有实现
-- `no-hit fallback` 已有实现
-- 但这些都还是 `AgenticRetriever` 内部的手写循环，不是 subgraph 节点
+迁移判断：适合下沉为 Plan subgraph，但第一步可以先作为 `ChatGraph` 的粗粒度 `plan_branch` 节点运行。
 
-### 3.2 以整个 chat graph 为准的差距
+### 3.3 Agentic RAG
 
-更关键的是，顶层 `ChatGraph` 也还没有成型。
+位置：`backend/platform/rag/orchestration/agentic.py`
 
-目前缺少：
+当前 `AgenticRetriever` 内部仍然串行控制：
 
-- `prepare_turn`
-- `select_mode`
-- `route_to_react_or_plan`
-- `react_subgraph`
-- `plan_subgraph`
-- `final_synthesis`
-- `persist_turn`
+- query rewrite
+- tool decision / switch tool
+- retrieval
+- rerank
+- sufficiency check
+- no-hit fallback
+- final evidence synthesis
+- retrieval trace 聚合
 
-因此这次方案要修正的重点不是“只做 RAG 子图”，而是“先把顶层 chat graph 定出来，再把 ReAct / Plan / RAG 逐层下沉”。
+迁移判断：适合拆成 `AgenticRagSubgraph`，但应继续作为 RAG tool 内部子图，而不是顶层 `/chat` graph 的直接主分支。
 
-## 4. 目标架构
+## 4. 功能需求满足情况
 
-### 4.1 顶层 ChatGraph
+### 4.1 按原 PRD 的 7 个候选节点统计
 
-建议顶层图这样划分：
+这 7 个业务阶段在当前代码中“能跑”，但都还没有以 LangGraph subgraph 节点形式落地：
+
+| 候选节点 | 当前业务能力 | 当前 graph 化状态 |
+| --- | --- | --- |
+| query rewrite | 已有 | 未满足 |
+| tool decision | 已有 | 未满足 |
+| retrieval | 已有 | 未满足 |
+| rerank | 已有 | 未满足 |
+| sufficiency check | 已有 | 未满足 |
+| no-hit fallback | 已有 | 未满足 |
+| final synthesis | 已有 | 未满足 |
+
+统计口径：
+
+- 业务执行能力：`7/7` 已具备。
+- LangGraph subgraph 迁移能力：`0/7` 已满足，`7/7` 未满足。
+
+### 4.2 按扩展后的 ChatGraph 迁移需求统计
+
+| 需求项 | 当前状态 | 说明 |
+| --- | --- | --- |
+| LangGraph checkpoint / thread / lifecycle 骨架 | 已满足 | 已有 runtime skeleton |
+| Workflow State Machine / HITL 状态语义 | 已满足 | 已有统一状态和等待/恢复语义 |
+| `/chat` response / SSE / citation / trace 兼容基础 | 已满足 | 现有链路可运行 |
+| 顶层 `ChatGraph` 显式拓扑 | 未满足 | 目前没有完整 `prepare_turn -> route -> synthesis -> persist` 图 |
+| ReAct subgraph | 未满足 | 仍是手写 loop |
+| Plan subgraph | 未满足 | 仍是 planner/executor loop |
+| Agentic RAG subgraph | 未满足 | 仍是 `AgenticRetriever` 内部 loop |
+| graph state 统一字段回写 | 部分满足 | 字段已有一部分，但还不是统一图状态合同 |
+| SSE 事件由真实 graph 节点进度驱动 | 部分满足 | 已有事件，但大量映射仍来自 runtime glue |
+| 子图单测和 trace 一致性验证 | 未满足 | 需后续实现后补齐 |
+
+统计口径：
+
+- 已满足：`3/10`
+- 部分满足：`2/10`
+- 未满足：`5/10`
+
+## 5. 目标架构
+
+### 5.1 顶层 ChatGraph
+
+目标拓扑：
 
 ```text
 prepare_turn
   -> select_mode
   -> route_mode
-     -> react_subgraph
-     -> plan_subgraph
+     -> react_branch
+     -> plan_branch
   -> resolve_answer_mode
   -> final_synthesis
   -> persist_turn
 ```
 
-顶层图负责：
+顶层 `ChatGraph` 负责：
 
-- 会话 / scene / mounted knowledge source 解析
-- mode selection
-- ReAct / Plan 路由
-- 最终 answer / citation / trace 汇总
-- checkpoint 和 lifecycle 写回
+- 解析 session / scene / mounted knowledge sources
+- 准备 messages 和 request metadata
+- 选择 `agent_mode=react|plan`
+- 路由到 ReAct 或 Plan 分支
+- 保留 `direct response / fallback` 这类不需要进入子图的普通回答出口
+- 汇总 answer / citations / retrieval_trace / final_state
+- 统一 checkpoint、lifecycle 和 turn persistence 边界
 
-### 4.2 ReAct 子图
+第一阶段不要求立刻拆开 ReAct / Plan 内部循环，可以先将现有 `ReActRuntime.run()` 和 `PlanExecutor.run()` 包为粗粒度 branch node。
 
-ReAct 不应该继续停留在一个大 `while` 函数里。建议拆成：
+### 5.2 ReAct Subgraph
+
+ReAct 这边需要保留一个普通回答节点，不然会把“不需要工具，也不需要追问”的最常见路径漏掉。
+
+候选节点：
 
 - `select_action`
 - `validate_action`
 - `route_action`
+- `respond`
 - `execute_tool`
 - `ask_user`
 - `final_answer`
 - `loop_or_finish`
 
-### 4.3 Plan 子图
+核心回写点：
 
-Plan 建议拆成：
+- `react_run`
+- `current_turn_id`
+- `current_tool_call`
+- `tool_observation`
+- `knowledge_used`
+- `citations`
+- `retrieval_trace`
+- `final_state`
+
+HITL 判断：需要保留。`ask_user`、工具审批、工具 reject/cancel 都应继续映射到 `waiting_user` / `cancelled`。
+`respond` 用于普通直接回答，不代表工具调用，也不代表人工补充。
+
+### 5.3 Plan Subgraph
+
+Plan 不需要和 ReAct 一样单独补一个 `respond` 节点，它的正常语义是先生成计划，再按 step 执行，再汇总。
+
+候选节点：
 
 - `create_plan`
 - `select_next_step`
@@ -125,27 +199,58 @@ Plan 建议拆成：
 - `handle_waiting_user`
 - `synthesize_plan_result`
 
-### 4.4 Agentic RAG 子图
+核心回写点：
 
-RAG 仍然是工具内子图，不是顶层入口。建议节点保持：
+- `plan_run`
+- `current_step_id`
+- `current_tool_call`
+- `step.status`
+- `step.result_summary`
+- `step.error`
+- `final_state`
+
+HITL 判断：需要保留。Plan step 可能等待用户补充、审批或取消，必须继续走统一 workflow state。
+
+### 5.4 Agentic RAG Subgraph
+
+候选节点：
 
 - `initialize_plan`
+- `tool_decision`
 - `retrieval`
 - `rerank`
 - `sufficiency_check`
 - `route_next_action`
 - `query_rewrite`
-- `tool_decision`
 - `no_hit_fallback`
 - `final_evidence_synthesis`
 
-这部分和之前方案一致，但它现在是挂在顶层 chat graph 下面的一个局部子图，而不是整个方案的唯一重点。
+RAG subgraph 输入：
 
-## 5. Graph State 设计
+- `query`
+- `candidate_tools`
+- `scene`
+- `mounted_knowledge_sources`
+- retrieval policy
+- rerank config
 
-### 5.1 顶层 ChatGraph state
+RAG subgraph 输出：
 
-建议顶层状态至少保留：
+- `tool_observation`
+- `retrieval_trace`
+- `candidate_docs`
+- `knowledge_used`
+- `citations`
+- `final_decision`
+- `follow_up_question`
+
+HITL 判断：RAG 内部不应新增顶层人工审批语义，但 `ask_user` / clarification 结果需要继续作为工具观察结果向上冒泡，由顶层 ReAct / Plan 进入 `waiting_user`。
+
+## 6. Graph State 字段
+
+### 6.1 顶层 ChatGraph state
+
+建议保留：
 
 - `session_id`
 - `request_id`
@@ -166,9 +271,9 @@ RAG 仍然是工具内子图，不是顶层入口。建议节点保持：
 - `current_step_id`
 - `current_tool_call`
 
-### 5.2 RAG 子图 state
+### 6.2 Agentic RAG subgraph state
 
-RAG 子图继续保留：
+建议保留：
 
 - `query`
 - `active_query`
@@ -176,7 +281,6 @@ RAG 子图继续保留：
 - `selected_tool`
 - `candidate_tools`
 - `attempted_tools`
-- `results`
 - `candidate_docs`
 - `retrieval_trace`
 - `tool_observation`
@@ -185,80 +289,68 @@ RAG 子图继续保留：
 - `final_decision`
 - `follow_up_question`
 
-## 6. 为什么要这么拆
+## 7. 哪些逻辑下沉到 LangGraph
 
-### 6.1 不是为了“全图化而全图化”
+适合下沉：
 
-现在不把整个 chat 图化，问题不在于“不能跑”，而在于：
+- mode route
+- ReAct loop route
+- Plan step dependency route
+- Agentic RAG next action route
+- retry / waiting / terminal decision
+- final synthesis 前的状态归一化
+- checkpoint 和 lifecycle 边界
 
-- 逻辑边界不显式
-- 恢复点不清晰
-- 事件映射靠手工 glue
-- ReAct / Plan / RAG 的循环语义不统一
+暂时保留在外围：
 
-### 6.2 为什么不能只做 RAG 子图
+- FastAPI route 和 request/response schema
+- session store / chat message read model
+- scene definition 和工具装配
+- Tool Registry / ToolExecutor 的访问控制
+- 具体 retrieval 算法、rerank provider、query rewrite prompt 策略
+- SSE business protocol 的对外事件名
 
-只做 RAG 子图，会留下一个结构性问题：
+## 8. 最小迁移顺序
 
-顶层 `/chat` 还是手写 orchestration，RAG 只是一个更大的工具。
+1. 顶层 `ChatGraph` 先接入。
+   - 先把 `ReActRuntime.run()` 和 `PlanExecutor.run()` 包成粗粒度 branch node。
+   - 目标是先让 `/chat` 的拓扑、checkpoint、lifecycle 和 final synthesis 边界显式化。
 
-这对当前项目的定位不够完整，因为：
+2. 拆 `AgenticRetriever.retrieve_with_trace()` 为 `AgenticRagSubgraph`。
+   - 优先拆 retrieval、rerank、sufficiency、rewrite、fallback、final decision。
+   - 保持 retrieval trace 嵌套在 tool observation 下。
 
-- ReAct / Plan 已经是主链路，不应该长期停留在 loop class 里
-- `ChatGraphRuntime` 已经在做 checkpoint 和 lifecycle，下一步应该承接真正的图编排
-- 面试里问“整个 chat 怎么 graph 化”时，答案不能只停在 RAG
+3. 拆 ReAct 内部 loop。
+   - 从 `respond`、`execute_tool`、`ask_user`、`final_answer` 这些边界清楚的节点开始。
 
-## 7. 建议的迁移顺序
+4. 拆 Plan 内部 loop。
+   - 从 `create_plan`、`select_next_step`、`execute_step` 开始，再补 retry/HITL。
 
-### 第 1 步
+5. 统一验证。
+   - ChatGraph state shape
+   - Agentic RAG subgraph terminal decision
+   - `/chat` JSON 兼容
+   - SSE `tool / waiting_user / done`
+   - retrieval_trace / citations / knowledge_used 一致性
 
-先把当前 `ReActRuntime.run()` 和 `PlanExecutor.run()` 包成顶层 `ChatGraph` 的粗粒度节点。
+## 9. 后续验证候选
 
-目标不是改内部算法，而是先把顶层路由、状态和 checkpoint 边界 graph 化。
+今天只做审计和计划，不做完整执行验证。后续实现时至少补：
 
-### 第 2 步
+- `ChatGraph` state shape 单测
+- ReAct coarse branch / Plan coarse branch 路由测试
+- `AgenticRagSubgraph` terminal decision 单测
+- `/chat` non-streaming 回归测试
+- `/chat` SSE `tool` / `waiting_user` / `done` 回归测试
+- retrieval trace 字段一致性测试
+- citations / `knowledge_used` 不误采纳候选证据测试
 
-把 `AgenticRetriever.retrieve_with_trace()` 拆成 `AgenticRagSubgraph`。
+## 10. 面试追问口径
 
-这里优先做：
+如果被问“为什么不只做 RAG subgraph”，回答应该是：
 
-- retrieval
-- rerank
-- sufficiency
-- rewrite
-- fallback
+> RAG subgraph 是必要的，但它只是工具内部的 evidence orchestration。当前项目更大的问题是 `/chat` 的顶层 ReAct / Plan 编排还没有显式 graph 化。如果只拆 RAG，顶层 mode route、HITL resume、final synthesis、checkpoint 和 SSE 映射仍然散在 runtime glue 里。所以正确顺序是先定义 ChatGraph，再把 ReAct / Plan / RAG 分层下沉。
 
-### 第 3 步
+如果被问“为什么不一次性全改”，回答应该是：
 
-再把 ReAct / Plan 内部的 `while` 循环进一步拆细成子节点。
-
-### 第 4 步
-
-统一：
-
-- SSE 事件
-- retrieval trace
-- run lifecycle
-- HITL resume
-- checkpoint payload
-
-## 8. 现在的结论
-
-如果只问“要不要定义整个 chat 的 Plan / ReAct 过程为 LangGraph”，答案是：**要**。
-
-但正确做法不是一口气把所有细节重写，而是：
-
-1. 先有顶层 `ChatGraph`
-2. 再把 ReAct / Plan 变成子图或粗粒度节点
-3. 再把 RAG 做成局部子图
-
-这样既能保留当前可运行状态，又能逐步把手写循环收敛成可恢复、可观测、可组合的 graph。
-
-## 9. 验收口径
-
-- 顶层 chat graph 已显式定义
-- ReAct / Plan 不再只是普通 loop class
-- Agentic RAG 是嵌套子图，不是唯一 graph 化对象
-- checkpoint / HITL / SSE 事件与 graph state 对齐
-- 迁移顺序是分层推进，不是一次性重构
-
+> 因为当前链路已经有可运行的 API、SSE、HITL、citation 和 trace 行为。一次性改所有 loop 风险太大。第一步把 ReAct / Plan 包成粗粒度 graph node，可以先稳定 graph state 和生命周期边界，再逐步拆内部节点。

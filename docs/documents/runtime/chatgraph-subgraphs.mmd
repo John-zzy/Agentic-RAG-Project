@@ -1,0 +1,78 @@
+flowchart LR
+  %% =====================
+  %% Top-level ChatGraph
+  %% =====================
+  subgraph CG[ChatGraph]
+    direction LR
+    CGS((START)) --> PT[prepare_turn]
+    PT --> SM[select_mode]
+    SM --> RM{route_mode}
+    RM -->|react| RB[react_branch]
+    RM -->|plan| PB[plan_branch]
+    RM -->|direct response / fallback| RS[resolve_answer_mode]
+    RB --> RS
+    PB --> RS
+    RS --> FS[final_synthesis]
+    FS --> PP[persist_turn]
+    PP --> CGE((END))
+  end
+
+  %% =====================
+  %% ReAct SubGraph
+  %% =====================
+  subgraph RG[ReActSubGraph]
+    direction LR
+    RGS((START)) --> RSEL[select_action]
+    RSEL --> RROUTE{route_action}
+    RROUTE -->|respond| RRSP[respond]
+    RROUTE -->|tool_call| RTOOL[execute_tool]
+    RROUTE -->|ask_user| RASK[ask_user]
+    RROUTE -->|stop / final| RFNL[final_answer]
+    RRSP --> ROBS[record_observation]
+    RTOOL --> ROBS
+    RASK --> RWAIT[waiting_user]
+    ROBS --> RLOOP{loop_or_finish}
+    RLOOP -->|continue| RSEL
+    RLOOP -->|finish| RFNL
+    RFNL --> RGE((END))
+  end
+
+  %% =====================
+  %% Plan SubGraph
+  %% =====================
+  subgraph PG[PlanSubGraph]
+    direction LR
+    PGS((START)) --> PCREATE[create_plan]
+    PCREATE --> PSEL[select_next_step]
+    PSEL --> PEXEC[execute_step]
+    PEXEC --> PRETRY{handle_retry}
+    PRETRY -->|retry| PSEL
+    PRETRY -->|waiting_user| PWAIT[handle_waiting_user]
+    PRETRY -->|continue| PSEL
+    PRETRY -->|all done| PSYN[synthesize_plan_result]
+    PSYN --> PGE((END))
+  end
+
+  %% =====================
+  %% Agentic RAG SubGraph
+  %% =====================
+  subgraph AG[AgenticRAGSubGraph]
+    direction LR
+    AGS((START)) --> AINIT[initialize_plan]
+    AINIT --> ADT{tool_decision}
+    ADT -->|rewrite| AREW[query_rewrite]
+    ADT -->|retrieve| ARET[retrieval]
+    ADT -->|fallback| AFB[no_hit_fallback]
+    AREW --> ARET
+    ARET --> ARER[rerank]
+    ARER --> ASUF{sufficiency_check}
+    ASUF -->|enough| AFIN[final_evidence_synthesis]
+    ASUF -->|not enough| ADT
+    AFIN --> AGE((END))
+    AFB --> AGE
+  end
+
+  %% Nested tool-call relationship
+  RTOOL -. nested RAG tool call .-> AGS
+  PEXEC -. nested RAG tool call .-> AGS
+
