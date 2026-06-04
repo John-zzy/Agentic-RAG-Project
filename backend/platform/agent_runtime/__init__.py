@@ -20,14 +20,14 @@ from backend.platform.agent_runtime.mode_selector import (
     ModeSelection,
     ModeSelector,
 )
-from backend.platform.agent_runtime.plan_executor import (
+from backend.platform.agent_runtime.plan.executor import (
     PlanExecutor,
     PlanFinalSynthesizer,
     PlanSynthesisContext,
     PlanSynthesisResult,
     StepSummarySynthesizer,
 )
-from backend.platform.agent_runtime.planner import (
+from backend.platform.agent_runtime.plan.planner import (
     MinimalPlanStepSelector,
     MinimalPlanner,
     PlanStepSelector,

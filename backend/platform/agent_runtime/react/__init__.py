@@ -1,14 +1,14 @@
-from backend.platform.agent_runtime.react_parts.policy import (
-    ReActNoEvidenceAction,
-    ReActScenePolicy,
-)
-from backend.platform.agent_runtime.react_parts.continuation import (
+from backend.platform.agent_runtime.react.continuation import (
     ReActContinuationAction,
     ReActContinuationInput,
     ReActContinuationManager,
 )
-from backend.platform.agent_runtime.react_parts.runtime import ReActRuntime
-from backend.platform.agent_runtime.react_parts.selector import (
+from backend.platform.agent_runtime.react.policy import (
+    ReActNoEvidenceAction,
+    ReActScenePolicy,
+)
+from backend.platform.agent_runtime.react.runtime import ReActRuntime
+from backend.platform.agent_runtime.react.selector import (
     LLMReActActionOutput,
     LLMReActActionSelector,
     ReActActionContext,
@@ -18,7 +18,7 @@ from backend.platform.agent_runtime.react_parts.selector import (
     ReActSelectorError,
     ReActSelectorOutputError,
 )
-from backend.platform.agent_runtime.react_parts.synthesis import (
+from backend.platform.agent_runtime.react.synthesis import (
     ObservationSummarySynthesizer,
     ReActFinalSynthesizer,
     ReActSynthesisContext,

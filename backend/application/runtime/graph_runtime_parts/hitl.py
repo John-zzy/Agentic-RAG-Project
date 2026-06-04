@@ -176,7 +176,8 @@ class HitlRuntimeMixin:
                     resumed_state=resumed_state,
                     resume_event=resume_event,
                 )
-                response_result = dict(respond_handler(resume_payload, state) or {})
+                # 先消费等待点后，把已恢复的 running state 交给 handler，避免继续使用旧的 waiting_user 快照。
+                response_result = dict(respond_handler(resume_payload, accepted_state) or {})
                 next_status, state_event = self._resolve_running_result_state(
                     current_state=resumed_state,
                     requested_state=str(response_result.get("status") or "succeeded"),
@@ -293,12 +294,14 @@ class HitlRuntimeMixin:
         return build_runtime_graph_state(
             session_id=str(values.get("session_id") or session_id),
             request_id=str(values.get("request_id") or request_id),
+            scene=values.get("scene"),
             messages=list(values.get("messages") or ()),
             answer=str(values.get("answer") or ""),
             knowledge_used=bool(values.get("knowledge_used", False)),
             citations=list(values.get("citations") or ()),
             retrieval_trace=dict(values.get("retrieval_trace") or {}),
             metadata=dict(values.get("metadata") or {}),
+            answer_mode=values.get("answer_mode"),
             status=values.get("status", "running"),
             run_id=values.get("run_id"),
             state_event=values.get("state_event"),
@@ -308,6 +311,8 @@ class HitlRuntimeMixin:
             hitl=values.get("hitl"),
             hitl_resume=values.get("hitl_resume"),
             agent_mode=values.get("agent_mode"),
+            agent_mode_reason=values.get("agent_mode_reason"),
+            agent_mode_signals=values.get("agent_mode_signals"),
             react_run=values.get("react_run"),
             plan_run=values.get("plan_run"),
             current_turn_id=values.get("current_turn_id"),

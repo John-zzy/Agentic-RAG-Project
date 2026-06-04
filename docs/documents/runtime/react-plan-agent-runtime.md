@@ -53,6 +53,11 @@
 - 选择 ReAct 或 Plan。
 - 把执行结果整理成最终可返回的结构。
 
+如果你要看显式的子图拆分，直接读：
+
+- [ReAct Graph](</d:/Programs/interview-projects/ai-rag-project/backend/platform/agent_runtime/react/graph/graph.py:30>)
+- [Plan Graph](</d:/Programs/interview-projects/ai-rag-project/backend/platform/agent_runtime/plan/graph/graph.py:28>)
+
 如果你只想先抓主干，先看这三个文件就够了。
 
 ## 先选模式：简单问题用 ReAct，复杂问题用 Plan
@@ -73,7 +78,7 @@
 
 ## ReAct 怎么跑
 
-ReAct 的核心代码在 [ReActRuntime](</d:/Programs/interview-projects/ai-rag-project/backend/platform/agent_runtime/react_parts/runtime.py:42>)，下一步怎么选由 [LLMReActActionSelector](</d:/Programs/interview-projects/ai-rag-project/backend/platform/agent_runtime/react_parts/selector.py:161>) 决定。
+ReAct 的核心代码在 [ReActRuntime](</d:/Programs/interview-projects/ai-rag-project/backend/platform/agent_runtime/react/runtime.py:42>)，下一步怎么选由 [LLMReActActionSelector](</d:/Programs/interview-projects/ai-rag-project/backend/platform/agent_runtime/react/selector.py:161>) 决定。
 
 它的执行顺序可以直接记成五步：
 
@@ -94,7 +99,7 @@ ReAct 的直觉很简单：
 
 ## Plan 怎么跑
 
-Plan 的两个核心类是 [MinimalPlanner](</d:/Programs/interview-projects/ai-rag-project/backend/platform/agent_runtime/planner.py:70>) 和 [PlanExecutor](</d:/Programs/interview-projects/ai-rag-project/backend/platform/agent_runtime/plan_executor.py:78>)。
+Plan 的两个核心类是 [MinimalPlanner](</d:/Programs/interview-projects/ai-rag-project/backend/platform/agent_runtime/plan/planner.py:70>) 和 [PlanExecutor](</d:/Programs/interview-projects/ai-rag-project/backend/platform/agent_runtime/plan/executor.py:78>)。
 
 Plan 先生成计划，再执行计划。它不是边走边想，而是先把任务拆成步骤。
 
@@ -200,9 +205,9 @@ RAG 的顶层工具包装在 [build_rag_tool_adapters](</d:/Programs/interview-p
 3. [ChatService](</d:/Programs/interview-projects/ai-rag-project/backend/application/runtime/service.py:83>)
 4. [ChatAgentRuntimeMixin](</d:/Programs/interview-projects/ai-rag-project/backend/application/runtime/chat_service_parts/agent_runtime.py:44>)
 5. [ModeSelector](</d:/Programs/interview-projects/ai-rag-project/backend/platform/agent_runtime/mode_selector.py:30>)
-6. [ReActRuntime](</d:/Programs/interview-projects/ai-rag-project/backend/platform/agent_runtime/react_parts/runtime.py:42>)
-7. [MinimalPlanner](</d:/Programs/interview-projects/ai-rag-project/backend/platform/agent_runtime/planner.py:70>)
-8. [PlanExecutor](</d:/Programs/interview-projects/ai-rag-project/backend/platform/agent_runtime/plan_executor.py:78>)
+6. [ReActRuntime](</d:/Programs/interview-projects/ai-rag-project/backend/platform/agent_runtime/react/runtime.py:42>)
+7. [MinimalPlanner](</d:/Programs/interview-projects/ai-rag-project/backend/platform/agent_runtime/plan/planner.py:70>)
+8. [PlanExecutor](</d:/Programs/interview-projects/ai-rag-project/backend/platform/agent_runtime/plan/executor.py:78>)
 9. [ToolExecutor](</d:/Programs/interview-projects/ai-rag-project/backend/platform/agent_runtime/tool_executor.py:24>)
 10. [AgenticRetriever](</d:/Programs/interview-projects/ai-rag-project/backend/platform/rag/orchestration/agentic.py:54>)
 

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from backend.platform.agent_runtime.contracts import ReActRun, ReActTurn, ToolObservation
-from backend.platform.agent_runtime.react_parts.state import (
+from backend.platform.agent_runtime.react.state import (
     ensure_running,
     mark_waiting_on_observation,
     next_retry_metadata,

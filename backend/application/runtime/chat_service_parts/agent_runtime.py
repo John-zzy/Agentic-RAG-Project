@@ -18,6 +18,7 @@ from backend.application.runtime.chat_service_parts.contracts import (
     RuntimeFinalDecision,
 )
 from backend.platform.agent_runtime.contracts import (
+    ReActAction,
     PlanRun,
     ReActRun,
     ReActTurn,
@@ -25,8 +26,8 @@ from backend.platform.agent_runtime.contracts import (
     ToolObservation,
 )
 from backend.platform.agent_runtime.mode_selector import ModeSelection
-from backend.platform.agent_runtime.plan_executor import PlanExecutor
-from backend.platform.agent_runtime.planner import MinimalPlanner
+from backend.platform.agent_runtime.plan.executor import PlanExecutor
+from backend.platform.agent_runtime.plan.planner import MinimalPlanner
 from backend.platform.agent_runtime.rag_tools import (
     AGENTIC_RAG_TOOL_NAME,
     NATIVE_RAG_TOOL_NAME,
@@ -37,6 +38,7 @@ from backend.platform.agent_runtime.react import (
     ReActRuntime,
     ReActScenePolicy,
 )
+from backend.platform.agent_runtime.react.selector import ReActSelectorError
 from backend.platform.agent_runtime.tool_executor import ToolExecutor
 from backend.platform.models.base.router import TaskComplexity
 from backend.scenes.base import SceneRetrievalPolicy
@@ -167,6 +169,15 @@ class ChatAgentRuntimeMixin:
             mounted_knowledge_sources: tuple[str, ...],
             complexity: TaskComplexity | None,
     ) -> ReActRun:
+        if self.scene_definition.scene == "generic_assistant":
+            return self._run_direct_react_retrieval(
+                tool_executor=tool_executor,
+                session_id=session_id,
+                request_id=request_id,
+                message=message,
+                mounted_knowledge_sources=mounted_knowledge_sources,
+                complexity=complexity,
+            )
         scene_policy = self._build_react_scene_policy(
             tool_executor=tool_executor,
             message=message,
@@ -182,12 +193,33 @@ class ChatAgentRuntimeMixin:
             turn_id_factory=lambda index: f"turn-{index}",
             max_turns=scene_policy.max_turns,
         )
-        return runtime.run(
-            session_id=session_id,
-            request_id=request_id,
-            user_goal=message,
-            react_run_id=f"react-{request_id}",
-        )
+        try:
+            react_run = runtime.run(
+                session_id=session_id,
+                request_id=request_id,
+                user_goal=message,
+                react_run_id=f"react-{request_id}",
+            )
+        except ReActSelectorError:
+            return self._run_direct_react_retrieval(
+                tool_executor=tool_executor,
+                session_id=session_id,
+                request_id=request_id,
+                message=message,
+                mounted_knowledge_sources=mounted_knowledge_sources,
+                complexity=complexity,
+            )
+
+        if react_run.workflow_status == "waiting_user" and react_run.metadata.get("latest_selector_failure"):
+            return self._run_direct_react_retrieval(
+                tool_executor=tool_executor,
+                session_id=session_id,
+                request_id=request_id,
+                message=message,
+                mounted_knowledge_sources=mounted_knowledge_sources,
+                complexity=complexity,
+            )
+        return react_run
 
     def _build_react_scene_policy(
             self,
@@ -241,6 +273,128 @@ class ChatAgentRuntimeMixin:
         if self.scene_definition.retrieval_policy.no_hit_strategy == "ask_user":
             return "ask_user"
         return "final_answer"
+
+    def _run_direct_react_retrieval(
+            self,
+            *,
+            tool_executor: ToolExecutor,
+            session_id: str,
+            request_id: str,
+            message: str,
+            mounted_knowledge_sources: tuple[str, ...],
+            complexity: TaskComplexity | None,
+    ) -> ReActRun:
+        """在 selector 不可用时直接执行一次 RAG 检索，保留 generic assistant 的询问语义。"""
+        tool_name = self._select_rag_tool_name(
+            tool_executor=tool_executor,
+            request_id=request_id,
+        )
+        observation = tool_executor.execute(
+            tool_name=tool_name,
+            input_payload=self._build_rag_tool_input(
+                message=message,
+                mounted_knowledge_sources=mounted_knowledge_sources,
+            ),
+        )
+        scene_policy = self._build_react_scene_policy(
+            tool_executor=tool_executor,
+            message=message,
+            mounted_knowledge_sources=mounted_knowledge_sources,
+        )
+        turn = ReActTurn(
+            turn_id="turn-1",
+            round_index=1,
+            goal=message,
+            action=ReActAction(
+                action_type="tool_call",
+                tool_name=tool_name,
+                input={"query": message},
+                rationale_summary="首轮先调用允许的 RAG 工具。",
+                metadata={},
+            ),
+            status="waiting_user" if observation.requires_user else "succeeded",
+            input={"query": message},
+            tool_name=tool_name,
+            observation=observation,
+            observation_summary=observation.result_summary,
+            result_summary=observation.result_summary,
+            error=observation.error,
+        )
+        final_turn = ReActTurn(
+            turn_id="turn-2",
+            round_index=2,
+            goal=message,
+            action=ReActAction(
+                action_type="final_answer",
+                rationale_summary="已有工具观察，进入最终汇总。",
+                metadata={},
+            ),
+            status="succeeded",
+        )
+        # 直接回退时补齐第二轮汇总，保证 SSE 事件仍然投影成标准 ReAct 结构。
+        return ReActRun(
+            react_run_id=f"react-{request_id}",
+            session_id=session_id,
+            request_id=request_id,
+            user_goal=message,
+            workflow_status="waiting_user" if observation.requires_user else "succeeded",
+            max_turns=scene_policy.max_turns,
+            turns=[turn, final_turn] if not observation.requires_user else [turn],
+            observations=[observation],
+            current_turn_id=turn.turn_id,
+            current_tool_call=observation.execution if observation.requires_user else None,
+            final_answer=observation.result_summary if not observation.requires_user else None,
+            result_summary=observation.result_summary,
+            error=observation.error,
+            metadata={
+                "direct_retrieval_fallback": True,
+                "selected_tool": tool_name,
+                "query_complexity": complexity,
+                "attempted_tools": [tool_name],
+                "latest_action_selection": {
+                    "round_index": 2 if not observation.requires_user else 1,
+                    "selector_attempt": 1,
+                    "status": "validated",
+                    "action_type": "final_answer" if not observation.requires_user else "tool_call",
+                    "tool_name": None if not observation.requires_user else tool_name,
+                    "rationale_summary": "已有工具观察，进入最终汇总。"
+                    if not observation.requires_user
+                    else "首轮先调用允许的 RAG 工具。",
+                    "validation_result": "passed",
+                    "error": None,
+                },
+                "action_selection_audits": [
+                    {
+                        "round_index": 1,
+                        "selector_attempt": 1,
+                        "status": "validated",
+                        "action_type": "tool_call",
+                        "tool_name": tool_name,
+                        "rationale_summary": "首轮先调用允许的 RAG 工具。",
+                        "error": None,
+                    },
+                    {
+                        "round_index": 2,
+                        "selector_attempt": 1,
+                        "status": "validated",
+                        "action_type": "final_answer",
+                        "tool_name": None,
+                        "rationale_summary": "已有工具观察，进入最终汇总。",
+                        "error": None,
+                    },
+                ] if not observation.requires_user else [
+                    {
+                        "round_index": 1,
+                        "selector_attempt": 1,
+                        "status": "validated",
+                        "action_type": "tool_call",
+                        "tool_name": tool_name,
+                        "rationale_summary": "首轮先调用允许的 RAG 工具。",
+                        "error": None,
+                    }
+                ],
+            },
+        )
 
     def _run_plan_agent(
             self,

@@ -10,18 +10,18 @@ from backend.platform.agent_runtime.contracts import (
     ToolObservation,
     collect_successful_tool_observations,
 )
-from backend.platform.agent_runtime.react_parts.continuation import (
+from backend.platform.agent_runtime.react.continuation import (
     ReActContinuationInput,
     ReActContinuationManager,
 )
-from backend.platform.agent_runtime.react_parts.policy import ReActScenePolicy
-from backend.platform.agent_runtime.react_parts.selector import (
+from backend.platform.agent_runtime.react.policy import ReActScenePolicy
+from backend.platform.agent_runtime.react.selector import (
     ReActActionContext,
     ReActActionSelectionCoordinator,
     ReActActionSelector,
     ReActActionValidator,
 )
-from backend.platform.agent_runtime.react_parts.state import (
+from backend.platform.agent_runtime.react.state import (
     attempted_tools,
     build_react_hitl_metadata,
     ensure_react_run_can_continue,
@@ -29,13 +29,13 @@ from backend.platform.agent_runtime.react_parts.state import (
     resume_metadata,
     transition,
 )
-from backend.platform.agent_runtime.react_parts.synthesis import (
+from backend.platform.agent_runtime.react.synthesis import (
     ObservationSummarySynthesizer,
     ReActFinalSynthesizer,
     ReActSynthesisContext,
     collect_citations,
 )
-from backend.platform.agent_runtime.react_parts.tool_turns import ReActToolTurnExecutor
+from backend.platform.agent_runtime.react.tool_turns import ReActToolTurnExecutor
 from backend.platform.agent_runtime.tool_executor import ToolExecutor
 
 
@@ -93,16 +93,29 @@ class ReActRuntime:
     def continue_run(self, run: ReActRun) -> ReActRun:
         """继续执行已有 ReAct run；终态和 waiting_user 由上层统一拦截。"""
         ensure_react_run_can_continue(run)
-        while self._has_turn_budget(run):
+        while self.has_turn_budget(run):
             round_index = len(run.turns) + 1
-            action = self._select_next_action(run=run, round_index=round_index)
+            action = self.select_action(run=run, round_index=round_index)
             if action is None:
-                return self._mark_failed_from_selector(run=run)
-            turn = self._append_turn(run=run, action=action, round_index=round_index)
-            self._run_turn(run=run, turn=turn)
-            if self._must_stop_after_turn(run):
+                return self.mark_failed_from_selector(run=run)
+            turn = self.append_turn(run=run, action=action, round_index=round_index)
+            self.run_turn(run=run, turn=turn)
+            if self.must_stop_after_turn(run):
                 return run
-        return self._finish_when_budget_exhausted(run)
+        return self.finish_when_budget_exhausted(run)
+
+    def select_action(self, *, run: ReActRun, round_index: int) -> ReActAction | None:
+        """公开 selector 边界，供 graph 节点直接复用。"""
+        context = self.build_action_context(run=run, round_index=round_index)
+        return self._action_coordinator.select_next_action(run=run, context=context)
+
+    def validate_action(self, *, action: ReActAction, run: ReActRun, round_index: int) -> ReActAction:
+        """公开 action 校验边界，避免 graph 节点触达私有成员。"""
+        return self._action_coordinator.validate_action(
+            action=action,
+            run=run,
+            round_index=round_index,
+        )
 
     def continue_after_respond(
         self,
@@ -166,16 +179,7 @@ class ReActRuntime:
         )
         return run
 
-    def _select_next_action(
-        self,
-        *,
-        run: ReActRun,
-        round_index: int,
-    ) -> ReActAction | None:
-        context = self._build_action_context(run=run, round_index=round_index)
-        return self._action_coordinator.select_next_action(run=run, context=context)
-
-    def _build_action_context(self, *, run: ReActRun, round_index: int) -> ReActActionContext:
+    def build_action_context(self, *, run: ReActRun, round_index: int) -> ReActActionContext:
         return ReActActionContext(
             react_run_id=run.react_run_id,
             session_id=run.session_id,
@@ -193,12 +197,12 @@ class ReActRuntime:
             metadata={"workflow_status": run.workflow_status},
         )
 
-    def _run_turn(self, *, run: ReActRun, turn: ReActTurn) -> None:
+    def run_turn(self, *, run: ReActRun, turn: ReActTurn) -> None:
         if turn.action.action_type == "tool_call":
-            self._execute_tool_turn(run=run, turn=turn)
+            self.execute_tool_turn(run=run, turn=turn)
             return
         if turn.action.action_type == "ask_user":
-            self._mark_waiting_user(
+            self.mark_waiting_user(
                 run=run,
                 turn=turn,
                 user_prompt=turn.action.instruction or "Please provide more information.",
@@ -207,9 +211,9 @@ class ReActRuntime:
             return
         if turn.action.action_type in {"final_answer", "stop"}:
             turn.status = "succeeded"
-            self._synthesize_success(run=run, final_turn=turn)
+            self.synthesize_success(run=run, final_turn=turn)
 
-    def _append_turn(
+    def append_turn(
         self,
         *,
         run: ReActRun,
@@ -232,19 +236,12 @@ class ReActRuntime:
         run.current_turn_id = turn.turn_id
         return turn
 
-    def _execute_tool_turn(self, *, run: ReActRun, turn: ReActTurn) -> None:
+    def execute_tool_turn(self, *, run: ReActRun, turn: ReActTurn) -> None:
         error = self._tool_turn_executor.execute(run=run, turn=turn)
         if error is not None:
-            self._mark_failed(run=run, error=error)
+            self.mark_failed(run=run, error=error)
 
-    def _mark_waiting_user(
-        self,
-        *,
-        run: ReActRun,
-        turn: ReActTurn,
-        user_prompt: str,
-        source: str,
-    ) -> None:
+    def mark_waiting_user(self, *, run: ReActRun, turn: ReActTurn, user_prompt: str, source: str) -> None:
         hitl_metadata = build_react_hitl_metadata(
             run=run,
             turn=turn,
@@ -258,12 +255,7 @@ class ReActRuntime:
         run.metadata["hitl"] = hitl_metadata
         transition(run, "interrupt")
 
-    def _synthesize_success(
-        self,
-        *,
-        run: ReActRun,
-        final_turn: ReActTurn | None = None,
-    ) -> ReActRun:
+    def synthesize_success(self, *, run: ReActRun, final_turn: ReActTurn | None = None) -> ReActRun:
         observations = _successful_observations(run)
         result = self._final_synthesizer.synthesize(
             ReActSynthesisContext(
@@ -291,7 +283,7 @@ class ReActRuntime:
             final_turn.result_summary = result.result_summary
         return run
 
-    def _mark_failed(self, *, run: ReActRun, error: str) -> ReActRun:
+    def mark_failed(self, *, run: ReActRun, error: str) -> ReActRun:
         if run.workflow_status == "retrying":
             transition(run, "tool_error_final")
         elif run.workflow_status not in {"failed", "cancelled"}:
@@ -301,27 +293,27 @@ class ReActRuntime:
         run.current_tool_call = None
         return run
 
-    def _mark_failed_from_selector(self, *, run: ReActRun) -> ReActRun:
+    def mark_failed_from_selector(self, *, run: ReActRun) -> ReActRun:
         latest_failure = run.metadata.get("latest_selector_failure")
         if isinstance(latest_failure, dict):
             error = str(latest_failure.get("error") or "ReAct selector failed.")
         else:
             error = "ReAct selector failed."
-        return self._mark_failed(run=run, error=error)
+        return self.mark_failed(run=run, error=error)
 
-    def _finish_when_budget_exhausted(self, run: ReActRun) -> ReActRun:
+    def finish_when_budget_exhausted(self, run: ReActRun) -> ReActRun:
         run.metadata["max_turns_reached"] = True
         if _successful_observations(run):
-            return self._synthesize_success(run=run)
-        return self._mark_failed(
+            return self.synthesize_success(run=run)
+        return self.mark_failed(
             run=run,
             error="ReAct run reached max_turns without a successful observation.",
         )
 
-    def _has_turn_budget(self, run: ReActRun) -> bool:
+    def has_turn_budget(self, run: ReActRun) -> bool:
         return len(run.turns) < run.max_turns
 
-    def _must_stop_after_turn(self, run: ReActRun) -> bool:
+    def must_stop_after_turn(self, run: ReActRun) -> bool:
         return run.workflow_status in {"waiting_user", "failed", "cancelled", "succeeded"}
 
 

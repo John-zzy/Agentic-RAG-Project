@@ -83,16 +83,14 @@ openspec/              # 变更提案、规格与归档记录
 - [x] Human-in-the-Loop：基于 LangGraph interrupt/resume 支持 `approve / reject / respond`，覆盖 generic 写操作测试工具、外部 API 测试工具和 `ask_user` 澄清场景；`edit` 保留协议占位。
 - [x] Workflow State Machine：基于 LangGraph 节点和持久化状态表达 `created / planning / running / waiting_user / retrying / succeeded / failed / cancelled`。
 - [x] ReAct / Plan Agent Runtime 最小结构：新增顶层 `ReActRun` / `PlanRun` / `PlanStep` / `ToolObservation` 合同、ModeSelector、ToolExecutor、RAG tool adapter、checkpoint orchestration 字段、HITL metadata 和 SSE `tool.stage=react_turn/plan_step` 兼容扩展。
-- [ ] 顶层 `ChatGraph` 接入：把 `prepare_turn -> select_mode -> route_mode -> react_subgraph / plan_subgraph -> final_synthesis -> persist_turn` 显式 graph 化，替代现在的手写编排壳层。
-- [ ] ReAct Subgraph：把 `ReActRuntime` 的 action 选择、tool 调用、HITL、final synthesis 和 loop/finish 收敛到可复用 LangGraph 子图。
-- [ ] Plan Subgraph：把 `MinimalPlanner` / `PlanExecutor` 的 plan create、step execute、retry、waiting_user 和 synthesis 收敛到可复用 LangGraph 子图。
-- [ ] Agentic RAG Subgraph：将 `AgenticRetriever` 中手写的 `while` 循环、`next_action` 路由、query rewrite、工具切换、rerank、充分性判断和 no-hit fallback 迁移为可复用 LangGraph 子图。
+- [x] 顶层 `ChatGraph` 接入：把 `prepare_turn -> select_mode -> route_mode -> react_subgraph / plan_subgraph -> final_synthesis -> persist_turn` 显式 graph 化，替代现在的手写编排壳层。
+- [x] ReAct Subgraph：把 `ReActRuntime` 的 action 选择、tool 调用、HITL、final synthesis 和 loop/finish 收敛到可复用 LangGraph 子图。
+- [x] Plan Subgraph：把 `MinimalPlanner` / `PlanExecutor` 的 plan create、step execute、retry、waiting_user 和 synthesis 收敛到可复用 LangGraph 子图。
+- [x] Agentic RAG Subgraph：将 `AgenticRetriever` 中手写的 `while` 循环、`next_action` 路由、query rewrite、工具切换、rerank、充分性判断和 no-hit fallback 迁移为可复用 LangGraph 子图。
 - [ ] LangChain / LangGraph 重构审计：逐项识别当前自造状态机、streaming glue、history glue、tool routing glue，能用 LangGraph graph / node / conditional edge / interrupt 表达的优先迁移。
 - [ ] Business Handoff Subgraph：将 `generic_assistant` 到 `ecommerce` 的 handoff / followup 逻辑从 scene 内部判断迁移为 LangGraph router 或业务子图。
 - [ ] Failure Recovery：为工具调用、模型调用和长链路任务补齐超时、重试、失败补偿、可恢复执行和幂等控制。
 - [ ] Reflection / Critique：在多步任务中加入结果校验、失败原因归类和必要时的自我修正。
-
-> 说明：上面这些 `[]` 不是说当前能力不存在，而是说“还没有被显式 graph 化”。当前 ReAct / Plan / Agentic RAG 都已经能跑，只是执行拓扑还停留在手写 loop。
 
 ### P1：平台化 Tool、Memory 和 Evaluation 能力
 

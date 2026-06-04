@@ -57,12 +57,14 @@ class RuntimeGraphState(TypedDict):
 
     session_id: str
     request_id: str
+    scene: NotRequired[str | None]
     messages: Annotated[list[AnyMessage], add_messages]
     answer: str
     knowledge_used: bool
     citations: list[dict[str, Any]]
     retrieval_trace: dict[str, Any]
     metadata: dict[str, Any]
+    answer_mode: NotRequired[str | None]
     status: NotRequired[RuntimeGraphStatus]
     run_id: NotRequired[str | None]
     state_event: NotRequired[WorkflowRunEvent | None]
@@ -72,6 +74,8 @@ class RuntimeGraphState(TypedDict):
     hitl: NotRequired[RuntimeHitlState | None]
     hitl_resume: NotRequired[RuntimeHitlResumePayload | None]
     agent_mode: NotRequired[str | None]
+    agent_mode_reason: NotRequired[str | None]
+    agent_mode_signals: NotRequired[dict[str, Any] | None]
     react_run: NotRequired[dict[str, Any] | None]
     plan_run: NotRequired[dict[str, Any] | None]
     current_turn_id: NotRequired[str | None]
@@ -121,12 +125,14 @@ def build_runtime_graph_state(
     *,
     session_id: str,
     request_id: str,
+    scene: str | None = None,
     messages: Sequence[AnyMessage] | None = None,
     answer: str = "",
     knowledge_used: bool = False,
     citations: Sequence[Mapping[str, Any]] | None = None,
     retrieval_trace: Mapping[str, Any] | None = None,
     metadata: Mapping[str, Any] | None = None,
+    answer_mode: str | None = None,
     status: RuntimeGraphStatus = "running",
     run_id: str | None = None,
     state_event: WorkflowRunEvent | None = None,
@@ -136,6 +142,8 @@ def build_runtime_graph_state(
     hitl: Mapping[str, Any] | None = None,
     hitl_resume: Mapping[str, Any] | None = None,
     agent_mode: str | None = None,
+    agent_mode_reason: str | None = None,
+    agent_mode_signals: Mapping[str, Any] | None = None,
     react_run: Mapping[str, Any] | None = None,
     plan_run: Mapping[str, Any] | None = None,
     current_turn_id: str | None = None,
@@ -155,12 +163,14 @@ def build_runtime_graph_state(
     return {
         "session_id": session_id,
         "request_id": request_id,
+        "scene": scene,
         "messages": list(messages or ()),
         "answer": answer,
         "knowledge_used": knowledge_used,
         "citations": [dict(citation) for citation in citations or ()],
         "retrieval_trace": dict(retrieval_trace or {}),
         "metadata": dict(metadata or {}),
+        "answer_mode": answer_mode,
         "status": checked_status,
         "run_id": run_id,
         "state_event": state_event,
@@ -170,6 +180,8 @@ def build_runtime_graph_state(
         "hitl": dict(hitl) if hitl else None,
         "hitl_resume": dict(hitl_resume) if hitl_resume else None,
         "agent_mode": agent_mode,
+        "agent_mode_reason": agent_mode_reason,
+        "agent_mode_signals": dict(agent_mode_signals or {}) if agent_mode_signals else None,
         "react_run": dict(react_run) if react_run else None,
         "plan_run": dict(plan_run) if plan_run else None,
         "current_turn_id": current_turn_id,

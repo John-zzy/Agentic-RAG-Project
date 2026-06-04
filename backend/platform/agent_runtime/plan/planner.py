@@ -181,10 +181,7 @@ class MinimalPlanner:
             )
         return _PlanDraft(steps=steps, source=source)
 
-    def _coerce_steps(
-        self,
-        proposed_steps: Sequence[PlanStep | Mapping[str, Any]],
-    ) -> list[PlanStep]:
+    def _coerce_steps(self, proposed_steps: Sequence[PlanStep | Mapping[str, Any]]) -> list[PlanStep]:
         if not proposed_steps:
             raise ValueError("Planner must create at least one plan step.")
         if len(proposed_steps) > self._max_steps:

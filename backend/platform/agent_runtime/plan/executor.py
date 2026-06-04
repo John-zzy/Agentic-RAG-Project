@@ -3,14 +3,17 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any, Protocol
 
-from pydantic import Field
-
 from backend.platform.agent_runtime.contracts import (
-    AgentRuntimeModel,
     PlanRun,
     PlanStep,
     ToolObservation,
     collect_successful_tool_observations,
+)
+from backend.platform.agent_runtime.plan.synthesis import (
+    PlanFinalSynthesizer,
+    PlanSynthesisContext,
+    PlanSynthesisResult,
+    StepSummarySynthesizer,
 )
 from backend.platform.agent_runtime.tool_executor import ToolExecutor
 from backend.platform.agent_runtime.validation import (
@@ -18,61 +21,6 @@ from backend.platform.agent_runtime.validation import (
     validate_plan_tool_allowlist,
 )
 from backend.platform.workflow.state_machine import validate_transition
-
-
-class PlanSynthesisContext(AgentRuntimeModel):
-    """Plan final synthesizer 的输入，只包含已完成步骤和工具观察。"""
-
-    plan_run_id: str
-    session_id: str
-    request_id: str
-    user_goal: str
-    context_summary: str = ""
-    steps: list[PlanStep] = Field(default_factory=list)
-    observations: list[ToolObservation] = Field(default_factory=list)
-    citations: list[dict[str, Any]] = Field(default_factory=list)
-    execution_order: list[str] = Field(default_factory=list)
-    metadata: dict[str, Any] = Field(default_factory=dict)
-
-
-class PlanSynthesisResult(AgentRuntimeModel):
-    """PlanExecutor 写回 PlanRun 的最终汇总结果。"""
-
-    final_answer: str
-    result_summary: str = ""
-    citations: list[dict[str, Any]] = Field(default_factory=list)
-    knowledge_used: bool = False
-    metadata: dict[str, Any] = Field(default_factory=dict)
-
-
-class PlanFinalSynthesizer(Protocol):
-    """从成功 PlanStep 汇总最终回答的中立协议。"""
-
-    def synthesize(self, context: PlanSynthesisContext) -> PlanSynthesisResult:
-        """Return the final answer for a completed PlanRun."""
-
-
-class StepSummarySynthesizer:
-    """默认汇总器：按成功 step 的 result_summary 生成最终回答。"""
-
-    def synthesize(self, context: PlanSynthesisContext) -> PlanSynthesisResult:
-        summaries = [
-            step.result_summary or f"{step.step_id} succeeded."
-            for step in context.steps
-            if step.status == "succeeded"
-        ]
-        final_answer = "\n".join(summaries) if summaries else "No successful plan steps were collected."
-        citations = _deduplicate_citations(context.citations)
-        return PlanSynthesisResult(
-            final_answer=final_answer,
-            result_summary=f"Synthesized {len(summaries)} successful plan step(s).",
-            citations=citations,
-            knowledge_used=bool(citations),
-            metadata={"step_count": len(context.steps)},
-        )
-
-
-PlanSummarySynthesizer = StepSummarySynthesizer
 
 
 class PlanExecutor:
@@ -88,7 +36,7 @@ class PlanExecutor:
         self._final_synthesizer = final_synthesizer or StepSummarySynthesizer()
 
     def run(self, plan_run: PlanRun) -> PlanRun:
-        self._validate_plan(plan_run.steps)
+        self.validate_plan(plan_run.steps)
         if plan_run.workflow_status == "planning":
             _transition(plan_run, "run_start")
         elif plan_run.workflow_status == "created":
@@ -98,21 +46,21 @@ class PlanExecutor:
         while True:
             _mark_steps_blocked_by_unavailable_dependencies(plan_run.steps)
 
-            eligible_step = _next_eligible_step(plan_run.steps)
+            eligible_step = self.select_next_step(plan_run.steps)
             if eligible_step is None:
                 if _all_steps_succeeded(plan_run.steps):
-                    return self._synthesize_success(plan_run)
+                    return self.synthesize_plan_result(plan_run)
                 if _has_blocked_steps(plan_run.steps):
-                    return self._mark_failed(
+                    return self.mark_failed(
                         plan_run=plan_run,
                         error="Plan has blocked steps because required dependencies did not complete.",
                     )
-                return self._mark_failed(
+                return self.mark_failed(
                     plan_run=plan_run,
                     error="Plan has pending steps but no executable dependency order.",
                 )
 
-            self._execute_step(plan_run=plan_run, step=eligible_step)
+            self.execute_step(plan_run=plan_run, step=eligible_step)
             if plan_run.workflow_status in {"waiting_user", "failed", "cancelled"}:
                 _mark_steps_blocked_by_unavailable_dependencies(plan_run.steps)
                 return plan_run
@@ -121,7 +69,7 @@ class PlanExecutor:
         """按 task 语义暴露执行入口；内部复用 run 以保持单一流程。"""
         return self.run(plan_run)
 
-    def _validate_plan(self, steps: Sequence[PlanStep]) -> None:
+    def validate_plan(self, steps: Sequence[PlanStep]) -> None:
         validate_plan_tool_allowlist(steps, self._tool_executor.allowed_tools)
         validate_plan_dependencies(steps)
         for step in steps:
@@ -130,76 +78,88 @@ class PlanExecutor:
                 input_payload=step.input,
             )
 
-    def _execute_step(self, *, plan_run: PlanRun, step: PlanStep) -> None:
+    def select_next_step(self, steps: Sequence[PlanStep]) -> PlanStep | None:
+        """公开下一步选择边界，供 graph 节点直接复用。"""
+        return _next_eligible_step(steps)
+
+    def execute_step(self, *, plan_run: PlanRun, step: PlanStep) -> None:
+        """执行单个 step，并在当前调用内完成 retry / HITL / 失败收口。"""
         while True:
-            step.status = "running"
-            _ensure_plan_running(plan_run)
-            plan_run.current_step_id = step.step_id
+            outcome = self.execute_step_once(plan_run=plan_run, step=step)
+            if outcome != "retry":
+                return
 
-            observation = self._tool_executor.execute(
-                tool_name=step.tool_name,
-                input_payload=step.input,
-                attempt=step.retry_metadata.attempt,
-                max_attempts=step.retry_metadata.max_attempts,
-            )
-            observation = _prepare_observation_for_step(
+    def execute_step_once(self, *, plan_run: PlanRun, step: PlanStep) -> str | None:
+        """执行一次 step；graph 节点使用这个入口，避免把 retry 绑死在节点内部。"""
+        step.status = "running"
+        self.ensure_running(plan_run)
+        plan_run.current_step_id = step.step_id
+
+        observation = self._tool_executor.execute(
+            tool_name=step.tool_name,
+            input_payload=step.input,
+            attempt=step.retry_metadata.attempt,
+            max_attempts=step.retry_metadata.max_attempts,
+        )
+        observation = _prepare_observation_for_step(
+            plan_run=plan_run,
+            step=step,
+            observation=observation,
+        )
+        _persist_step_observation(
+            plan_run=plan_run,
+            step=step,
+            observation=observation,
+        )
+        step.retry_metadata = step.retry_metadata.model_copy(
+            update={
+                "attempt": step.retry_metadata.attempt + 1,
+                "retryable": observation.retryable,
+                "last_error": observation.error,
+            }
+        )
+
+        if observation.requires_user:
+            self.handle_waiting_user(
                 plan_run=plan_run,
                 step=step,
                 observation=observation,
             )
-            _persist_step_observation(
+            _transition(plan_run, "interrupt")
+            return None
+
+        if observation.success:
+            step.status = "succeeded"
+            step.error = None
+            plan_run.current_step_id = None
+            plan_run.current_tool_call = None
+            _append_execution_order(plan_run=plan_run, step_id=step.step_id)
+            return None
+
+        if not observation.retryable:
+            step.status = "failed"
+            self.mark_failed(
                 plan_run=plan_run,
-                step=step,
-                observation=observation,
+                error=_observation_error(observation),
             )
-            step.retry_metadata = step.retry_metadata.model_copy(
-                update={
-                    "attempt": step.retry_metadata.attempt + 1,
-                    "retryable": observation.retryable,
-                    "last_error": observation.error,
-                }
+            return None
+
+        step.status = "retrying"
+        _transition(plan_run, "tool_error_retryable")
+        plan_run.error = _observation_error(observation)
+
+        # retrying 是 run 级准备态；下一轮由图的 handle_retry 节点决定是否回到 pending。
+        if step.retry_metadata.attempt >= step.retry_metadata.max_attempts:
+            step.status = "failed"
+            self.mark_failed(
+                plan_run=plan_run,
+                error=_observation_error(observation),
             )
+            return None
+        _transition(plan_run, "retry")
+        return "retry"
 
-            if observation.requires_user:
-                _mark_step_waiting_on_observation(
-                    plan_run=plan_run,
-                    step=step,
-                    observation=observation,
-                )
-                _transition(plan_run, "interrupt")
-                return
-
-            if observation.success:
-                step.status = "succeeded"
-                step.error = None
-                plan_run.current_step_id = None
-                plan_run.current_tool_call = None
-                _append_execution_order(plan_run=plan_run, step_id=step.step_id)
-                return
-
-            if not observation.retryable:
-                step.status = "failed"
-                self._mark_failed(
-                    plan_run=plan_run,
-                    error=_observation_error(observation),
-                )
-                return
-
-            step.status = "retrying"
-            _transition(plan_run, "tool_error_retryable")
-            plan_run.error = _observation_error(observation)
-
-            # retrying 是 run 级准备态；还有预算时立即回到 running 再重试同一步。
-            if step.retry_metadata.attempt >= step.retry_metadata.max_attempts:
-                step.status = "failed"
-                self._mark_failed(
-                    plan_run=plan_run,
-                    error=_observation_error(observation),
-                )
-                return
-            _transition(plan_run, "retry")
-
-    def _synthesize_success(self, plan_run: PlanRun) -> PlanRun:
+    def synthesize_plan_result(self, plan_run: PlanRun) -> PlanRun:
         observations = collect_successful_tool_observations(plan_run)
         citations = _collect_citations(observations)
         result = self._final_synthesizer.synthesize(
@@ -230,7 +190,7 @@ class PlanExecutor:
         plan_run.metadata["final_synthesis"] = result.metadata
         return plan_run
 
-    def _mark_failed(self, *, plan_run: PlanRun, error: str) -> PlanRun:
+    def mark_failed(self, *, plan_run: PlanRun, error: str) -> PlanRun:
         if plan_run.workflow_status == "retrying":
             _transition(plan_run, "tool_error_final")
         elif plan_run.workflow_status not in {"failed", "cancelled"}:
@@ -238,6 +198,31 @@ class PlanExecutor:
         plan_run.error = error
         plan_run.result_summary = error
         plan_run.current_tool_call = None
+        return plan_run
+
+    def ensure_running(self, plan_run: PlanRun) -> None:
+        """公开 run 状态守卫，避免 graph 节点直接触碰内部函数。"""
+        _ensure_plan_running(plan_run)
+
+    def handle_waiting_user(
+        self,
+        *,
+        plan_run: PlanRun,
+        step: PlanStep,
+        observation: ToolObservation,
+    ) -> None:
+        """公开 waiting_user 边界；当前仅负责保留 step 级 HITL 事实。"""
+        _mark_step_waiting_on_observation(
+            plan_run=plan_run,
+            step=step,
+            observation=observation,
+        )
+
+    def handle_retry(self, *, plan_run: PlanRun, step: PlanStep) -> PlanRun:
+        """公开 retry 边界；图节点可在此处继续保留统一的失败收口。"""
+        if step.status == "retrying" and step.retry_metadata.attempt < step.retry_metadata.max_attempts:
+            step.status = "pending"
+            return plan_run
         return plan_run
 
 
@@ -296,11 +281,7 @@ def _mark_steps_blocked_by_unavailable_dependencies(steps: Sequence[PlanStep]) -
             return
 
 
-def _blocking_dependency_ids(
-    *,
-    step: PlanStep,
-    step_by_id: Mapping[str, PlanStep],
-) -> list[str]:
+def _blocking_dependency_ids(*, step: PlanStep, step_by_id: Mapping[str, PlanStep]) -> list[str]:
     blockers: list[str] = []
     for dependency_id in step.depends_on:
         dependency = step_by_id[dependency_id]

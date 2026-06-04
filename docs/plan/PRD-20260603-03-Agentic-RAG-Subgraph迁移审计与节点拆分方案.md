@@ -42,7 +42,7 @@
 
 ### 3.1 ReAct
 
-位置：`backend/platform/agent_runtime/react_parts/runtime.py`
+位置：`backend/platform/agent_runtime/react/runtime.py`
 
 当前 ReAct 仍然由 runtime 内部循环控制：
 
@@ -57,7 +57,7 @@
 
 ### 3.2 Plan
 
-位置：`backend/platform/agent_runtime/planner.py`、`backend/platform/agent_runtime/plan_executor.py`
+位置：`backend/platform/agent_runtime/plan/planner.py`、`backend/platform/agent_runtime/plan/executor.py`
 
 当前 Plan 仍然由 planner/executor 类控制：
 
@@ -354,3 +354,16 @@ HITL 判断：RAG 内部不应新增顶层人工审批语义，但 `ask_user` / 
 如果被问“为什么不一次性全改”，回答应该是：
 
 > 因为当前链路已经有可运行的 API、SSE、HITL、citation 和 trace 行为。一次性改所有 loop 风险太大。第一步把 ReAct / Plan 包成粗粒度 graph node，可以先稳定 graph state 和生命周期边界，再逐步拆内部节点。
+
+## 11. 1.x 审计核对结果
+
+这次审计已经按当前代码核对完毕，结论和本方案保持一致：
+
+- `backend/application/runtime/graph_runtime_parts/answer_graph.py` 仍然是 `START -> answer -> END` 的最小图。
+- `backend/application/runtime/graph_runtime_parts/state_store.py` 仍然只负责 checkpoint 写回与状态装配，没有顶层 ChatGraph 拓扑。
+- `backend/application/runtime/graph_runtime.py` 负责 checkpointer、lifecycle、input state、stream state 的统一装配。
+- ReAct 的实现已迁移到 `backend/platform/agent_runtime/react/runtime.py`。
+- Plan 的实现已迁移到 `backend/platform/agent_runtime/plan/executor.py`。
+- Agentic RAG 的多轮编排仍在 `backend/platform/rag/orchestration/agentic.py`。
+- `RuntimeGraphState` 目前保留的核心字段包括 `session_id`、`request_id`、`messages`、`answer`、`knowledge_used`、`citations`、`retrieval_trace`、`metadata`，以及 `agent_mode`、`react_run`、`plan_run`、`current_turn_id`、`current_step_id`、`current_tool_call`。
+- `/chat` 的 SSE 和 HITL 兼容仍依赖 `chat_service_parts/events.py`、`chat_service_parts/hitl.py` 和 `graph_runtime_parts/agent_state.py` 这些投影边界。

@@ -10,7 +10,7 @@ from backend.platform.agent_runtime.contracts import (
     ReActRun,
     ReActTurn,
 )
-from backend.platform.agent_runtime.react_parts.state import transition
+from backend.platform.agent_runtime.react.state import transition
 
 
 ReActContinuationAction = Literal["respond", "approve", "reject"]
@@ -43,13 +43,7 @@ class ReActContinuationManager:
         self._apply_reject(run=run, turn=waiting_turn, continuation=continuation)
         return run
 
-    def _apply_respond(
-        self,
-        *,
-        run: ReActRun,
-        turn: ReActTurn,
-        continuation: ReActContinuationInput,
-    ) -> None:
+    def _apply_respond(self, *, run: ReActRun, turn: ReActTurn, continuation: ReActContinuationInput) -> None:
         response = str(continuation.response or "").strip()
         if not response:
             raise ValueError("respond continuation requires a non-empty response.")
@@ -70,13 +64,7 @@ class ReActContinuationManager:
             metadata=metadata,
         )
 
-    def _apply_approve(
-        self,
-        *,
-        run: ReActRun,
-        turn: ReActTurn,
-        continuation: ReActContinuationInput,
-    ) -> None:
+    def _apply_approve(self, *, run: ReActRun, turn: ReActTurn, continuation: ReActContinuationInput) -> None:
         pending_tool_call = _pending_tool_call_payload(
             run=run,
             provided=continuation.pending_tool_call,
@@ -98,13 +86,7 @@ class ReActContinuationManager:
             metadata=metadata,
         )
 
-    def _apply_reject(
-        self,
-        *,
-        run: ReActRun,
-        turn: ReActTurn,
-        continuation: ReActContinuationInput,
-    ) -> None:
+    def _apply_reject(self, *, run: ReActRun, turn: ReActTurn, continuation: ReActContinuationInput) -> None:
         reason = _non_empty_text(
             continuation.reason,
             default="User rejected the waiting ReAct turn.",
@@ -169,11 +151,7 @@ def _record_running_continuation(
     run.current_tool_call = None
 
 
-def _ensure_continuation_turn_budget(
-    *,
-    run: ReActRun,
-    metadata: dict[str, Any],
-) -> None:
+def _ensure_continuation_turn_budget(*, run: ReActRun, metadata: dict[str, Any]) -> None:
     if len(run.turns) < run.max_turns:
         return
     previous_max_turns = run.max_turns

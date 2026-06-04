@@ -14,11 +14,11 @@ from backend.platform.agent_runtime.contracts import (
     ReActTurn,
     ToolObservation,
 )
-from backend.platform.agent_runtime.react_parts.policy import (
+from backend.platform.agent_runtime.react.policy import (
     ReActScenePolicy,
     public_scene_policy,
 )
-from backend.platform.agent_runtime.react_parts.state import attempted_tools, observation_final_decision
+from backend.platform.agent_runtime.react.state import attempted_tools, observation_final_decision
 from backend.platform.agent_runtime.tool_executor import ToolExecutor
 from backend.platform.agent_runtime.validation import (
     ToolAccessValidationError,
@@ -273,6 +273,16 @@ class ReActActionSelectionCoordinator:
                 )
         return None
 
+    def validate_action(
+        self,
+        *,
+        action: ReActAction,
+        run: ReActRun,
+        round_index: int,
+    ) -> ReActAction:
+        """公开动作校验边界，供 graph 节点直接复用。"""
+        return self._action_validator.validate(action=action, run=run, round_index=round_index)
+
     def _coerce_action(self, selected: Any) -> ReActAction:
         if isinstance(selected, ReActAction):
             return selected
@@ -309,6 +319,7 @@ class ReActActionSelectionCoordinator:
 
 def build_selector_prompt_variables(context: ReActActionContext) -> dict[str, str]:
     return {
+        "user_message": context.user_goal,
         "react_user_goal": context.user_goal,
         "react_round_index": str(context.round_index),
         "react_max_turns": str(context.max_turns),

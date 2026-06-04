@@ -66,6 +66,8 @@ class _PreparedGraphTurn:
     retrieval_trace: RetrievalTrace
     scene_metadata: _SceneMetadata = _SceneMetadata()
     agent_mode: str = "react"
+    agent_mode_reason: str | None = None
+    agent_mode_signals: dict[str, Any] | None = None
 
 
 class _SearchRetriever:
@@ -155,6 +157,7 @@ def _loads_json_value(value: Any) -> Any:
 
 def test_runtime_graph_state_exposes_minimal_chat_execution_fields() -> None:
     assert set(RuntimeGraphState.__annotations__) == {
+        "scene",
         "session_id",
         "request_id",
         "messages",
@@ -163,6 +166,7 @@ def test_runtime_graph_state_exposes_minimal_chat_execution_fields() -> None:
         "citations",
         "retrieval_trace",
         "metadata",
+        "answer_mode",
         "status",
         "run_id",
         "state_event",
@@ -172,6 +176,8 @@ def test_runtime_graph_state_exposes_minimal_chat_execution_fields() -> None:
         "hitl",
         "hitl_resume",
         "agent_mode",
+        "agent_mode_reason",
+        "agent_mode_signals",
         "react_run",
         "plan_run",
         "current_turn_id",
@@ -188,6 +194,8 @@ def test_runtime_graph_state_exposes_minimal_chat_execution_fields() -> None:
         citations=[{"document_id": "doc-1", "chunk_id": "chunk-1"}],
         retrieval_trace={"final_decision": "evidence_answer"},
         metadata={"scene": "generic_assistant"},
+        scene="generic_assistant",
+        answer_mode="evidence_answer",
         status="succeeded",
     )
 
@@ -198,6 +206,8 @@ def test_runtime_graph_state_exposes_minimal_chat_execution_fields() -> None:
     assert state["knowledge_used"] is True
     assert state["citations"] == [{"document_id": "doc-1", "chunk_id": "chunk-1"}]
     assert state["retrieval_trace"] == {"final_decision": "evidence_answer"}
+    assert state["scene"] == "generic_assistant"
+    assert state["answer_mode"] == "evidence_answer"
     assert state["metadata"] == {"scene": "generic_assistant"}
     assert state["status"] == "succeeded"
     assert state["final_state"] is None
@@ -223,12 +233,14 @@ def test_runtime_graph_state_defaults_keep_non_evidence_branches_representable()
     assert state == {
         "session_id": "session-no-evidence",
         "request_id": "req-no-evidence",
+        "scene": None,
         "messages": [],
         "answer": "I need more information.",
         "knowledge_used": False,
         "citations": [],
         "retrieval_trace": {"final_decision": "ask_user"},
         "metadata": {},
+        "answer_mode": None,
         "status": "running",
         "run_id": None,
         "state_event": None,
@@ -238,6 +250,8 @@ def test_runtime_graph_state_defaults_keep_non_evidence_branches_representable()
         "hitl": None,
         "hitl_resume": None,
         "agent_mode": None,
+        "agent_mode_reason": None,
+        "agent_mode_signals": None,
         "react_run": None,
         "plan_run": None,
         "current_turn_id": None,

@@ -186,9 +186,9 @@ ChatService
 | `backend/platform/agent_runtime/contracts.py` | `AgentRun`、`ReActRun`、`PlanRun`、`ToolCall` 等中立合同 |
 | `backend/platform/agent_runtime/mode_selector.py` | 选择 `react` 或 `plan` |
 | `backend/platform/agent_runtime/tool_executor.py` | `ToolExecutor`，统一调用 RAG tools 与 scene structured tools |
-| `backend/platform/agent_runtime/react.py` | 顶层 ReAct loop，不等同于 `AgenticRetriever` |
-| `backend/platform/agent_runtime/planner.py` | 最小 Planner，生成 `PlanRun` |
-| `backend/platform/agent_runtime/executor.py` | `PlanExecutor`，按依赖执行 `PlanStep` |
+| `backend/platform/agent_runtime/react/runtime.py` | 顶层 ReAct loop，不等同于 `AgenticRetriever` |
+| `backend/platform/agent_runtime/plan/planner.py` | 最小 Planner，生成 `PlanRun` |
+| `backend/platform/agent_runtime/plan/executor.py` | `PlanExecutor`，按依赖执行 `PlanStep` |
 | `backend/application/runtime/graph_runtime.py` | 组装 LangGraph nodes、checkpoint、HITL resume |
 
 命名也可以继续使用 `backend/platform/planning/`，但语义上应是 Agent Runtime 编排层，而不是 RAG adapter 层。

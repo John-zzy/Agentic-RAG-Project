@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import inspect
+from collections.abc import Mapping
 from typing import Any
 
 from langchain_core.callbacks.manager import CallbackManagerForRetrieverRun
@@ -26,6 +27,11 @@ from backend.platform.rag.post_retrieval.rerank import (
     disabled_rerank_trace,
     remove_rerank_scores,
 )
+from backend.platform.rag.orchestration.langgraph import build_agentic_rag_graph
+from backend.platform.rag.orchestration.langgraph.config import (
+    AgenticRagGraphDependencies,
+)
+from backend.platform.rag.orchestration.langgraph.state import build_agentic_rag_graph_state
 from backend.platform.rag.pre_retrieval.query_rewrite import QueryRewrite, QueryRewriter
 
 logger = logging.getLogger(__name__)
@@ -98,263 +104,122 @@ class AgenticRetriever(BaseRetriever):
             resolved_candidate_tools,
             self.max_rounds,
         )
-        current_plan = RetrievalPlan(
-            user_query=query,
-            active_query=query,
+        graph_state = build_agentic_rag_graph_state(
+            query=query,
             selected_tool=initial_tool,
-            max_rounds=self.max_rounds,
             candidate_tools=resolved_candidate_tools,
             filters=filters or {},
             top_k=top_k,
             min_relevance_score=min_relevance_score,
-            recall_strategy=recall_strategy,  # type: ignore[arg-type]
+            recall_strategy=recall_strategy,
             rerank_enabled=rerank_enabled,
             rerank_top_n=rerank_top_n,
+            max_rounds=self.max_rounds,
         )
-        rounds: list[RetrievalRound] = []
-        decision_log: list[RetrievalDecisionLogEntry] = []
-        results: list[RetrievalResult] = []
-        documents: list[Document] = []
+        graph = build_agentic_rag_graph(
+            AgenticRagGraphDependencies(
+                retriever=self,
+                run_manager=run_manager,
+            ),
+        )
+        final_state = graph.invoke(
+            graph_state,
+        )
+        logger.info(
+            "Agentic retrieval finished: exit_reason=%s, rounds=%s, total_documents=%s",
+            final_state.get("exit_reason"),
+            len(final_state.get("rounds") or []),
+            len(final_state.get("documents") or []),
+        )
+        return self._build_outcome_from_graph_state(final_state)
 
-        while True:
-            logger.info(
-                "Retrieval round %s/%s: tool=%s, query=%r, attempted_tools=%s",
-                current_plan.round_index,
-                current_plan.max_rounds,
-                current_plan.selected_tool,
-                current_plan.active_query,
-                current_plan.attempted_tools,
-            )
-            result = self._run_tool(current_plan, run_manager)
-            result = self._apply_rerank(plan=current_plan, result=result)
-            results.append(result)
-            documents = self._merge_documents(documents, result.documents)
-            logger.info(
-                "Retrieval round %s result: tool=%s, success=%s, records=%s, documents=%s, citations=%s, confidence=%s",
-                current_plan.round_index,
-                result.tool_name,
-                result.success,
-                len(result.records),
-                len(result.documents),
-                len(result.citations),
-                result.confidence,
-            )
-            if result.error:
-                logger.warning(
-                    "Retrieval round %s tool error: tool=%s, error=%s",
-                    current_plan.round_index,
-                    result.tool_name,
-                    result.error,
-                )
+    def _build_outcome_from_graph_state(
+        self,
+        state: Mapping[str, Any],
+    ) -> AgenticRetrievalOutcome:
+        """把 LangGraph state 还原成现有的 outcome 结构。"""
+        plan = self._coerce_plan(state.get("final_plan") or state.get("plan"))
+        results = [self._coerce_result(result) for result in list(state.get("results") or [])]
+        documents = [self._coerce_document(document) for document in list(state.get("documents") or [])]
+        rounds = [self._round_from_snapshot(snapshot) for snapshot in list(state.get("rounds") or [])]
+        decision_log = [
+            self._coerce_decision_log_entry(entry)
+            for entry in list(state.get("decision_log") or [])
+        ]
+        final_decision = self._coerce_decision(
+            state.get("final_decision"),
+            fallback=rounds[-1].decision if rounds else None,
+        )
+        exit_reason = str(state.get("exit_reason") or "ask_user")
+        success = bool(state.get("success", False))
+        return AgenticRetrievalOutcome(
+            plan=plan,
+            results=results,
+            documents=documents,
+            success=success,
+            rounds=rounds,
+            decision_log=decision_log,
+            final_plan=plan,
+            final_decision=final_decision,
+            exit_reason=exit_reason,
+            follow_up_question=state.get("follow_up_question"),
+        )
 
-            context = RetrievalContext(plan=current_plan, results=results, documents=documents)
-            decision = self._judge(context, run_manager)
-            logger.info(
-                "Retrieval round %s decision: action=%s, sufficient=%s, suggested_tool=%s, confidence=%s, reason=%s",
-                current_plan.round_index,
-                decision.next_action,
-                decision.is_sufficient,
-                decision.suggested_tool,
-                decision.confidence,
-                decision.reason,
-            )
-            round_trace = RetrievalRound(
-                plan=current_plan,
-                results=list(results),
-                documents=list(documents),
-                result=result,
-                decision=decision,
-            )
+    def _round_from_snapshot(self, snapshot: Mapping[str, Any]) -> RetrievalRound:
+        plan = self._coerce_plan(snapshot["plan"])
+        results = [self._coerce_result(result) for result in list(snapshot.get("results") or [])]
+        documents = [
+            self._coerce_document(document)
+            for document in list(snapshot.get("documents") or [])
+        ]
+        result = self._coerce_result(snapshot["result"])
+        decision = self._coerce_decision(snapshot["decision"])
+        rewrite = snapshot.get("rewrite")
+        return RetrievalRound(
+            plan=plan,
+            results=results,
+            documents=documents,
+            result=result,
+            decision=decision,
+            rewrite=QueryRewrite.model_validate(rewrite) if rewrite else None,
+        )
 
-            if decision.is_sufficient or decision.next_action == "finish":
-                rounds.append(round_trace)
-                exit_reason = "sufficient" if decision.is_sufficient else "finished_by_judge"
-                decision_log.append(
-                    self._build_decision_log_entry(
-                        round_trace,
-                        rewritten_query=None,
-                        exit_reason=exit_reason,
-                    )
-                )
-                logger.info(
-                    "Agentic retrieval finished: exit_reason=%s, rounds=%s, total_documents=%s",
-                    exit_reason,
-                    len(rounds),
-                    len(documents),
-                )
-                return AgenticRetrievalOutcome(
-                    plan=current_plan,
-                    results=results,
-                    documents=self._finalize_documents(documents, rounds, exit_reason),
-                    success=decision.is_sufficient and result.success,
-                    rounds=rounds,
-                    decision_log=decision_log,
-                    final_plan=current_plan,
-                    final_decision=decision,
-                    exit_reason=exit_reason,
-                    follow_up_question=decision.follow_up_question,
-                )
+    def _coerce_plan(self, value: Any) -> RetrievalPlan:
+        if isinstance(value, RetrievalPlan):
+            return value
+        if isinstance(value, Mapping):
+            return RetrievalPlan.model_validate(value)
+        raise TypeError("Invalid retrieval plan payload.")
 
-            if current_plan.round_index >= current_plan.max_rounds:
-                bounded_decision = decision.model_copy(
-                    update={
-                        "is_sufficient": False,
-                        "next_action": "ask_user",
-                        "reason": (
-                            f"{decision.reason} Reached max retrieval rounds "
-                            f"({current_plan.max_rounds})."
-                        ),
-                    }
-                )
-                bounded_round = RetrievalRound(
-                    plan=current_plan,
-                    results=list(results),
-                    documents=list(documents),
-                    result=result,
-                    decision=bounded_decision,
-                )
-                rounds.append(bounded_round)
-                decision_log.append(
-                    self._build_decision_log_entry(
-                        bounded_round,
-                        rewritten_query=None,
-                        exit_reason="max_rounds_reached",
-                    )
-                )
-                logger.warning(
-                    "Agentic retrieval stopped at max rounds: rounds=%s, total_documents=%s, reason=%s",
-                    current_plan.max_rounds,
-                    len(documents),
-                    bounded_decision.reason,
-                )
-                return AgenticRetrievalOutcome(
-                    plan=current_plan,
-                    results=results,
-                    documents=self._finalize_documents(documents, rounds, "max_rounds_reached"),
-                    success=False,
-                    rounds=rounds,
-                    decision_log=decision_log,
-                    final_plan=current_plan,
-                    final_decision=bounded_decision,
-                    exit_reason="max_rounds_reached",
-                    follow_up_question=bounded_decision.follow_up_question,
-                )
+    def _coerce_result(self, value: Any) -> RetrievalResult:
+        if isinstance(value, RetrievalResult):
+            return value
+        if isinstance(value, Mapping):
+            return RetrievalResult.model_validate(value)
+        raise TypeError("Invalid retrieval result payload.")
 
-            if decision.next_action == "ask_user":
-                rounds.append(round_trace)
-                decision_log.append(
-                    self._build_decision_log_entry(
-                        round_trace,
-                        rewritten_query=None,
-                        exit_reason="ask_user",
-                    )
-                )
-                logger.info(
-                    "Agentic retrieval requires user follow-up: rounds=%s, total_documents=%s, question=%r",
-                    len(rounds),
-                    len(documents),
-                    decision.follow_up_question,
-                )
-                return AgenticRetrievalOutcome(
-                    plan=current_plan,
-                    results=results,
-                    documents=self._finalize_documents(documents, rounds, "ask_user"),
-                    success=False,
-                    rounds=rounds,
-                    decision_log=decision_log,
-                    final_plan=current_plan,
-                    final_decision=decision,
-                    exit_reason="ask_user",
-                    follow_up_question=decision.follow_up_question,
-                )
+    def _coerce_document(self, value: Any) -> Document:
+        if isinstance(value, Document):
+            return value
+        if isinstance(value, Mapping):
+            return Document.model_validate(value)
+        raise TypeError("Invalid retrieval document payload.")
 
-            if decision.next_action == "rewrite":
-                if self._rewrite_already_attempted(current_plan):
-                    limited_decision = self._build_rewrite_limit_decision(decision)
-                    limited_round = RetrievalRound(
-                        plan=current_plan,
-                        results=list(results),
-                        documents=list(documents),
-                        result=result,
-                        decision=limited_decision,
-                    )
-                    rounds.append(limited_round)
-                    decision_log.append(
-                        self._build_decision_log_entry(
-                            limited_round,
-                            rewritten_query=None,
-                            exit_reason="ask_user",
-                        )
-                    )
-                    logger.info(
-                        "Agentic retrieval stopped after one query rewrite: rounds=%s, total_documents=%s",
-                        len(rounds),
-                        len(documents),
-                    )
-                    return AgenticRetrievalOutcome(
-                        plan=current_plan,
-                        results=results,
-                        documents=self._finalize_documents(documents, rounds, "ask_user"),
-                        success=False,
-                        rounds=rounds,
-                        decision_log=decision_log,
-                        final_plan=current_plan,
-                        final_decision=limited_decision,
-                        exit_reason="ask_user",
-                        follow_up_question=limited_decision.follow_up_question,
-                    )
+    def _coerce_decision(self, value: Any, *, fallback: SufficiencyDecision | None = None) -> SufficiencyDecision:
+        if isinstance(value, SufficiencyDecision):
+            return value
+        if isinstance(value, Mapping):
+            return SufficiencyDecision.model_validate(value)
+        if fallback is not None:
+            return fallback
+        raise TypeError("Invalid retrieval decision payload.")
 
-                rewrite = self._rewrite_query(context, run_manager)
-                round_trace.rewrite = rewrite
-                logger.info(
-                    "Retrieval round %s rewriting query: from=%r to=%r, reason=%s",
-                    current_plan.round_index,
-                    current_plan.active_query,
-                    rewrite.query,
-                    rewrite.reason,
-                )
-                decision_log.append(
-                    self._build_decision_log_entry(
-                        round_trace,
-                        rewritten_query=rewrite.query,
-                        exit_reason="continue",
-                    )
-                )
-                next_plan = current_plan.create_followup(
-                    active_query=rewrite.query,
-                    metadata={
-                        "rewrite_attempted": True,
-                        "rewrite_reason": rewrite.reason,
-                        "rewrite_metadata": rewrite.metadata,
-                    },
-                )
-            elif decision.next_action == "switch_tool":
-                next_tool = self._resolve_next_tool(current_plan, decision)
-                resolved_query = str(decision.metadata.get("resolved_query") or current_plan.active_query)
-                logger.info(
-                    "Retrieval round %s switching tool: from=%s to=%s, next_query=%r",
-                    current_plan.round_index,
-                    current_plan.selected_tool,
-                    next_tool,
-                    resolved_query,
-                )
-                decision_log.append(
-                    self._build_decision_log_entry(
-                        round_trace,
-                        rewritten_query=None,
-                        exit_reason="continue",
-                        extra_metadata={"next_tool": next_tool},
-                    )
-                )
-                next_plan = current_plan.create_followup(
-                    active_query=resolved_query,
-                    selected_tool=next_tool,
-                )
-            else:
-                raise ValueError(f"Unsupported retrieval next action: {decision.next_action}")
-
-            rounds.append(round_trace)
-            current_plan = next_plan
+    def _coerce_decision_log_entry(self, value: Any) -> RetrievalDecisionLogEntry:
+        if isinstance(value, RetrievalDecisionLogEntry):
+            return value
+        if isinstance(value, Mapping):
+            return RetrievalDecisionLogEntry.model_validate(value)
+        raise TypeError("Invalid retrieval decision log payload.")
 
     def _run_tool(
         self,

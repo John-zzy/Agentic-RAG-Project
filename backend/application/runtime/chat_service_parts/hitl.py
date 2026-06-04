@@ -14,8 +14,7 @@ from backend.application.runtime.api.chat.schemas import (
 )
 from backend.application.runtime.chat_service_parts.contracts import ChatServiceError, PreparedChatTurn
 from backend.application.runtime.graph_runtime import HitlResumeError, HitlResumeInput, HitlWaitInput
-from backend.platform.agent_runtime.contracts import ReActRun
-from backend.platform.agent_runtime.react import LLMReActActionSelector, ReActRuntime
+from backend.platform.agent_runtime.contracts import ReActAction, ReActRun, ReActTurn
 from backend.platform.workflow.langgraph.state import RuntimeGraphState
 from backend.platform.agent_runtime.tool_executor import ToolExecutor
 from backend.scenes.generic_assistant.hitl import (
@@ -230,7 +229,7 @@ class ChatHitlMixin:
             resume_payload: Mapping[str, Any],
             state: RuntimeGraphState,
     ) -> dict[str, Any]:
-        """恢复 checkpoint 中的 ReActRun，并把用户补充交还给平台 continuation。"""
+        """把用户补充作为新的 RAG 查询执行，并把结果投影回原 ReActRun。"""
         raw_run = state.get("react_run")
         if not isinstance(raw_run, Mapping):
             raise HitlResumeError("react_run checkpoint is required for ReAct respond.")
@@ -246,31 +245,12 @@ class ChatHitlMixin:
         tool_executor = self._build_agent_tool_executor(
             mounted_knowledge_sources=mounted_knowledge_sources
         )
-        scene_policy = self._build_react_scene_policy(
-            tool_executor=tool_executor,
-            message=response,
-            mounted_knowledge_sources=mounted_knowledge_sources,
-        ).model_copy(update={"max_turns": react_run.max_turns})
-        runtime = ReActRuntime(
-            tool_executor=tool_executor,
-            action_selector=LLMReActActionSelector(
-                model_client=self.model,
-                model_complexity=self.scene_definition.infer_complexity(response) or "simple",
-            ),
-            scene_policy=scene_policy,
-            turn_id_factory=lambda index: f"turn-{index}",
-            max_turns=react_run.max_turns,
-        )
-        continued_run = runtime.continue_after_respond(
+        continued_run = self._build_react_clarification_run(
             run=react_run,
             response=response,
-            source=str(resume_payload.get("source") or "freeform"),
-            suggestion_id=(
-                str(resume_payload.get("suggestion_id"))
-                if resume_payload.get("suggestion_id") is not None
-                else None
-            ),
-            metadata=dict(resume_payload.get("metadata") or {}),
+            resume_payload=resume_payload,
+            tool_executor=tool_executor,
+            mounted_knowledge_sources=mounted_knowledge_sources,
         )
         agent_result = self._agent_execution_result_from_run(
             message=response,
@@ -319,6 +299,116 @@ class ChatHitlMixin:
             "current_tool_call": agent_result.current_tool_call,
             "tool_observation": agent_result.tool_observation,
         }
+
+    def _build_react_clarification_run(
+            self,
+            *,
+            run: ReActRun,
+            response: str,
+            resume_payload: Mapping[str, Any],
+            tool_executor: ToolExecutor,
+            mounted_knowledge_sources: tuple[str, ...],
+    ) -> ReActRun:
+        """直接执行补充内容对应的 RAG 工具，并保留原 waiting turn 的审计轨迹。"""
+        continuation = self._react_respond_continuation(
+            run=run,
+            response=response,
+            resume_payload=resume_payload,
+        )
+        tool_name = self._select_rag_tool_name(
+            tool_executor=tool_executor,
+            request_id=run.request_id,
+        )
+        observation = tool_executor.execute(
+            tool_name=tool_name,
+            input_payload=self._build_rag_tool_input(
+                message=response,
+                mounted_knowledge_sources=mounted_knowledge_sources,
+            ),
+        )
+        waiting_turn = self._react_waiting_turn(run=run)
+        if waiting_turn is not None:
+            waiting_turn.status = "succeeded" if observation.success else "failed"
+            waiting_turn.error = None if observation.success else observation.error
+            waiting_turn.metadata["continuation"] = continuation
+
+        turn_id = f"turn-{len(run.turns) + 1}"
+        turn_status = "waiting_user" if observation.requires_user else ("succeeded" if observation.success else "failed")
+        new_turn = ReActTurn(
+            turn_id=turn_id,
+            round_index=len(run.turns) + 1,
+            goal=response,
+            action=ReActAction(
+                action_type="tool_call",
+                tool_name=tool_name,
+                input={"query": response},
+                rationale_summary="Top-level ReAct clarification continued as a direct RAG query.",
+                metadata={"continuation": continuation},
+            ),
+            status=turn_status,
+            input={"query": response},
+            tool_name=tool_name,
+            observation=observation,
+            observation_summary=observation.result_summary,
+            result_summary=observation.result_summary,
+            error=observation.error,
+            metadata={"continuation": continuation},
+        )
+        run.turns.append(new_turn)
+        run.observations.append(observation)
+        run.metadata["resume"] = continuation
+        history = list(run.metadata.get("continuations") or [])
+        history.append(continuation)
+        run.metadata["continuations"] = history
+        if observation.requires_user:
+            run.workflow_status = "waiting_user"
+            run.current_turn_id = new_turn.turn_id
+            run.current_tool_call = observation.execution
+        elif observation.success:
+            run.workflow_status = "succeeded"
+            run.current_turn_id = None
+            run.current_tool_call = None
+        else:
+            run.workflow_status = "failed"
+            run.current_turn_id = None
+            run.current_tool_call = None
+        run.error = observation.error
+        run.result_summary = observation.result_summary
+        return run
+
+    def _react_respond_continuation(
+            self,
+            *,
+            run: ReActRun,
+            response: str,
+            resume_payload: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """整理 respond continuation 的审计元数据。"""
+        return {
+            "mode": "react",
+            "action": "respond",
+            "react_run_id": run.react_run_id,
+            "waiting_turn_id": run.current_turn_id,
+            "continued_from_turn_id": run.current_turn_id,
+            "response": response,
+            "source": str(resume_payload.get("source") or "freeform"),
+            "suggestion_id": (
+                str(resume_payload.get("suggestion_id"))
+                if resume_payload.get("suggestion_id") is not None
+                else None
+            ),
+            "metadata": dict(resume_payload.get("metadata") or {}),
+        }
+
+    def _react_waiting_turn(self, *, run: ReActRun) -> ReActTurn | None:
+        """定位当前等待中的 ReAct turn，便于把 resume 结果落回原轨迹。"""
+        waiting_turn_id = run.current_turn_id
+        if not waiting_turn_id:
+            return None
+        for turn in run.turns:
+            if turn.turn_id == waiting_turn_id:
+                return turn
+        return None
 
     def _build_resume_response(
             self,

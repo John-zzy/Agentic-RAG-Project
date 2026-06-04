@@ -99,10 +99,10 @@ ReAct 当前还没有完全满足的部分：
 | 文件 | 现在负责什么 | 当前判断 |
 | --- | --- | --- |
 | `backend/platform/agent_runtime/contracts.py` | 定义 `PlanRun`、`PlanStep`、`ToolObservation` 等数据结构。 | 基础结构已具备，但 `PlanRun` 还缺少上下文摘要和 run 级 observations。 |
-| `backend/platform/agent_runtime/planner.py` | `MinimalPlanner` 生成计划，并校验工具、依赖和输入。 | 有最小计划生成能力，但语义偏规则化。 |
+| `backend/platform/agent_runtime/plan/planner.py` | `MinimalPlanner` 生成计划，并校验工具、依赖和输入。 | 有最小计划生成能力，但语义偏规则化。 |
 | `backend/platform/agent_runtime/validation.py` | 校验工具白名单、输入 schema 和 step 依赖 DAG。 | 依赖合法性校验已经满足。 |
 | `backend/platform/agent_runtime/tool_executor.py` | 统一调用 RAG tool、scene tool、internal tool，并归一化输出。 | 工具执行边界清晰。 |
-| `backend/platform/agent_runtime/plan_executor.py` | 按依赖执行 step，处理重试、失败、等待用户和最终汇总。 | 平台层执行能力已部分满足。 |
+| `backend/platform/agent_runtime/plan/executor.py` | 按依赖执行 step，处理重试、失败、等待用户和最终汇总。 | 平台层执行能力已部分满足。 |
 | `backend/application/runtime/chat_service_parts/agent_runtime.py` | 在 `/chat` 中执行 ReAct 或 Plan。 | 关键缺口：plan 模式目前固定生成一个 RAG step。 |
 | `backend/application/runtime/chat_service_parts/events.py` | SSE 中输出 `stage=plan_step` 等进度字段。 | 能输出基础进度，但还不是逐 step 的完整事件流。 |
 | `backend/application/runtime/graph_runtime_parts/agent_state.py` | 将 agent run 写入 checkpoint，并投影 HITL 状态。 | 状态记录已有，resume 后继续执行 plan 的闭环仍需增强。 |

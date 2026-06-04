@@ -22,6 +22,8 @@ class PreparedGraphTurn(Protocol):
     retrieval_trace: Any
     scene_metadata: Any
     agent_mode: str
+    agent_mode_reason: str
+    agent_mode_signals: dict[str, Any] | None
     react_run: dict[str, Any] | None
     plan_run: dict[str, Any] | None
     current_turn_id: str | None
