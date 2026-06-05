@@ -15,12 +15,16 @@ def build_final_synthesis_node(dependencies: ChatGraphDependencies):
     answer_builder = dependencies.answer_builder
 
     def final_synthesis(state: RuntimeGraphState) -> dict[str, Any]:
-        del state
-        answer, citations = answer_builder(prepared)
+        answer_prepared = (
+            dependencies.build_prepared_from_state(prepared, state)
+            if dependencies.build_prepared_from_state is not None
+            else prepared
+        )
+        answer, citations = answer_builder(answer_prepared)
         return {
             "answer": answer,
             "citations": [citation.model_dump() for citation in citations],
-            "knowledge_used": prepared.knowledge_used,
+            "knowledge_used": answer_prepared.knowledge_used,
             "messages": [AIMessage(content=answer)],
         }
 

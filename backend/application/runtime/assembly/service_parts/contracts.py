@@ -12,11 +12,12 @@ from backend.platform.models.base.router import TaskComplexity
 RuntimeFinalDecision = Literal[
     "answer_with_evidence",
     "ask_user",
+    "direct_answer",
     "max_rounds_reached",
     "no_evidence",
     "retrieval_failed",
 ]
-AnswerMode = Literal["evidence_answer", "follow_up", "fallback"]
+AnswerMode = Literal["evidence_answer", "direct_answer", "follow_up", "fallback"]
 class RetrievalChainModel(Protocol):
     """定义运行时依赖的最小模型构建协议。"""
 

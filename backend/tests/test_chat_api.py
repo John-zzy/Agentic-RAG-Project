@@ -10,6 +10,7 @@ from langchain_core.prompt_values import ChatPromptValue
 from langchain_core.runnables import RunnableLambda, RunnableSerializable
 
 from backend.application.runtime.api.app import create_app
+from backend.application.runtime.api.chat.schemas import ChatRequest
 from backend.application.runtime import ChatService, SceneChatService, build_default_scene_registry
 from backend.platform.agent_runtime.contracts import ReActAction, ReActRun, ReActTurn, ToolObservation
 from backend.platform.agent_runtime.rag_tools import AGENTIC_RAG_TOOL_NAME, NATIVE_RAG_TOOL_NAME
@@ -339,6 +340,40 @@ class FakeReactSelectorRunnable(RunnableSerializable[Any, str]):
                 "rationale_summary": "首轮先调用允许的 RAG 工具。",
             },
             ensure_ascii=False,
+        )
+
+
+class DirectAnswerSelectorRunnable(RunnableSerializable[Any, str]):
+    def invoke(
+        self,
+        input: Any,
+        config: Any | None = None,
+        **kwargs: Any,
+    ) -> str:
+        del input, config, kwargs
+        return json.dumps(
+            {
+                "action_type": "final_answer",
+                "rationale_summary": "无需检索知识库，直接回答。",
+            },
+            ensure_ascii=False,
+        )
+
+
+class DirectAnswerModel(FakeModel):
+    def get_runnable(
+        self,
+        complexity: str = "simple",
+        prompt_template: Any | None = None,
+        *,
+        output_parser: Any | None = None,
+    ):
+        if _is_react_selector_prompt(prompt_template):
+            return DirectAnswerSelectorRunnable()
+        return super().get_runnable(
+            complexity=complexity,
+            prompt_template=prompt_template,
+            output_parser=output_parser,
         )
 
 
@@ -744,6 +779,83 @@ def test_chat_api_success_path() -> None:
     assert len(model.invoke_runnable_calls) == 1
 
 
+def test_chat_api_prepare_turn_defers_agent_runtime_to_chat_graph() -> None:
+    knowledge = FakeKnowledgeService()
+    document_retrieval_service = FakeDocumentRetrievalService(
+        documents=[
+            _result(
+                doc_id="doc-graph",
+                content="Graph orchestration evidence.",
+                score=0.92,
+                metadata={
+                    "document_id": "doc-graph",
+                    "source_path": "graph.md",
+                    "namespace": "documents",
+                    "is_managed_document": True,
+                    "chunk_id": "chunk-graph",
+                    "chunk_index": 0,
+                },
+            )
+        ]
+    )
+    service = _build_chat_service(
+        "chat-api-prepare-defers-agent-runtime",
+        knowledge,
+        document_retrieval_service,
+        FakeModel(answer="Graph evidence answer.[1]"),
+    )
+
+    prepared = service._get_scene_service("generic_assistant")._prepare_chat_turn(
+        ChatRequest(message="use graph evidence")
+    )
+
+    assert prepared.react_run is None
+    assert prepared.plan_run is None
+    assert prepared.retrieval_trace.exit_reason == "pending_chat_graph"
+    assert document_retrieval_service.calls == []
+
+
+def test_chat_api_generic_react_can_direct_answer_without_rag() -> None:
+    knowledge = FakeKnowledgeService()
+    document_retrieval_service = FakeDocumentRetrievalService(
+        documents=[
+            _result(
+                doc_id="doc-unused",
+                content="This document should not be retrieved.",
+                score=0.99,
+                metadata={
+                    "document_id": "doc-unused",
+                    "source_path": "unused.md",
+                    "namespace": "documents",
+                    "is_managed_document": True,
+                    "chunk_id": "chunk-unused",
+                    "chunk_index": 0,
+                },
+            )
+        ]
+    )
+    model = DirectAnswerModel(answer="你好，我可以直接帮你。")
+    service = _build_chat_service(
+        "chat-api-generic-direct-answer",
+        knowledge,
+        document_retrieval_service,
+        model,
+    )
+    app = create_app(chat_service=service)
+
+    with TestClient(app) as client:
+        response = client.post("/chat", json={"message": "你好"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["answer"] == "你好，我可以直接帮你。"
+    assert payload["knowledge_used"] is False
+    assert payload["citations"] == []
+    assert payload["retrieval_trace"]["final_decision"] == "direct_answer"
+    assert payload["retrieval_trace"]["tool_call_count"] == 0
+    assert document_retrieval_service.calls == []
+
+
 def test_chat_api_rag_evidence_is_produced_through_tool_executor(monkeypatch) -> None:
     knowledge = FakeKnowledgeService()
     document_retrieval_service = FakeDocumentRetrievalService(
@@ -823,7 +935,7 @@ def test_chat_api_sse_success_path_returns_structured_events() -> None:
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/event-stream")
     events = _parse_sse_events(response.text)
-    assert [event["event"] for event in events] == ["start", "history", "tool", "chunk", "chunk", "done"]
+    assert [event["event"] for event in events] == ["start", "history", "tool", "chunk", "done"]
 
     start_data = events[0]["data"]
     history_data = events[1]["data"]
@@ -922,7 +1034,8 @@ def test_chat_api_sse_success_path_returns_structured_events() -> None:
         "retrieval_trace"
     ]["final_decision"] == "answer_with_evidence"
     assert model.get_runnable_calls == ["simple"]
-    assert len(model.stream_runnable_calls) == 1
+    assert len(model.invoke_runnable_calls) == 1
+    assert model.stream_runnable_calls == []
 
 
 def test_chat_api_sse_plan_request_uses_plan_step_tool_stage() -> None:
@@ -1507,6 +1620,13 @@ def test_chat_api_react_ask_user_without_observation_enters_hitl_wait(monkeypatc
     assert payload["retrieval_trace"]["final_decision"] == "ask_user"
     assert payload["retrieval_trace"]["follow_up_question"] == "请补充需要查询的知识范围。"
     assert model.stream_runnable_calls == []
+    lifecycle_statuses = [
+        event.status
+        for event in inner_service.graph_runtime.lifecycle.events_for_request(
+            payload["request_id"]
+        )
+    ]
+    assert lifecycle_statuses == ["created", "running", "waiting_user"]
 
 
 def test_chat_api_sse_hitl_reject_resume_returns_done_cancelled() -> None:
@@ -1887,15 +2007,15 @@ def test_chat_api_sse_no_hit_with_unrelated_docs_keeps_done_without_citations(mo
 
 def test_chat_api_sse_error_path_keeps_runtime_event_order() -> None:
     class ErrorModel(FakeModel):
-        def stream_runnable(
+        def invoke_runnable(
             self,
             runnable: Any,
             input: Any,
             *,
             config: Any | None = None,
-        ):
-            self.stream_runnable_calls.append({"runnable": runnable, "input": input, "config": config})
-            raise ValueError("Model returned empty streaming content")
+        ) -> str:
+            self.invoke_runnable_calls.append({"runnable": runnable, "input": input, "config": config})
+            raise ValueError("Model returned empty content")
 
     knowledge = FakeKnowledgeService()
     document_retrieval_service = FakeDocumentRetrievalService(
@@ -1924,17 +2044,15 @@ def test_chat_api_sse_error_path_keeps_runtime_event_order() -> None:
 
     assert response.status_code == 200
     events = _parse_sse_events(response.text)
-    assert [event["event"] for event in events] == ["start", "history", "tool", "error"]
+    assert [event["event"] for event in events] == ["error"]
     error_payload = json.loads(events[-1]["data"])
     assert error_payload["code"] == "MODEL_EMPTY_RESPONSE"
     assert error_payload["message"] == "Model returned empty response."
-    assert error_payload["request_id"] == json.loads(events[0]["data"])["request_id"]
-    assert error_payload["run_id"]
-    assert error_payload["final_state"] == "failed"
-    assert tuple(
-        event.status
-        for event in service.graph_runtime.lifecycle.events(error_payload["run_id"])
-    ) == ("created", "running", "failed")
+    assert error_payload["request_id"] != "N/A"
+    lifecycle_events = service.graph_runtime.lifecycle.events_for_request(
+        error_payload["request_id"]
+    )
+    assert [event.status for event in lifecycle_events] == ["created", "running", "failed"]
 
 
 def test_chat_api_non_stream_response_and_session_persistence_do_not_regress() -> None:
@@ -2214,7 +2332,7 @@ def test_chat_api_sse_history_event_uses_trimmed_message_window() -> None:
                 events = _parse_sse_events(response.text)
 
     assert session_id is not None
-    assert [event["event"] for event in events] == ["start", "history", "tool", "chunk", "chunk", "done"]
+    assert [event["event"] for event in events] == ["start", "history", "tool", "chunk", "done"]
     history_payload = json.loads(events[1]["data"])
     assert history_payload["message_count"] == 4
     assert [message["content"] for message in history_payload["messages"]] == [

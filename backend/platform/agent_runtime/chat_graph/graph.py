@@ -14,6 +14,9 @@ from backend.platform.agent_runtime.chat_graph.edges import (
 from backend.platform.agent_runtime.chat_graph.nodes.final_synthesis import (
     build_final_synthesis_node,
 )
+from backend.platform.agent_runtime.chat_graph.nodes.maybe_hitl_wait import (
+    build_maybe_hitl_wait_node,
+)
 from backend.platform.agent_runtime.chat_graph.nodes.persist_turn import (
     build_persist_turn_node,
 )
@@ -55,6 +58,7 @@ def build_chat_graph(
         RESOLVE_ANSWER_MODE,
         build_resolve_answer_mode_node(dependencies),
     )
+    builder.add_node("maybe_hitl_wait", build_maybe_hitl_wait_node(dependencies))
     builder.add_node("final_synthesis", build_final_synthesis_node(dependencies))
     builder.add_node("persist_turn", build_persist_turn_node(dependencies))
 
@@ -64,7 +68,11 @@ def build_chat_graph(
     builder.add_conditional_edges("route_mode", build_route_mode_edge(dependencies))
     builder.add_edge(REACT_BRANCH, RESOLVE_ANSWER_MODE)
     builder.add_edge(PLAN_BRANCH, RESOLVE_ANSWER_MODE)
-    builder.add_edge(RESOLVE_ANSWER_MODE, "final_synthesis")
+    builder.add_edge(RESOLVE_ANSWER_MODE, "maybe_hitl_wait")
+    builder.add_conditional_edges(
+        "maybe_hitl_wait",
+        lambda state: END if state.get("status") == "waiting_user" else "final_synthesis",
+    )
     builder.add_edge("final_synthesis", "persist_turn")
     builder.add_edge("persist_turn", END)
 

@@ -11,19 +11,32 @@ from backend.application.runtime.assembly.service_parts.contracts import (
     ChatServiceError,
     PreparedChatTurn,
 )
+from backend.platform.workflow.langgraph.state import RuntimeGraphState
 from backend.platform.memory.base.chat_history import SQLiteChatMessageHistory
 from backend.platform.models.base.router import TaskComplexity
 
 
 class ChatAnsweringMixin:
-    def _generate_answer(self, prepared: PreparedChatTurn) -> tuple[str, list[Citation], str]:
+    def _generate_answer(
+        self,
+        prepared: PreparedChatTurn,
+    ) -> tuple[PreparedChatTurn, str, list[Citation], str, RuntimeGraphState]:
         """根据准备结果生成最终答案。"""
         result = self.graph_runtime.invoke(
             prepared=prepared,
             answer_builder=self._generate_answer_direct,
             history_loader=self._load_graph_seed_history,
+            select_agent_mode=self._select_agent_mode_for_graph,
+            run_agent_runtime=self._run_agent_runtime_for_graph,
+            build_prepared_from_state=self._prepared_from_graph_state,
+            build_hitl_wait_update=self._build_hitl_wait_update_for_graph,
         )
-        return result.answer, result.citations, result.run_id
+        resolved_prepared = self._prepared_from_graph_state(prepared, result.state)
+        citations = [
+            citation if isinstance(citation, Citation) else Citation.model_validate(citation)
+            for citation in result.citations
+        ]
+        return resolved_prepared, result.answer, citations, result.run_id, result.state
 
     def _generate_answer_direct(self, prepared: PreparedChatTurn) -> tuple[str, list[Citation]]:
         """执行 graph answer node 内部的直接回答逻辑。"""
@@ -127,9 +140,43 @@ class ChatAnsweringMixin:
 
     def _build_non_evidence_answer(self, prepared: PreparedChatTurn) -> tuple[str, list[Citation]]:
         """构造不携带引用的追问或降级回答。"""
+        if prepared.answer_mode == "direct_answer":
+            return self._invoke_direct_answer_template(prepared), []
         if prepared.answer_mode == "follow_up":
             return self._build_follow_up_answer(prepared), []
         return self._build_fallback_answer(prepared), []
+
+    def _invoke_direct_answer_template(self, prepared: PreparedChatTurn) -> str:
+        """不依赖知识证据时，走普通对话回答链，不生成 citations。"""
+        runnable = self._get_direct_answer_runnable(prepared)
+        try:
+            answer = self.model.invoke_runnable(
+                runnable,
+                {"input": prepared.user_message},
+                config=self._build_runnable_config(prepared.session_id),
+            )
+        except ValueError as exc:
+            if str(exc) == "Model returned empty content":
+                raise ChatServiceError(
+                    status_code=502,
+                    code="MODEL_EMPTY_RESPONSE",
+                    message="Model returned empty response.",
+                    request_id=prepared.request_id,
+                ) from exc
+            raise ChatServiceError(
+                status_code=502,
+                code="MODEL_INVOCATION_FAILED",
+                message="Model invocation failed. Please retry later.",
+                request_id=prepared.request_id,
+            ) from exc
+        except Exception as exc:
+            raise ChatServiceError(
+                status_code=502,
+                code="MODEL_INVOCATION_FAILED",
+                message="Model invocation failed. Please retry later.",
+                request_id=prepared.request_id,
+            ) from exc
+        return str(answer).strip()
 
     def _build_follow_up_answer(self, prepared: PreparedChatTurn) -> str:
         """解析 ask_user 分支追问文案，缺失时回退到 scene no-hit 文案。"""
@@ -189,6 +236,24 @@ class ChatAnsweringMixin:
             history_messages_key="history",
         )
         return runnable
+
+    def _get_direct_answer_runnable(self, prepared: PreparedChatTurn) -> RunnableWithMessageHistory:
+        """为无需知识库的普通回答构建带历史的 runnable。"""
+        base_runnable = self.model.get_runnable(complexity=prepared.complexity or "simple")
+
+        def history_factory(session_id: str) -> SQLiteChatMessageHistory:
+            return self._get_session_history(
+                session_id,
+                request_id=prepared.request_id,
+                timestamp=prepared.timestamp,
+            )
+
+        return RunnableWithMessageHistory(
+            base_runnable,
+            history_factory,
+            input_messages_key="input",
+            history_messages_key="history",
+        )
 
     def _get_session_history(
             self,

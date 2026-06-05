@@ -33,6 +33,7 @@
     - `state_event`: 可选状态机事件，如 `run_start`、`interrupt`、`resume_respond`、`resume_reject`、`success`。
     - `hitl`: 可选 HITL 等待态；非等待场景为空。等待态包含 `interrupt_id`、`thread_id`、`reason`、`pending_action`、`proposed_tool_call`、`allowed_actions`、`suggested_responses`、`allow_freeform_response`、`resume_payload`、`metadata`；顶层 Agent wait 会在 `metadata` 中写入 `mode`、`react_run_id/current_turn_id` 或 `plan_run_id/current_step_id`。
     - `citations`: 统一引用列表，每项包含 `index`、`citation_id`、`namespace`、`source_kind`、`source_name`、`source_path`、`document_id`、`chunk_id`、`chunk_index`、`snippet`、`score`、`vector_score`、`keyword_score`、`vector_rank`、`keyword_rank`、`matched_by`、`rank`。
+    - `retrieval_trace.final_decision`: Runtime 归一化后的最终决策，常见为 `answer_with_evidence`、`direct_answer`、`ask_user`、`max_rounds_reached`、`no_evidence`、`retrieval_failed`；`direct_answer` 表示 ReAct 判断无需调用 RAG，响应不返回 citations。
   - 流式 `stream=true`：
     - 响应头为 `Content-Type: text/event-stream`。
     - 事件类型为 `start`、`history`、`tool`、`chunk`、`waiting_user`、`done`、`error`，且 `data` 一律为 JSON。
@@ -49,6 +50,7 @@
 - `stream=true` 只会对“最终回答生成阶段”按 `chunk` 推送文本增量；但在生成回答前，服务端会先发送 `history` 和 `tool` 事件用于暴露可观测上下文。
 - `/chat` 请求体不再接收检索数量参数；检索数量、最低相关性阈值、召回策略和 ReRank 接入位由当前 scene 的 `retrieval_policy` 控制。
 - `tool.data.retrieval_policy` 只包含可观测的策略配置摘要：`top_k`、`min_relevance_score`、`recall_strategy`、`no_hit_strategy`、`rerank_enabled`、`rerank_top_n`。
+- 普通问候、能力说明或不依赖知识库的问题可返回 `direct_answer`，此时 `retrieval_trace.tool_call_count = 0`、`knowledge_used = false`、`citations = []`。
 - 命中知识时，成功路径事件顺序通常为 `start -> history -> tool -> chunk... -> done`。
 - 无知识命中时，仍返回 SSE 成功态，事件顺序为 `start -> history -> tool -> chunk -> done`，其中 `tool.documents = 0`，`done.knowledge_used = false`。
 - HITL 澄清等待路径事件顺序为 `start -> history -> tool -> waiting_user`，不会在等待用户时生成 `chunk` 或 `done`；`waiting_user` 不是失败。

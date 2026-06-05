@@ -125,10 +125,12 @@ class ChatService(
     def chat(self, payload: ChatRequest) -> ChatResponse:
         """执行一次完整对话流程，并返回统一结构。"""
         prepared = self._prepare_chat_turn(payload)
-        hitl_response = self._try_create_hitl_wait_response(prepared)
-        if hitl_response is not None:
-            return hitl_response
-        answer, citations, run_id = self._generate_answer(prepared)
+        prepared, answer, citations, run_id, graph_state = self._generate_answer(prepared)
+        if graph_state.get("status") == "waiting_user":
+            return self._build_hitl_wait_response_from_graph_state(
+                prepared=prepared,
+                result_state=graph_state,
+            )
         self._persist_turn(prepared=prepared, answer=answer, citations=citations)
         return self._build_chat_response(
             prepared=prepared,
@@ -148,8 +150,30 @@ class ChatService(
         )
 
     def chat_stream(self, payload: ChatRequest) -> Iterator[ChatStreamEvent]:
-        """执行一次流式对话流程，并产出结构化事件。"""
+        """执行一次流式对话流程，并产出结构化 SSE 事件。
+
+        流程概览：
+        1. 准备回合上下文(session、场景、历史窗口)
+        2. 提前捕获历史快照(必须在 ChatGraph 写入本轮消息之前)
+        3. 通过 ChatGraph 完成完整的编排流程(模式选择、ReAct/Plan 执行、回答生成)
+        4. 依次产出 SSE 事件推送给前端
+        """
+        # ── 第1步：准备回合上下文 ──
+        # 将 API payload 解析为标准聊天回合，包含 session、场景配置、历史窗口等
         prepared = self._prepare_chat_turn(payload)
+
+        # ── 第2步：提前捕获历史快照 ──
+        # 记录的是"本轮 Agent 执行前，模型看到的历史消息"，
+        # 必须在 ChatGraph 写入本轮 human/ai 消息之前拿到，否则会被污染
+        history_event = self._build_history_event(prepared)
+
+        # ── 第3步：通过 ChatGraph 执行完整的编排流程 ──
+        # 图内依次完成：模式选择 → ReAct/Plan 分支执行 → 回答模式判定 → HITL 判断 → 生成最终回答
+        prepared, answer, citations, run_id, graph_state = self._generate_answer(prepared)
+
+        # ── 第4步：依次产出 SSE 事件 ──
+
+        # 通知前端：graph run 已创建，附带本轮元信息（session、场景、agent 模式等）
         yield self._map_graph_stream_event(
             "graph_run_created",
             {
@@ -161,65 +185,48 @@ class ChatService(
                 "agent_mode": prepared.agent_mode,
                 "state": "running",
                 "state_event": "run_start",
+                "run_id": run_id,
             },
         )
+
+        # 推送历史上下文快照，方便前端展示"模型看到了什么"
         yield self._map_graph_stream_event(
             "history_snapshot",
-            self._build_history_event(prepared),
+            history_event,
         )
+
+        # 推送 Agent/RAG 工具的检索结果和审计信息
+        # 即使 ReAct 没有调用工具，也会带上 direct_answer / no_evidence 等分支信息
         yield self._map_graph_stream_event(
             "retrieval_tool_result",
             self._build_tool_event(prepared),
         )
 
-        hitl_response = self._try_create_hitl_wait_response(prepared)
-        if hitl_response is not None:
+        # 如果 Agent 进入 HITL（人工确认）等待，SSE 流到此结束
+        # 后续需要前端调用 resume_stream 恢复同一个 checkpoint
+        if graph_state.get("status") == "waiting_user":
+            hitl_response = self._build_hitl_wait_response_from_graph_state(
+                prepared=prepared,
+                result_state=graph_state,
+            )
             yield self._map_graph_stream_event(
                 "human_waiting",
                 self._build_hitl_wait_event(hitl_response),
             )
             return
 
-        stream_run = self.graph_runtime.start_stream_run(
-            prepared=prepared,
-            history_loader=self._load_graph_seed_history,
-        )
-        try:
-            if prepared.answer_mode != "evidence_answer":
-                answer, citations = self._build_non_evidence_answer(prepared)
-                yield self._map_graph_stream_event("answer_chunk", {"delta": answer})
-            else:
-                answer_parts: list[str] = []
-                for chunk in self._stream_model_answer(prepared):
-                    answer_parts.append(chunk)
-                    yield self._map_graph_stream_event("answer_chunk", {"delta": chunk})
-                answer, citations = self._finalize_streamed_answer(prepared, answer_parts)
-        except ChatServiceError as exc:
-            self.graph_runtime.fail_stream_run(handle=stream_run, error=exc)
-            yield self._map_graph_stream_event(
-                "graph_run_failed",
-                {
-                    "code": exc.code,
-                    "message": exc.message,
-                    "request_id": exc.request_id,
-                    "run_id": stream_run.run_id,
-                    "final_state": "failed",
-                },
-            )
-            return
+        # 推送最终回答（完整文本作为一个 chunk 发出）
+        yield self._map_graph_stream_event("answer_chunk", {"delta": answer})
 
-        self.graph_runtime.complete_stream_run(
-            handle=stream_run,
-            answer=answer,
-            citations=citations,
-            knowledge_used=prepared.knowledge_used,
-        )
+        # 持久化本轮对话记录（会话记忆，非 graph checkpoint）
         self._persist_turn(prepared=prepared, answer=answer, citations=citations)
+
+        # 推送完成事件，携带完整的响应体
         response = self._build_chat_response(
             prepared=prepared,
             answer=answer,
             citations=citations,
-            run_id=stream_run.run_id,
+            run_id=run_id,
         )
         yield self._map_graph_stream_event("graph_run_succeeded", response.model_dump())
 
@@ -443,7 +450,3 @@ def create_chat_service(
         model=model,
         graph_runtime=graph_runtime,
     )
-
-
-
-

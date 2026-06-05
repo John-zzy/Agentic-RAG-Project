@@ -455,9 +455,14 @@ def test_generic_assistant_chat_resume_respond_continues_retrieval_with_clarific
     assert response.resume_payload.response == "安全合规政策"
     assert response.resume_payload.source == "freeform"
     assert [call["query"] for call in document_service.calls] == ["你好", "安全合规政策"]
-    assert len(model.invoke_runnable_calls) == 2
-    assert model.invoke_runnable_calls[0]["input"]["user_message"] == "你好"
-    assert "安全合规政策" in str(model.invoke_runnable_calls[1]["input"])
+    business_calls = [
+        call
+        for call in model.invoke_runnable_calls
+        if "react_allowed_tools_json" not in call["input"]
+    ]
+    assert len(business_calls) == 2
+    assert business_calls[0]["input"]["user_message"] == "你好"
+    assert "安全合规政策" in str(business_calls[1]["input"])
     assert service.session_store.count_messages(response.session_id) == 2
 
 

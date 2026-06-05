@@ -187,6 +187,11 @@ def test_runtime_graph_state_exposes_minimal_chat_execution_fields() -> None:
         "current_turn_id",
         "current_step_id",
         "current_tool_call",
+        "documents",
+        "tool_event",
+        "final_decision",
+        "follow_up_question",
+        "tool_observation",
     }
 
     state = build_runtime_graph_state(
@@ -224,6 +229,11 @@ def test_runtime_graph_state_exposes_minimal_chat_execution_fields() -> None:
     assert state["current_turn_id"] is None
     assert state["current_step_id"] is None
     assert state["current_tool_call"] is None
+    assert state["documents"] == []
+    assert state["tool_event"] is None
+    assert state["final_decision"] is None
+    assert state["follow_up_question"] is None
+    assert state["tool_observation"] is None
 
 
 def test_runtime_graph_state_defaults_keep_non_evidence_branches_representable() -> None:
@@ -261,6 +271,11 @@ def test_runtime_graph_state_defaults_keep_non_evidence_branches_representable()
         "current_turn_id": None,
         "current_step_id": None,
         "current_tool_call": None,
+        "documents": [],
+        "tool_event": None,
+        "final_decision": None,
+        "follow_up_question": None,
+        "tool_observation": None,
     }
 
 
@@ -611,6 +626,51 @@ def test_chat_graph_runtime_tolerates_legacy_checkpoint_without_agent_fields() -
     assert loaded["agent_mode"] is None
     assert loaded["react_run"] is None
     assert loaded["plan_run"] is None
+
+
+def test_chat_graph_runtime_reload_preserves_extended_agent_state_fields() -> None:
+    runtime = _build_chat_graph_runtime("runtime-graph-extended-agent-state")
+    config = build_runtime_graph_config(
+        session_id="session-extended-agent-state",
+        request_id="req-extended-agent-state",
+    )
+    document = Document(
+        page_content="Graph state 文档内容。",
+        metadata={"citation_id": "chunk-extended"},
+    )
+    state = build_runtime_graph_state(
+        session_id="session-extended-agent-state",
+        request_id="req-extended-agent-state",
+        documents=[document],
+        tool_event={"stage": "tool_done", "documents": 1},
+        final_decision="ask_user",
+        follow_up_question="请补充查询范围。",
+        tool_observation={
+            "tool_name": "native_rag_search",
+            "success": False,
+        },
+    )
+    runtime._persist_state_update(  # noqa: SLF001 - 验证 checkpoint 字段 round-trip。
+        state=state,
+        config=config,
+        update=state,
+    )
+
+    loaded = runtime._load_or_build_thread_state(  # noqa: SLF001 - 验证 checkpoint 回读字段。
+        session_id="session-extended-agent-state",
+        request_id="req-extended-agent-state",
+        config=config,
+        require_checkpoint=True,
+    )
+
+    assert loaded["documents"][0].page_content == "Graph state 文档内容。"
+    assert loaded["tool_event"] == {"stage": "tool_done", "documents": 1}
+    assert loaded["final_decision"] == "ask_user"
+    assert loaded["follow_up_question"] == "请补充查询范围。"
+    assert loaded["tool_observation"] == {
+        "tool_name": "native_rag_search",
+        "success": False,
+    }
 
 
 def test_chat_graph_runtime_seeds_legacy_history_only_without_checkpoint() -> None:

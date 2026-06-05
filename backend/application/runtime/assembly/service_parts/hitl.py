@@ -38,7 +38,41 @@ class ChatHitlMixin:
             wait=self._build_hitl_wait_input(prepared=prepared, wait_plan=wait_plan),
             interrupt_id=wait_plan.interrupt_id,
         )
-        hitl_payload = result.state.get("hitl")
+        return self._build_hitl_wait_response_from_graph_state(
+            prepared=prepared,
+            result_state=result.state,
+        )
+
+    def _build_hitl_wait_update_for_graph(
+            self,
+            prepared: PreparedChatTurn,
+            state: RuntimeGraphState,
+    ) -> dict[str, Any]:
+        """ChatGraph 内部把 ask_user/follow_up 分支转为 waiting_user。"""
+        resolved_prepared = self._prepared_from_graph_state(prepared, state)
+        planner = self._resolve_hitl_planner(resolved_prepared)
+        if not planner.should_wait_for_clarification(resolved_prepared):
+            return {}
+        wait_plan = planner.build_clarification_wait(resolved_prepared)
+        wait = self._build_hitl_wait_input(
+            prepared=resolved_prepared,
+            wait_plan=wait_plan,
+        )
+        return self.graph_runtime.build_hitl_wait_update(
+            wait=wait,
+            interrupt_id=wait_plan.interrupt_id,
+            state=state,
+            run_id=str(state.get("run_id") or ""),
+        )
+
+    def _build_hitl_wait_response_from_graph_state(
+            self,
+            *,
+            prepared: PreparedChatTurn,
+            result_state: Mapping[str, Any],
+    ) -> ChatResponse:
+        """基于已有 waiting_user graph state 构造 API 响应，不再创建第二个 run。"""
+        hitl_payload = result_state.get("hitl")
         if hitl_payload is None:
             raise ChatServiceError(
                 status_code=500,
@@ -49,7 +83,7 @@ class ChatHitlMixin:
         return self._build_hitl_wait_response(
             prepared=prepared,
             hitl=HitlState(**hitl_payload),
-            result_state=result.state,
+            result_state=result_state,
         )
 
     def _build_hitl_wait_input(

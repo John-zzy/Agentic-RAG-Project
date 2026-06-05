@@ -221,7 +221,7 @@ class RetrievalTrace(BaseModel):
         default=None,
         description=(
             "Runtime 归一化后的最终业务决策，例如 answer_with_evidence、ask_user、"
-            "max_rounds_reached、no_evidence、retrieval_failed。"
+            "direct_answer、max_rounds_reached、no_evidence、retrieval_failed。"
         ),
     )
     success: bool | None = Field(

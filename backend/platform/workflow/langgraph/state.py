@@ -81,6 +81,11 @@ class RuntimeGraphState(TypedDict):
     current_turn_id: NotRequired[str | None]
     current_step_id: NotRequired[str | None]
     current_tool_call: NotRequired[dict[str, Any] | None]
+    documents: NotRequired[list[Any]]
+    tool_event: NotRequired[dict[str, Any] | None]
+    final_decision: NotRequired[str | None]
+    follow_up_question: NotRequired[str | None]
+    tool_observation: NotRequired[dict[str, Any] | None]
 
 
 def build_runtime_hitl_state(
@@ -149,6 +154,11 @@ def build_runtime_graph_state(
     current_turn_id: str | None = None,
     current_step_id: str | None = None,
     current_tool_call: Mapping[str, Any] | None = None,
+    documents: Sequence[Any] | None = None,
+    tool_event: Mapping[str, Any] | None = None,
+    final_decision: str | None = None,
+    follow_up_question: str | None = None,
+    tool_observation: Mapping[str, Any] | None = None,
 ) -> RuntimeGraphState:
     """创建一份可以保存到 checkpoint 的 graph 状态。"""
     if not session_id:
@@ -187,4 +197,9 @@ def build_runtime_graph_state(
         "current_turn_id": current_turn_id,
         "current_step_id": current_step_id,
         "current_tool_call": dict(current_tool_call) if current_tool_call else None,
+        "documents": list(documents or ()),
+        "tool_event": dict(tool_event) if tool_event else None,
+        "final_decision": final_decision,
+        "follow_up_question": follow_up_question,
+        "tool_observation": dict(tool_observation) if tool_observation else None,
     }

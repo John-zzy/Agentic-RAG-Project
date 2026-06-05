@@ -48,9 +48,19 @@ class ChatStreamEventMixin:
             "retrieval_trace": prepared.retrieval_trace.model_dump(),
             "react_run": prepared.react_run,
             "plan_run": prepared.plan_run,
-            "current_turn_id": prepared.current_turn_id,
-            "current_step_id": prepared.current_step_id,
-            "current_tool_call": prepared.current_tool_call,
+            "current_turn_id": prepared.current_turn_id
+            or (
+                self._event_turn_id_from_payload(prepared)
+                if prepared.agent_mode != "plan"
+                else None
+            ),
+            "current_step_id": prepared.current_step_id
+            or (
+                self._event_step_id_from_payload(prepared)
+                if prepared.agent_mode == "plan"
+                else None
+            ),
+            "current_tool_call": self._event_current_tool_call(prepared),
             "tool_observation": prepared.tool_observation,
         }
 
@@ -256,6 +266,23 @@ class ChatStreamEventMixin:
     def _event_step_id_from_payload(self, prepared: PreparedChatTurn) -> str:
         step = self._event_plan_step(prepared)
         return str((step or {}).get("step_id") or "")
+
+    def _event_current_tool_call(self, prepared: PreparedChatTurn) -> dict[str, Any] | None:
+        if isinstance(prepared.current_tool_call, Mapping):
+            return dict(prepared.current_tool_call)
+        observation = prepared.tool_observation
+        if not isinstance(observation, Mapping):
+            return None
+        execution = observation.get("execution")
+        if isinstance(execution, Mapping):
+            return dict(execution)
+        tool_name = observation.get("tool_name")
+        if tool_name is None:
+            return None
+        return {
+            "tool_name": str(tool_name),
+            "tool_call_id": observation.get("tool_call_id"),
+        }
 
 
 

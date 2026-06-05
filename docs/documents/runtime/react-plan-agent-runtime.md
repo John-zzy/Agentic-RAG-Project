@@ -19,10 +19,10 @@
 
 1. 入口层：`POST /chat` 收到用户问题。
 2. 运行层：`ChatService` 把这次请求整理成一个运行上下文。
-3. 编排层：`ModeSelector` 决定走 ReAct 还是 Plan。
-4. 执行层：`ToolExecutor` 真正调用工具，RAG 只是其中一种工具。
+3. 编排层：`ChatGraphRuntime` / `ChatGraph` 选择 ReAct、Plan 或 direct/fallback 分支。
+4. 执行层：ReAct/Plan 分支通过 `ToolExecutor` 真正调用工具，RAG 只是其中一种工具。
 
-最后，`ChatGraphRuntime` 把这次运行写入 checkpoint，SSE 或普通 JSON 只是不同的输出方式。
+最后，`ChatGraphRuntime` 把这次运行写入 checkpoint，SSE 或普通 JSON 只是不同的输出方式。同步 `/chat` 的 Agent 执行发生在 ChatGraph 分支内；流式 `/chat` 为了保留逐 token SSE，会先解析 Agent 结果再创建流式 checkpoint。
 
 ## 主链路图怎么读
 
@@ -31,8 +31,8 @@
 1. 用户发起 `/chat`。
 2. `ActiveSceneChatService` 根据会话找到当前 scene。
 3. `ChatService` 准备消息、request id、知识源和运行上下文。
-4. `ModeSelector` 判断这次更像 ReAct 还是 Plan。
-5. ReAct 或 Plan 只负责“怎么决定下一步”，真正执行工具还是交给 `ToolExecutor`。
+4. `ChatGraph.select_mode` 调用 `ModeSelector` 判断这次更像 ReAct 还是 Plan。
+5. `react_branch` 或 `plan_branch` 负责执行 Agent，真正执行工具还是交给 `ToolExecutor`。
 6. 如果工具是 RAG，那么 RAG 内部还会继续做 query rewrite、检索、rerank、证据判断。
 7. 最后把工具结果汇总成回答、引用和 trace。
 
@@ -47,7 +47,7 @@
 
 你可以把这一步理解成“先把场景、上下文、工具范围整理好”，还没开始真正回答问题。
 
-实际的 Agent 编排入口在 [ChatAgentRuntimeMixin](</d:/Programs/interview-projects/ai-rag-project/backend/application/runtime/assembly/service_parts/agent_runtime.py:44>)。这里会做三件事：
+同步请求的 Agent 编排入口在 [ChatGraphRuntime.invoke](</d:/Programs/interview-projects/ai-rag-project/backend/application/runtime/assembly/runtime_factory.py:58>) 编译出的 ChatGraph。图节点通过 application 注入的回调复用 [ChatAgentRuntimeMixin](</d:/Programs/interview-projects/ai-rag-project/backend/application/runtime/assembly/service_parts/agent_runtime.py:44>) 能力。这里会做三件事：
 
 - 组装可用工具。
 - 选择 ReAct 或 Plan。
@@ -87,6 +87,8 @@ ReAct 的核心代码在 [ReActRuntime](</d:/Programs/interview-projects/ai-rag-
 3. `ToolExecutor` 执行真正的工具调用。
 4. 工具结果写回 `ReActTurn` 和 `ReActRun`。
 5. 如果还没结束，就进入下一轮；如果够了，就汇总成最终回答。
+
+如果 ReAct 判断当前问题不依赖知识库，可以直接选择 `final_answer`。这类请求会被归一化为 `direct_answer`，不会调用 RAG，也不会返回 citations。
 
 相关数据结构在 [ReActRun](</d:/Programs/interview-projects/ai-rag-project/backend/platform/agent_runtime/contracts.py:141>) 和 [ReActTurn](</d:/Programs/interview-projects/ai-rag-project/backend/platform/agent_runtime/contracts.py:114>)。
 

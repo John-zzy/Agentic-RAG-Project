@@ -12,6 +12,8 @@ def build_select_mode_node(dependencies: ChatGraphDependencies):
     prepared = dependencies.prepared
 
     def select_mode(state: RuntimeGraphState) -> dict[str, Any]:
+        if dependencies.select_agent_mode is not None and not state.get("agent_mode"):
+            return dependencies.select_agent_mode(prepared)
         agent_mode_reason = state.get("agent_mode_reason") or getattr(
             prepared,
             "agent_mode_reason",

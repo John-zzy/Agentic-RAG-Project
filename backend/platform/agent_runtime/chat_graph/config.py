@@ -17,5 +17,14 @@ class ChatGraphDependencies:
         [RuntimeGraphState, str, list[Any], bool],
         dict[str, Any],
     ]
-
+    select_agent_mode: Callable[[PreparedChatTurn], dict[str, Any]] | None = None
+    run_agent_runtime: Callable[[PreparedChatTurn, RuntimeGraphState], dict[str, Any]] | None = None
+    build_prepared_from_state: Callable[
+        [PreparedChatTurn, RuntimeGraphState],
+        PreparedChatTurn,
+    ] | None = None
+    build_hitl_wait_update: Callable[
+        [PreparedChatTurn, RuntimeGraphState],
+        dict[str, Any],
+    ] | None = None
 

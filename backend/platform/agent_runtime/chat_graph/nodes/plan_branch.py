@@ -15,6 +15,8 @@ def build_plan_branch_node(dependencies: ChatGraphDependencies):
         if str(state.get("agent_mode") or prepared.agent_mode) != "plan":
             return {}
         plan_run = state.get("plan_run") or getattr(prepared, "plan_run", None)
+        if plan_run is None and dependencies.run_agent_runtime is not None:
+            return dependencies.run_agent_runtime(prepared, state)
         if plan_run is None:
             return {}
         return {

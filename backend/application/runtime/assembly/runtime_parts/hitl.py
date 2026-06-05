@@ -48,43 +48,20 @@ class HitlRuntimeMixin:
             self.lifecycle.mark_planning(run)
         self.lifecycle.mark_running(run)
         try:
-            self._validate_hitl_wait(wait)
-            hitl = build_runtime_hitl_state(
-                interrupt_id=interrupt_id,
-                thread_id=wait.session_id,
-                reason=wait.reason,
-                pending_action=wait.pending_action,
-                allowed_actions=wait.allowed_actions,
-                proposed_tool_call=wait.proposed_tool_call,
-                suggested_responses=wait.suggested_responses,
-                allow_freeform_response=wait.allow_freeform_response,
-                metadata=wait.metadata,
-            )
             state = self._load_or_build_thread_state(
                 session_id=wait.session_id,
                 request_id=wait.request_id,
                 config=config,
             )
-            orchestration_update = self._build_agent_runtime_wait_update(
-                wait=wait,
-                hitl=hitl,
-            )
             output = self._persist_state_update(
                 state=state,
                 config=config,
-                update={
-                    "request_id": wait.request_id,
-                    "status": "waiting_user",
-                    "run_id": run.run_id,
-                    "state_event": "interrupt",
-                    "final_state": None,
-                    "hitl": hitl,
-                    "metadata": {
-                        **dict(state.get("metadata") or {}),
-                        **dict(config["metadata"]),
-                    },
-                    **orchestration_update,
-                },
+                update=self.build_hitl_wait_update(
+                    wait=wait,
+                    interrupt_id=interrupt_id,
+                    state=state,
+                    run_id=run.run_id,
+                ),
             )
         except Exception as exc:
             self.lifecycle.mark_failed(run, exc)
@@ -92,6 +69,48 @@ class HitlRuntimeMixin:
 
         self.lifecycle.mark_waiting_user(run)
         return HitlRuntimeResult(state=output, config=config, run_id=run.run_id)
+
+    def build_hitl_wait_update(
+        self,
+        *,
+        wait: HitlWaitInput,
+        interrupt_id: str,
+        state: RuntimeGraphState,
+        run_id: str,
+    ) -> dict[str, Any]:
+        """构造 waiting_user checkpoint 更新，供 graph interrupt 和兼容入口复用。"""
+        self._validate_hitl_wait(wait)
+        hitl = build_runtime_hitl_state(
+            interrupt_id=interrupt_id,
+            thread_id=wait.session_id,
+            reason=wait.reason,
+            pending_action=wait.pending_action,
+            allowed_actions=wait.allowed_actions,
+            proposed_tool_call=wait.proposed_tool_call,
+            suggested_responses=wait.suggested_responses,
+            allow_freeform_response=wait.allow_freeform_response,
+            metadata=wait.metadata,
+        )
+        orchestration_update = self._build_agent_runtime_wait_update(
+            wait=wait,
+            hitl=hitl,
+        )
+        return {
+            "request_id": wait.request_id,
+            "answer": wait.reason,
+            "knowledge_used": False,
+            "citations": [],
+            "status": "waiting_user",
+            "run_id": run_id,
+            "state_event": "interrupt",
+            "final_state": None,
+            "hitl": hitl,
+            "metadata": {
+                **dict(state.get("metadata") or {}),
+                **dict(wait.metadata or {}),
+            },
+            **orchestration_update,
+        }
 
     def resume_hitl(
         self,
@@ -318,6 +337,11 @@ class HitlRuntimeMixin:
             current_turn_id=values.get("current_turn_id"),
             current_step_id=values.get("current_step_id"),
             current_tool_call=values.get("current_tool_call"),
+            documents=values.get("documents"),
+            tool_event=values.get("tool_event"),
+            final_decision=values.get("final_decision"),
+            follow_up_question=values.get("follow_up_question"),
+            tool_observation=values.get("tool_observation"),
         )
 
     def _validate_hitl_resume(
@@ -604,6 +628,11 @@ class HitlRuntimeMixin:
             "current_turn_id",
             "current_step_id",
             "current_tool_call",
+            "documents",
+            "tool_event",
+            "final_decision",
+            "follow_up_question",
+            "tool_observation",
         ):
             if key in response_result:
                 update[key] = response_result[key]

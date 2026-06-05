@@ -7,8 +7,9 @@ from typing import Any, Protocol
 from langchain_core.messages import BaseMessage
 
 from backend.application.runtime.api.chat.schemas import Citation
-from backend.platform.workflow.langgraph.lifecycle import GraphRunRef
 from backend.platform.workflow.langgraph.state import RuntimeGraphState
+
+
 class PreparedGraphTurn(Protocol):
     """ChatService 准备好一轮聊天后，交给 graph runtime 使用的数据。"""
 
@@ -89,20 +90,5 @@ class RuntimeGraphResult:
     state: RuntimeGraphState
     config: dict[str, Any]
     run_id: str
-
-
-@dataclass(frozen=True)
-class RuntimeGraphRunHandle:
-    """流式路径持有的 graph run 句柄，用于后续完成或失败状态写入。"""
-
-    run: GraphRunRef
-    state: RuntimeGraphState
-    config: dict[str, Any]
-
-    @property
-    def run_id(self) -> str:
-        """返回当前 graph run ID，方便 API/SSE 关联。"""
-        return self.run.run_id
-
 
 

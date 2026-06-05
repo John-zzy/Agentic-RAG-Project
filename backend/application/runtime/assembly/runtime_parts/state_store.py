@@ -84,6 +84,11 @@ class RuntimeStateStoreMixin:
             current_turn_id=getattr(prepared, "current_turn_id", None),
             current_step_id=getattr(prepared, "current_step_id", None),
             current_tool_call=getattr(prepared, "current_tool_call", None),
+            documents=getattr(prepared, "documents", None),
+            tool_event=getattr(prepared, "tool_event", None),
+            final_decision=getattr(prepared, "final_decision", None),
+            follow_up_question=getattr(prepared, "follow_up_question", None),
+            tool_observation=getattr(prepared, "tool_observation", None),
         )
 
     def _persist_state_update(
@@ -153,6 +158,11 @@ class RuntimeStateStoreMixin:
             current_turn_id=values.get("current_turn_id"),
             current_step_id=values.get("current_step_id"),
             current_tool_call=values.get("current_tool_call"),
+            documents=values.get("documents"),
+            tool_event=values.get("tool_event"),
+            final_decision=values.get("final_decision"),
+            follow_up_question=values.get("follow_up_question"),
+            tool_observation=values.get("tool_observation"),
         )
     def _history_seed(
         self,

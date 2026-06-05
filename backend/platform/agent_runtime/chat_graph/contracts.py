@@ -6,7 +6,6 @@ from typing import Any, Protocol
 
 from langchain_core.messages import BaseMessage
 
-from backend.platform.workflow.langgraph.lifecycle import GraphRunRef
 from backend.platform.workflow.langgraph.state import RuntimeGraphState
 
 _HITL_PENDING_ACTIONS = {"tool_approval", "external_api_approval", "clarification"}
@@ -103,17 +102,3 @@ class RuntimeGraphResult:
     state: RuntimeGraphState
     config: dict[str, Any]
     run_id: str
-
-
-@dataclass(frozen=True)
-class RuntimeGraphRunHandle:
-    """流式路径持有的 graph run 句柄，用于后续完成或失败状态写入。"""
-
-    run: GraphRunRef
-    state: RuntimeGraphState
-    config: dict[str, Any]
-
-    @property
-    def run_id(self) -> str:
-        """返回当前 graph run ID，方便 API/SSE 关联。"""
-        return self.run.run_id

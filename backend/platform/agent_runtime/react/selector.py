@@ -128,6 +128,11 @@ REACT_ACTION_SELECTION_PROMPT = PromptTemplate.from_template(
 - 不要输出 schema 之外的字段。
 - rationale_summary 只写简短可审计摘要，不要暴露隐藏推理链。
 
+动作选择策略：
+- 用户明确提到文档、知识库、上传资料、根据资料、引用、证据、制度、文件内容等需要外部知识的问题时，优先选择合适的 RAG/search 工具。
+- 用户只是问候、询问助手能力、普通闲聊、通用写作或不依赖已挂载知识源的问题时，可以选择 final_answer，不要为了形式调用 RAG。
+- 如果目标依赖知识源但范围不清楚，优先 ask_user；如果已有工具观察且足够回答，再选择 final_answer。
+
 当前用户目标：
 {react_user_goal}
 

@@ -1,6 +1,7 @@
 ﻿from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import replace
 from typing import Any
 
 from langchain_core.documents import Document
@@ -41,11 +42,124 @@ from backend.platform.agent_runtime.react import (
 )
 from backend.platform.agent_runtime.react.selector import ReActSelectorError
 from backend.platform.agent_runtime.tool_executor import ToolExecutor
+from backend.platform.knowledge.sources import DEFAULT_MOUNTED_KNOWLEDGE_SOURCES
 from backend.platform.models.base.router import TaskComplexity
 from backend.scenes.base import SceneRetrievalPolicy
 
 
 class ChatAgentRuntimeMixin:
+    def _select_agent_mode_for_graph(self, prepared: PreparedChatTurn) -> dict[str, Any]:
+        selection = self._select_agent_mode(
+            message=prepared.user_message,
+            complexity=prepared.complexity,
+            mounted_knowledge_sources=self._mounted_knowledge_sources_for_session(
+                prepared.session_id
+            ),
+        )
+        return {
+            "agent_mode": selection.mode,
+            "agent_mode_reason": selection.reason,
+            "agent_mode_signals": dict(selection.signals),
+        }
+
+    def _run_agent_runtime_for_graph(
+            self,
+            prepared: PreparedChatTurn,
+            state: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        mode = str(state.get("agent_mode") or prepared.agent_mode)
+        mode_selection = ModeSelection(
+            mode="plan" if mode == "plan" else "react",
+            reason=str(state.get("agent_mode_reason") or prepared.agent_mode_reason),
+            signals=dict(state.get("agent_mode_signals") or prepared.agent_mode_signals or {}),
+        )
+        agent_result = self._execute_agent_runtime(
+            session_id=prepared.session_id,
+            request_id=prepared.request_id,
+            message=prepared.user_message,
+            complexity=prepared.complexity,
+            mounted_knowledge_sources=self._mounted_knowledge_sources_for_session(
+                prepared.session_id
+            ),
+            mode_selection=mode_selection,
+        )
+        return self._graph_state_update_from_agent_result(
+            agent_result=agent_result,
+            mode_selection=mode_selection,
+        )
+
+    def _prepared_from_graph_state(
+            self,
+            prepared: PreparedChatTurn,
+            state: Mapping[str, Any],
+    ) -> PreparedChatTurn:
+        citations = [
+            citation if isinstance(citation, Citation) else Citation.model_validate(citation)
+            for citation in list(state.get("citations") or prepared.citations)
+        ]
+        retrieval_trace_value = state.get("retrieval_trace") or prepared.retrieval_trace
+        retrieval_trace = (
+            retrieval_trace_value
+            if isinstance(retrieval_trace_value, RetrievalTrace)
+            else RetrievalTrace.model_validate(retrieval_trace_value)
+        )
+        return replace(
+            prepared,
+            documents=list(state.get("documents") or prepared.documents),
+            tool_event=dict(state.get("tool_event") or prepared.tool_event),
+            retrieval_trace=retrieval_trace,
+            citations=citations,
+            knowledge_used=bool(state.get("knowledge_used", prepared.knowledge_used)),
+            final_decision=state.get("final_decision") or prepared.final_decision,
+            follow_up_question=state.get("follow_up_question") or prepared.follow_up_question,
+            answer_mode=str(state.get("answer_mode") or prepared.answer_mode),
+            agent_mode=str(state.get("agent_mode") or prepared.agent_mode),
+            agent_mode_reason=str(
+                state.get("agent_mode_reason") or prepared.agent_mode_reason
+            ),
+            agent_mode_signals=dict(
+                state.get("agent_mode_signals") or prepared.agent_mode_signals or {}
+            ),
+            react_run=state.get("react_run") or prepared.react_run,
+            plan_run=state.get("plan_run") or prepared.plan_run,
+            current_turn_id=state.get("current_turn_id") or prepared.current_turn_id,
+            current_step_id=state.get("current_step_id") or prepared.current_step_id,
+            current_tool_call=state.get("current_tool_call") or prepared.current_tool_call,
+            tool_observation=state.get("tool_observation") or prepared.tool_observation,
+        )
+
+    def _mounted_knowledge_sources_for_session(self, session_id: str) -> tuple[str, ...]:
+        session = self.session_store.get_session(session_id)
+        if session is None:
+            return tuple(DEFAULT_MOUNTED_KNOWLEDGE_SOURCES)
+        return tuple(session.mounted_knowledge_sources)
+
+    def _graph_state_update_from_agent_result(
+            self,
+            *,
+            agent_result: AgentRuntimeExecutionResult,
+            mode_selection: ModeSelection,
+    ) -> dict[str, Any]:
+        return {
+            "documents": list(agent_result.documents),
+            "tool_event": dict(agent_result.tool_event),
+            "retrieval_trace": agent_result.retrieval_trace.model_dump(),
+            "citations": [citation.model_dump() for citation in agent_result.citations],
+            "knowledge_used": agent_result.knowledge_used,
+            "final_decision": agent_result.final_decision,
+            "follow_up_question": agent_result.follow_up_question,
+            "answer_mode": agent_result.answer_mode,
+            "agent_mode": mode_selection.mode,
+            "agent_mode_reason": mode_selection.reason,
+            "agent_mode_signals": dict(mode_selection.signals),
+            "react_run": agent_result.react_run,
+            "plan_run": agent_result.plan_run,
+            "current_turn_id": agent_result.current_turn_id,
+            "current_step_id": agent_result.current_step_id,
+            "current_tool_call": agent_result.current_tool_call,
+            "tool_observation": agent_result.tool_observation,
+        }
+
     def _execute_agent_runtime(
             self,
             *,
@@ -57,19 +171,23 @@ class ChatAgentRuntimeMixin:
             mode_selection: ModeSelection,
     ) -> AgentRuntimeExecutionResult:
         """通过顶层 ReAct/Plan Runtime 执行工具，而不是在 /chat 前置检索。"""
+        # 构建工具执行器，绑定已挂载的知识源，供后续 Agent 调用
         tool_executor = self._build_agent_tool_executor(
             mounted_knowledge_sources=mounted_knowledge_sources
         )
 
         if mode_selection.mode == "plan":
+            # 根据工具执行器和请求上下文，选择合适的 RAG 工具名称
             tool_name = self._select_rag_tool_name(
                 tool_executor=tool_executor,
                 request_id=request_id,
             )
+            # 根据用户消息和已挂载的知识源，构建 RAG 工具的输入参数
             tool_input = self._build_rag_tool_input(
                 message=message,
                 mounted_knowledge_sources=mounted_knowledge_sources,
             )
+            # 以 Plan 模式运行 Agent：先制定执行计划，再按步骤调用工具
             plan_run = self._run_plan_agent(
                 tool_executor=tool_executor,
                 session_id=session_id,
@@ -79,6 +197,7 @@ class ChatAgentRuntimeMixin:
                 tool_name=tool_name,
                 tool_input=tool_input,
             )
+            # 将 Plan Agent 的运行结果转换为统一的执行结果
             return self._agent_execution_result_from_run(
                 message=message,
                 complexity=complexity,
@@ -86,6 +205,7 @@ class ChatAgentRuntimeMixin:
                 plan_run=plan_run,
             )
 
+        # 以 ReAct 模式运行 Agent：推理（Reason）与行动（Act）交替进行，逐步完成任务
         react_run = self._run_react_agent(
             tool_executor=tool_executor,
             session_id=session_id,
@@ -94,6 +214,7 @@ class ChatAgentRuntimeMixin:
             mounted_knowledge_sources=mounted_knowledge_sources,
             complexity=complexity,
         )
+        # 将 ReAct Agent 的运行结果转换为统一的执行结果
         return self._agent_execution_result_from_run(
             message=message,
             complexity=complexity,
@@ -170,22 +291,18 @@ class ChatAgentRuntimeMixin:
             mounted_knowledge_sources: tuple[str, ...],
             complexity: TaskComplexity | None,
     ) -> ReActRun:
-        if self.scene_definition.scene == "generic_assistant":
-            return self._run_direct_react_retrieval(
-                tool_executor=tool_executor,
-                session_id=session_id,
-                request_id=request_id,
-                message=message,
-                mounted_knowledge_sources=mounted_knowledge_sources,
-                complexity=complexity,
-            )
+        """运行 ReAct Agent：推理（Reason）与行动（Act）交替进行，逐步完成任务。"""
+        # 构建场景策略：定义该场景下可用的工具集、最大轮次等约束
         scene_policy = self._build_react_scene_policy(
             tool_executor=tool_executor,
             message=message,
             mounted_knowledge_sources=mounted_knowledge_sources,
         )
+
+        # 初始化 ReAct 运行时：注入工具执行器、LLM 动作选择器和场景策略
         runtime = ReActRuntime(
             tool_executor=tool_executor,
+            # LLM 驱动的动作选择器，根据任务复杂度选择不同的模型参数
             action_selector=LLMReActActionSelector(
                 model_client=self.model,
                 model_complexity=complexity or "simple",
@@ -194,7 +311,9 @@ class ChatAgentRuntimeMixin:
             turn_id_factory=lambda index: f"turn-{index}",
             max_turns=scene_policy.max_turns,
         )
+
         try:
+            # 启动 ReAct 循环，逐轮执行推理和工具调用
             react_run = runtime.run(
                 session_id=session_id,
                 request_id=request_id,
@@ -202,6 +321,7 @@ class ChatAgentRuntimeMixin:
                 react_run_id=f"react-{request_id}",
             )
         except ReActSelectorError:
+            # LLM 动作选择器出错（如解析失败），降级为直接检索流程
             return self._run_direct_react_retrieval(
                 tool_executor=tool_executor,
                 session_id=session_id,
@@ -211,6 +331,7 @@ class ChatAgentRuntimeMixin:
                 complexity=complexity,
             )
 
+        # Agent 进入等待用户输入状态，且最新一轮选择器出错，降级为直接检索
         if react_run.workflow_status == "waiting_user" and react_run.metadata.get("latest_selector_failure"):
             return self._run_direct_react_retrieval(
                 tool_executor=tool_executor,
@@ -220,6 +341,7 @@ class ChatAgentRuntimeMixin:
                 mounted_knowledge_sources=mounted_knowledge_sources,
                 complexity=complexity,
             )
+
         return react_run
 
     def _build_react_scene_policy(
@@ -657,6 +779,8 @@ class ChatAgentRuntimeMixin:
             action_type = turn.action.action_type if turn is not None else None
             if run.workflow_status == "waiting_user" or action_type == "ask_user":
                 return "ask_user"
+            if run.workflow_status == "succeeded" and action_type in {"final_answer", "stop"}:
+                return "direct_answer"
         return "no_evidence"
 
     def _follow_up_question_from_observationless_run(
@@ -1235,25 +1359,6 @@ class ChatAgentRuntimeMixin:
         """只允许最终决策和有效引用同时满足时进入证据回答链。"""
         return final_decision == "answer_with_evidence" and len(citations) > 0
 
-    def _build_prepared_retrieval_trace(
-            self,
-            *,
-            retrieval_trace: RetrievalTrace,
-            citations: list[Citation],
-            knowledge_used: bool,
-            final_decision: RuntimeFinalDecision | None,
-    ) -> RetrievalTrace:
-        """构造最终响应 trace，并保留轮次级诊断信息。"""
-        return retrieval_trace.model_copy(
-            update={
-                "citations": citations,
-                "knowledge_used": knowledge_used,
-                "final_decision": final_decision,
-                # 顶层 top_k_chunks 只代表最终采纳证据，非证据分支清空但保留 rounds。
-                "top_k_chunks": retrieval_trace.top_k_chunks if knowledge_used else [],
-            }
-        )
-
     def _resolve_prepared_final_decision(
             self,
             *,
@@ -1274,9 +1379,8 @@ class ChatAgentRuntimeMixin:
         """按最终证据采纳结果决定 answer branch。"""
         if knowledge_used:
             return "evidence_answer"
+        if final_decision == "direct_answer":
+            return "direct_answer"
         if final_decision == "ask_user":
             return "follow_up"
         return "fallback"
-
-
-

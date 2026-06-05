@@ -1,14 +1,21 @@
 flowchart TD
     A["POST /chat<br/>用户发送聊天请求"] --> B["ActiveSceneChatService.chat<br/>按 session.scene 找到 ChatService"]
-    B --> C["ChatService._prepare_chat_turn<br/>准备 request_id、session、消息"]
-    C --> C1["ChatTurnPreparationMixin._prepare_existing_session_turn<br/>读取 mounted_knowledge_sources"]
-    C1 --> C2["MinimalModeSelector.select<br/>判断简单问题还是复杂问题"]
+    B --> C["ChatService._prepare_chat_turn<br/>准备 request_id、session、mounted_knowledge_sources"]
+    C --> L1["ChatGraphRuntime.invoke<br/>创建 LangGraph run"]
+    L1 --> CG1["ChatGraph.prepare_turn<br/>写入 session + context"]
+    CG1 --> CG2["ChatGraph.select_mode<br/>调用 ModeSelector"]
+    CG2 --> CG3{"route_mode"}
 
-    C2 -->|react| R1["ReActRuntime.run<br/>简单问题直接选择下一次工具调用"]
-    C2 -->|plan| P1["MinimalPlanner.create_plan<br/>复杂问题先生成 PlanRun / PlanStep"]
-    P1 --> P2["PlanExecutor.execute<br/>按 depends_on 顺序执行步骤"]
+    CG3 -->|react| R1["react_branch<br/>调用 ReActRuntime"]
+    CG3 -->|plan| P1["plan_branch<br/>调用 MinimalPlanner + PlanExecutor"]
+    CG3 -->|direct / fallback| S0["resolve_answer_mode"]
 
-    R1 --> T["ToolExecutor.execute<br/>只调用当前场景允许的工具"]
+    R1 --> R2["LLMReActActionSelector<br/>选择 tool_call / ask_user / final_answer"]
+    R2 -->|tool_call| T["ToolExecutor.execute<br/>只调用当前场景允许的工具"]
+    R2 -->|final_answer| D1["direct_answer<br/>不调用 RAG，不返回 citations"]
+    R2 -->|ask_user| U1["follow_up / HITL<br/>等待用户补充"]
+
+    P1 --> P2["PlanExecutor.execute_step<br/>按 step 调用工具"]
     P2 --> T
     T --> T1{"tool_name"}
 
@@ -16,7 +23,7 @@ flowchart TD
     T1 -->|native_rag_search| G0["NativeRagToolAdapter.execute<br/>把 Native RAG 包装成工具"]
     T1 -->|scene tool| G2["Scene Tool.execute<br/>业务查询、写操作或 ask_user"]
     G2 --> G3{"requires_user?"}
-    G3 -->|true| H1["ChatGraphRuntime.create_hitl_wait<br/>暂停并进入 waiting_user"]
+    G3 -->|true| U1
     G3 -->|false| O1["ToolObservation<br/>记录工具输出"]
 
     subgraph ARAG["RAG 工具内部怎么查资料"]
@@ -36,19 +43,17 @@ flowchart TD
 
     A8 --> O1
     A9 --> O1
-    O1 --> S1["ChatAgentRuntimeMixin._agent_execution_result_from_observation<br/>整理 react_run 或 plan_run"]
-    S1 --> S2["PreparedChatTurn<br/>保存 citations、retrieval_trace、answer_mode"]
+    O1 --> S0
+    D1 --> S0
+    U1 --> S0
+    S0 --> S1["final_synthesis<br/>证据回答 / direct_answer / follow_up / fallback"]
+    S1 --> S2["persist_turn<br/>保存 checkpoint 与 Agent run state"]
+    S2 --> S3["ChatResponseMixin._persist_turn<br/>保存聊天历史"]
+    S3 --> S4["ChatResponse / ChatStreamEvent<br/>返回 JSON 或 SSE done"]
 
-    S2 --> L1["ChatGraphRuntime.invoke / start_stream_run<br/>创建 LangGraph run"]
-    L1 --> L2["AnswerGraphMixin._compile_answer_graph<br/>编译 answer node"]
-    L2 --> L3["SQLiteLangGraphCheckpointer.put<br/>保存 checkpoint，支持恢复"]
-    L3 --> L4["ChatAnsweringMixin._generate_answer<br/>生成证据回答、追问或兜底"]
-    L4 --> L5["ChatResponseMixin._persist_turn<br/>保存到聊天历史"]
-    L5 --> L6["ChatResponse / ChatStreamEvent<br/>返回 JSON 或 SSE done"]
-
-    H1 --> H2["HitlRuntimeMixin.create_hitl_wait<br/>保存 interrupt_id、turn_id 或 step_id"]
-    H2 --> H3["POST /chat/resume<br/>用户恢复等待点"]
-    H3 --> H4{"ChatResumeRequest.action"}
-    H4 -->|respond| C
-    H4 -->|approve| T
-    H4 -->|reject| H5["HitlRuntimeMixin.resume_hitl<br/>workflow=cancelled，turn 或 step 取消"]
+    U1 --> H1["HitlRuntimeMixin.create_hitl_wait<br/>保存 interrupt_id、turn_id 或 step_id"]
+    H1 --> H2["POST /chat/resume<br/>用户恢复等待点"]
+    H2 --> H3{"ChatResumeRequest.action"}
+    H3 -->|respond| C
+    H3 -->|approve| T
+    H3 -->|reject| H4["HitlRuntimeMixin.resume_hitl<br/>workflow=cancelled，turn 或 step 取消"]

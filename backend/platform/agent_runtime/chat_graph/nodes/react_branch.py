@@ -15,6 +15,8 @@ def build_react_branch_node(dependencies: ChatGraphDependencies):
         if str(state.get("agent_mode") or prepared.agent_mode) != "react":
             return {}
         react_run = state.get("react_run") or getattr(prepared, "react_run", None)
+        if react_run is None and dependencies.run_agent_runtime is not None:
+            return dependencies.run_agent_runtime(prepared, state)
         if react_run is None:
             return {}
         return {

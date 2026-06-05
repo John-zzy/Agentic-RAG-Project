@@ -17,7 +17,7 @@ def build_route_mode_edge(dependencies: ChatGraphDependencies):
 
     def route_mode(state: RuntimeGraphState) -> str:
         answer_mode = str(state.get("answer_mode") or "")
-        if answer_mode in {"follow_up", "fallback"}:
+        if state.get("final_decision") and answer_mode in {"direct_answer", "follow_up", "fallback"}:
             return RESOLVE_ANSWER_MODE
         agent_mode = str(state.get("agent_mode") or "react")
         if agent_mode == "plan":
