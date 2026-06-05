@@ -1,78 +1,112 @@
-flowchart LR
+%%{init: {"flowchart": {"curve": "basis", "nodeSpacing": 44, "rankSpacing": 72, "padding": 18}, "theme": "base", "themeVariables": {"fontFamily": "Inter, Segoe UI, Arial, sans-serif", "primaryTextColor": "#172033", "lineColor": "#64748B", "clusterBkg": "#FFFFFF", "clusterBorder": "#CBD5E1"}}}%%
+flowchart TB
+  TITLE["ChatGraph Runtime Architecture<br/>Main orchestration, mode subgraphs, and nested Agentic_RAG retrieval"]
+
   %% =====================
-  %% Top-level ChatGraph
+  %% Layer 01: ChatGraph
   %% =====================
-  subgraph CG[ChatGraph]
+  subgraph CG["01 ChatGraph | Main Orchestrator"]
     direction LR
-    CGS((START)) --> PT[prepare_turn]
-    PT --> SM[select_mode]
-    SM --> RM{route_mode}
-    RM -->|react| RB[react_branch]
-    RM -->|plan| PB[plan_branch]
-    RM -->|direct response / fallback| RS[resolve_answer_mode]
+    CGS((START)) --> PT["prepare_turn<br/>session + context"]
+    PT --> SM["select_mode<br/>policy decision"]
+    SM --> RM{"route_mode"}
+    RM -->|"react"| RB["react_branch"]
+    RM -->|"plan"| PB["plan_branch"]
+    RM -->|"direct / fallback"| RS["resolve_answer_mode"]
     RB --> RS
     PB --> RS
-    RS --> FS[final_synthesis]
-    FS --> PP[persist_turn]
+    RS --> FS["final_synthesis"]
+    FS --> PP["persist_turn<br/>memory + traces"]
     PP --> CGE((END))
   end
 
-  %% =====================
-  %% ReAct SubGraph
-  %% =====================
-  subgraph RG[ReActSubGraph]
-    direction LR
-    RGS((START)) --> RSEL[select_action]
-    RSEL --> RROUTE{route_action}
-    RROUTE -->|respond| RRSP[respond]
-    RROUTE -->|tool_call| RTOOL[execute_tool]
-    RROUTE -->|ask_user| RASK[ask_user]
-    RROUTE -->|stop / final| RFNL[final_answer]
-    RRSP --> ROBS[record_observation]
-    RTOOL --> ROBS
-    RASK --> RWAIT[waiting_user]
-    ROBS --> RLOOP{loop_or_finish}
-    RLOOP -->|continue| RSEL
-    RLOOP -->|finish| RFNL
-    RFNL --> RGE((END))
-  end
+  TITLE --> CGS
 
   %% =====================
-  %% Plan SubGraph
+  %% Layer 02: Mode SubGraphs
   %% =====================
-  subgraph PG[PlanSubGraph]
+  subgraph EXEC["02 Mode SubGraphs | Aligned Execution Lanes"]
     direction LR
-    PGS((START)) --> PCREATE[create_plan]
-    PCREATE --> PSEL[select_next_step]
-    PSEL --> PEXEC[execute_step]
-    PEXEC --> PRETRY{handle_retry}
-    PRETRY -->|retry| PSEL
-    PRETRY -->|waiting_user| PWAIT[handle_waiting_user]
-    PRETRY -->|continue| PSEL
-    PRETRY -->|all done| PSYN[synthesize_plan_result]
-    PSYN --> PGE((END))
+
+    subgraph RG["ReActSubGraph | Observe, act, and iterate"]
+      direction TB
+      RGS((START)) --> RSEL["select_action"]
+      RSEL --> RROUTE{"route_action"}
+      RROUTE -->|"respond"| RRSP["respond"]
+      RROUTE -->|"tool_call"| RTOOL["execute_tool"]
+      RROUTE -->|"ask_user"| RASK["ask_user"]
+      RROUTE -->|"stop / final"| RFNL["final_answer"]
+      RRSP --> ROBS["record_observation"]
+      RTOOL --> ROBS
+      RASK --> RWAIT["waiting_user"]
+      ROBS --> RLOOP{"loop_or_finish"}
+      RLOOP -->|"continue"| RSEL
+      RLOOP -->|"finish"| RFNL
+      RFNL --> RGE((END))
+    end
+
+    subgraph PG["PlanSubGraph | Plan, execute, and recover"]
+      direction TB
+      PGS((START)) --> PCREATE["create_plan"]
+      PCREATE --> PSEL["select_next_step"]
+      PSEL --> PEXEC["execute_step"]
+      PEXEC --> PRETRY{"handle_retry"}
+      PRETRY -->|"retry"| PSEL
+      PRETRY -->|"waiting_user"| PWAIT["handle_waiting_user"]
+      PRETRY -->|"continue"| PSEL
+      PRETRY -->|"all done"| PSYN["synthesize_plan_result"]
+      PSYN --> PGE((END))
+    end
   end
 
+  RB -. "invokes" .-> RGS
+  PB -. "invokes" .-> PGS
+
   %% =====================
-  %% Agentic RAG SubGraph
+  %% Layer 03: Nested Agentic RAG
   %% =====================
-  subgraph AG[AgenticRAGSubGraph]
+  subgraph RAGL["03 Nested Retrieval Capability | Agentic_RAG SubGraph"]
     direction LR
-    AGS((START)) --> AINIT[initialize_plan]
-    AINIT --> ADT{tool_decision}
-    ADT -->|rewrite| AREW[query_rewrite]
-    ADT -->|retrieve| ARET[retrieval]
-    ADT -->|fallback| AFB[no_hit_fallback]
+    AGS((START)) --> AINIT["initialize_plan"]
+    AINIT --> ADT{"tool_decision"}
+    ADT -->|"rewrite"| AREW["query_rewrite"]
+    ADT -->|"retrieve"| ARET["retrieval"]
+    ADT -->|"fallback"| AFB["no_hit_fallback"]
     AREW --> ARET
-    ARET --> ARER[rerank]
-    ARER --> ASUF{sufficiency_check}
-    ASUF -->|enough| AFIN[final_evidence_synthesis]
-    ASUF -->|not enough| ADT
+    ARET --> ARER["rerank"]
+    ARER --> ASUF{"sufficiency_check"}
+    ASUF -->|"enough"| AFIN["final_evidence_synthesis"]
+    ASUF -->|"not enough"| ADT
     AFIN --> AGE((END))
     AFB --> AGE
   end
 
-  %% Nested tool-call relationship
-  RTOOL -. nested RAG tool call .-> AGS
-  PEXEC -. nested RAG tool call .-> AGS
+  RTOOL -. "nested RAG tool call" .-> AGS
+  PEXEC -. "nested RAG tool call" .-> AGS
 
+  %% Alignment hints for stable lane placement.
+  RGS ~~~ PGS
+  RTOOL ~~~ PEXEC
+  RFNL ~~~ PSYN
+
+  classDef title fill:#0F172A,stroke:#0F172A,stroke-width:2px,color:#FFFFFF;
+  classDef main fill:#EAF2FF,stroke:#2563EB,stroke-width:2px,color:#172033;
+  classDef react fill:#ECFDF5,stroke:#059669,stroke-width:2px,color:#153226;
+  classDef plan fill:#FFF7ED,stroke:#EA580C,stroke-width:2px,color:#3C2412;
+  classDef rag fill:#F5F3FF,stroke:#7C3AED,stroke-width:2px,color:#2E1A47;
+  classDef decision fill:#FFFFFF,stroke:#334155,stroke-width:2px,color:#111827;
+  classDef terminal fill:#0F172A,stroke:#0F172A,stroke-width:2px,color:#FFFFFF;
+
+  class TITLE title;
+  class PT,SM,RB,PB,RS,FS,PP main;
+  class RSEL,RRSP,RTOOL,RASK,ROBS,RWAIT,RFNL react;
+  class PCREATE,PSEL,PEXEC,PWAIT,PSYN plan;
+  class AINIT,AREW,ARET,ARER,AFB,AFIN rag;
+  class RM,RROUTE,RLOOP,PRETRY,ADT,ASUF decision;
+  class CGS,CGE,RGS,RGE,PGS,PGE,AGS,AGE terminal;
+
+  style CG fill:#F8FAFC,stroke:#2563EB,stroke-width:3px,color:#0F172A
+  style EXEC fill:#FFFFFF,stroke:#94A3B8,stroke-width:2px,color:#334155
+  style RG fill:#F0FDF4,stroke:#10B981,stroke-width:2px,color:#14532D
+  style PG fill:#FFF7ED,stroke:#F97316,stroke-width:2px,color:#7C2D12
+  style RAGL fill:#F5F3FF,stroke:#8B5CF6,stroke-width:3px,color:#4C1D95

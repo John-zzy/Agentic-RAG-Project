@@ -7,6 +7,7 @@
 - 文档总索引：[docs/documents/README.md](./docs/documents/README.md)
 - 系统架构图：[docs/documents/architecture/system-overview.svg](./docs/documents/architecture/system-overview.svg)
 - Main Chat Agent Runtime Flow：[docs/documents/runtime/main-chat-agent-runtime-flow.svg](./docs/documents/runtime/main-chat-agent-runtime-flow.svg)
+- ChatGraph SubGraphs：[docs/documents/runtime/chatgraph-subgraphs.svg](./docs/documents/runtime/chatgraph-subgraphs.svg)
 - 知识管理流程图：[docs/documents/knowledge/knowledge-document-flow.svg](./docs/documents/knowledge/knowledge-document-flow.svg)
 - Agentic RAG 流程图：[docs/documents/rag/agentic-rag-retrieval-flow.svg](./docs/documents/rag/agentic-rag-retrieval-flow.svg)
 - API 文档：[docs/documents/reference/api-list.md](./docs/documents/reference/api-list.md)
@@ -20,9 +21,29 @@
 ### 聊天主链路
 
 - `backend/application/runtime/service.py`
-- `backend/application/runtime/graph_runtime.py`
+- `backend/application/runtime/assembly/service_parts/agent_runtime.py`
+- `backend/application/runtime/assembly/service_parts/turn_preparation.py`
+- `backend/application/runtime/assembly/runtime_factory.py`
 - `backend/application/runtime/api/chat/routes.py`
 - `backend/application/runtime/api/chat/schemas.py`
+
+### Application Runtime Assembly
+
+- `backend/application/runtime/assembly/service_factory.py`（创建统一场景聊天服务）
+- `backend/application/runtime/assembly/runtime_factory.py`（`ChatGraphRuntime`，负责 checkpoint / HITL / run lifecycle）
+- `backend/application/runtime/assembly/service_parts/`（ChatService 的准备、Agent 执行、回答、引用、HITL、响应组装拆分）
+- `backend/application/runtime/assembly/runtime_parts/`（Graph runtime 的状态、answer graph、HITL、state store 拆分）
+
+### Agent Runtime / ChatGraph
+
+- `backend/platform/agent_runtime/chat_graph/graph.py`（顶层 ChatGraph 拓扑）
+- `backend/platform/agent_runtime/chat_graph/nodes/`（prepare/select/route/branch/synthesis/persist 节点）
+- `backend/platform/agent_runtime/react/graph/graph.py`（ReAct 子图）
+- `backend/platform/agent_runtime/react/graph/nodes/`（ReAct action、tool、wait、final 节点）
+- `backend/platform/agent_runtime/plan/graph/graph.py`（Plan 子图）
+- `backend/platform/agent_runtime/plan/graph/nodes/`（plan create、step execute、retry、wait、synthesis 节点）
+- `backend/platform/agent_runtime/tool_executor.py`
+- `backend/platform/agent_runtime/rag_tools.py`
 
 ### Workflow / LangGraph Runtime
 
@@ -30,7 +51,7 @@
 - `backend/platform/workflow/langgraph/state.py`
 - `backend/platform/workflow/langgraph/lifecycle.py`
 - `backend/platform/workflow/langgraph/checkpointer.py`
-- `backend/application/runtime/graph_runtime.py`
+- `backend/application/runtime/assembly/runtime_factory.py`
 
 ### 场景定义与 prompt
 
@@ -77,6 +98,8 @@
 - `backend/run.py`
 - `backend/application/runtime/api/app.py`
 - `backend/application/runtime/bootstrap.py`
+- `backend/application/runtime/assembly/service_factory.py`
+- `backend/application/runtime/assembly/runtime_factory.py`
 
 ## 项目定位
 
@@ -134,14 +157,27 @@
 ### 改 `/chat` 主链路
 
 - 先看 `backend/application/runtime/service.py`
+- Agent 执行看 `backend/application/runtime/assembly/service_parts/agent_runtime.py`
+- turn 准备看 `backend/application/runtime/assembly/service_parts/turn_preparation.py`
+- ChatGraph 持久化与 HITL runtime 看 `backend/application/runtime/assembly/runtime_factory.py`
 - 再看 `backend/application/runtime/api/chat/routes.py`
 - 响应结构改动再看 `backend/application/runtime/api/chat/schemas.py`
+
+### 改 ReAct / Plan / ChatGraph 编排
+
+- 顶层图先看 `backend/platform/agent_runtime/chat_graph/graph.py`
+- ReAct 子图看 `backend/platform/agent_runtime/react/graph/`
+- Plan 子图看 `backend/platform/agent_runtime/plan/graph/`
+- 工具执行入口看 `backend/platform/agent_runtime/tool_executor.py`
+- RAG 工具 adapter 看 `backend/platform/agent_runtime/rag_tools.py`
+- 测试优先看 `backend/tests/test_agent_runtime_react.py`、`backend/tests/test_agent_runtime_plan.py`、`backend/tests/test_agent_runtime_tools.py`、`backend/tests/test_agent_runtime_mode_selector.py`
 
 ### 改 Workflow State Machine
 
 - 先看 `backend/platform/workflow/state_machine.py`
 - 生命周期接入看 `backend/platform/workflow/langgraph/lifecycle.py`
-- API/SSE 字段映射看 `backend/application/runtime/service.py` 和 `backend/application/runtime/api/chat/schemas.py`
+- runtime checkpoint / HITL 接入看 `backend/application/runtime/assembly/runtime_factory.py`
+- API/SSE 字段映射看 `backend/application/runtime/service.py`、`backend/application/runtime/stream_events.py` 和 `backend/application/runtime/api/chat/schemas.py`
 - 测试优先看 `backend/tests/test_langgraph_runtime.py`、`backend/tests/test_generic_assistant_hitl.py`、`backend/tests/test_chat_api.py`
 
 ### 改文档检索或 Hybrid Search

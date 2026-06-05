@@ -32,13 +32,31 @@
 
 ```text
 backend/
-├─ application/        # FastAPI runtime、API 路由、服务装配
-├─ platform/           # 配置、模型、记忆、知识处理、RAG、工具协议、Workflow Runtime
-└─ scenes/             # generic_assistant、ecommerce 等场景定义
+├─ application/        # FastAPI API、ChatService facade、运行时装配
+│  └─ runtime/         # API 路由、服务工厂、ChatGraphRuntime 装配
+├─ platform/           # RAG、知识处理、工具协议、Agent / Workflow Runtime
+│  ├─ agent_runtime/   # ChatGraph、ReAct / Plan 子图、工具执行
+│  ├─ knowledge/       # 知识文档管理、处理、发布
+│  ├─ rag/             # Agentic Retrieval、Hybrid Search、rerank
+│  └─ workflow/        # LangGraph checkpoint、run lifecycle、状态机
+├─ scenes/             # generic_assistant、ecommerce 等场景定义
+│  ├─ generic_assistant/
+│  └─ ecommerce/
+├─ evals/              # HTTP / retrieval 评测脚本
+└─ tests/              # 后端测试
 
-frontend/              # 对话工作台、知识管理、评测看板
-docs/documents/        # 面向阅读和 LLM 检索的分模块文档
+frontend/              # 静态调试与管理页面
+├─ api-tester.html
+├─ knowledge-manager.html
+└─ eval-dashboard.html
+docs/                  # 架构、流程、API、计划与提示词文档
+├─ documents/
+├─ plan/
+└─ prompts/
+devops/                # 本地依赖与运维辅助配置
 openspec/              # 变更提案、规格与归档记录
+├─ changes/
+└─ specs/
 ```
 
 核心链路：
@@ -46,82 +64,74 @@ openspec/              # 变更提案、规格与归档记录
 ```text
 用户问题
   -> 会话与场景解析
-  -> Agent mode 选择
-  -> ReAct / Plan
-  -> ToolExecutor
-  -> RAG / Business Tool
-  -> 低相关过滤 / no-hit fallback / HITL interrupt
-  -> final synthesis
+  -> ChatService / ChatGraph
+  -> ReAct / Plan Agent Runtime
+  -> RAG 工具或业务工具
+  -> Hybrid Search / Agentic Retrieval / HITL
+  -> 回答生成
   -> citations + retrieval_trace + workflow state
 ```
 
 架构图和明细文档见：[文档索引](./docs/documents/README.md)。
 
+## 文档入口
+
+- [文档总索引](./docs/documents/README.md)
+- [系统架构图](./docs/documents/architecture/system-overview.svg)
+- [Main Chat Agent Runtime Flow](./docs/documents/runtime/main-chat-agent-runtime-flow.svg)
+- [ReAct / Plan Agent Runtime](./docs/documents/runtime/react-plan-agent-runtime.md)
+- [ChatGraph SubGraphs](./docs/documents/runtime/chatgraph-subgraphs.svg)
+- [知识管理流程图](./docs/documents/knowledge/knowledge-document-flow.svg)
+- [Agentic RAG 流程图](./docs/documents/rag/agentic-rag-retrieval-flow.svg)
+- [Agentic RAG 设计说明](./docs/documents/rag/agentic-rag.md)
+- [常见坑与排障](./docs/documents/operations/common-pitfalls.md)
+
 ## 当前进展与后续计划
 
-### 已完成主线
+### 已完成能力
 
-- [x] 三层后端结构：`platform / application / scenes`
-- [x] 统一 `/chat`、`/chat/resume`、`/sessions`、`/files`、`/knowledge/documents` API
-- [x] 会话级 `mounted_knowledge_sources` 挂载与 scene definition 候选工具解析
-- [x] Agentic Retrieval：query rewrite、工具决策、多轮检索、no-hit fallback 与结构化 trace
-- [x] 文档 Hybrid Search：语义召回 + 关键词召回 + 融合排序
-- [x] 模型路由：LLM、Embedding、ReRank 统一配置
-- [x] 结构化 citations、回答正文引用编号与 session 证据持久化
-- [x] `/chat` 与 SSE 暴露 retrieval trace、runtime state 和 final state
-- [x] Knowledge Admin：上传、预览、入库、重处理、重分块、软删除
-- [x] Evaluation Harness：HTTP replay、SSE replay、benchmark artifact 对比
-- [x] LangGraph Runtime 骨架：graph state、thread_id、checkpointer、stream event 映射
-- [x] Human-in-the-Loop：interrupt/resume、工具审批、澄清等待、reject/cancel 边界
-- [x] Workflow State Machine：状态枚举、合法转移、终态保护和 SSE/API 状态字段
+- [x] **智能对话工作台**：提供统一 `/chat`、`/chat/resume` 和 `/sessions` 能力，支持普通 JSON 响应、SSE 流式输出、会话场景绑定和多知识源挂载。
+- [x] **知识库管理**：支持文件上传、预处理预览、正式入库、重处理、重切块、软删除、索引状态查看和本地文档知识源检索。
+- [x] **检索增强问答**：支持 query rewrite、Agentic Retrieval、Hybrid Search、相关性过滤、no-hit fallback、结构化引用、正文引用编号和检索 trace。
+- [x] **多步 Agent 执行**：支持 ReAct / Plan 两类运行模式，顶层 ChatGraph 负责模式选择、工具调用、RAG 调用、最终回答合成和会话持久化。
+- [x] **人工介入流程**：支持澄清等待、工具审批、外部 API 审批，以及 `approve / reject / respond` 恢复；拒绝和取消会进入明确终态。
+- [x] **运行状态与恢复**：基于 LangGraph checkpoint 和 Workflow State Machine 管理 `created / planning / running / waiting_user / retrying / succeeded / failed / cancelled` 状态，避免终态重复恢复。
+- [x] **多场景扩展**：`generic_assistant` 作为通用知识助手主线，`ecommerce` 作为业务扩展示例；场景负责 prompt、工具范围和可用知识源。
+- [x] **模型与工具接入**：统一 LLM、Embedding、ReRank 配置，提供工具注册、RAG tool adapter、业务工具调用和 SSE 工具事件输出。
+- [x] **评测与诊断**：支持 HTTP replay、SSE replay、retrieval benchmark、baseline / candidate 对比、benchmark artifact 和评测看板。
 
-### P0：把 RAG Runtime 升级为真正的 Agent Runtime
+### P0：增强 Agent 任务可靠性
 
-- [x] Runtime 边界修正：严格消费 `AgenticRetrievalOutcome.success`、`final_decision` 和 `follow_up_question`，确保 `ask_user` / `max_rounds_reached` 不误入证据回答链。
-- [x] 请求上下文隔离：移除 `ChatService` 中 per-request mutable state，避免并发请求串写 `request_id`、时间戳和历史消息元数据。
-- [x] LangGraph Runtime 骨架：接入 graph state、`thread_id`、checkpointer、stream event 映射和 graph run 生命周期管理。
-- [x] Human-in-the-Loop：基于 LangGraph interrupt/resume 支持 `approve / reject / respond`，覆盖 generic 写操作测试工具、外部 API 测试工具和 `ask_user` 澄清场景；`edit` 保留协议占位。
-- [x] Workflow State Machine：基于 LangGraph 节点和持久化状态表达 `created / planning / running / waiting_user / retrying / succeeded / failed / cancelled`。
-- [x] ReAct / Plan Agent Runtime 最小结构：新增顶层 `ReActRun` / `PlanRun` / `PlanStep` / `ToolObservation` 合同、ModeSelector、ToolExecutor、RAG tool adapter、checkpoint orchestration 字段、HITL metadata 和 SSE `tool.stage=react_turn/plan_step` 兼容扩展。
-- [x] 顶层 `ChatGraph` 接入：把 `prepare_turn -> select_mode -> route_mode -> react_subgraph / plan_subgraph -> final_synthesis -> persist_turn` 显式 graph 化，替代现在的手写编排壳层。
-- [x] ReAct Subgraph：把 `ReActRuntime` 的 action 选择、tool 调用、HITL、final synthesis 和 loop/finish 收敛到可复用 LangGraph 子图。
-- [x] Plan Subgraph：把 `MinimalPlanner` / `PlanExecutor` 的 plan create、step execute、retry、waiting_user 和 synthesis 收敛到可复用 LangGraph 子图。
-- [x] Agentic RAG Subgraph：将 `AgenticRetriever` 中手写的 `while` 循环、`next_action` 路由、query rewrite、工具切换、rerank、充分性判断和 no-hit fallback 迁移为可复用 LangGraph 子图。
-- [ ] LangChain / LangGraph 重构审计：逐项识别当前自造状态机、streaming glue、history glue、tool routing glue，能用 LangGraph graph / node / conditional edge / interrupt 表达的优先迁移。
-- [ ] Business Handoff Subgraph：将 `generic_assistant` 到 `ecommerce` 的 handoff / followup 逻辑从 scene 内部判断迁移为 LangGraph router 或业务子图。
-- [ ] Failure Recovery：为工具调用、模型调用和长链路任务补齐超时、重试、失败补偿、可恢复执行和幂等控制。
-- [ ] Reflection / Critique：在多步任务中加入结果校验、失败原因归类和必要时的自我修正。
+- [ ] **运行时重构审计**：继续检查状态机、流式事件、历史消息、工具路由等 glue code，优先收敛到 LangGraph graph / node / conditional edge / interrupt。
+- [ ] **跨场景业务流转**：将 `generic_assistant` 到 `ecommerce` 的 handoff / follow-up 逻辑沉淀为可复用 router 或业务子图。
+- [ ] **失败恢复**：为工具调用、模型调用和长链路任务补齐超时、重试、失败补偿、可恢复执行和幂等控制。
+- [ ] **结果自检**：在多步任务中加入结果校验、失败原因归类和必要时的自我修正。
 
-### P1：平台化 Tool、Memory 和 Evaluation 能力
+### P1：完善平台产品能力
 
-- [ ] Tool Registry 平台化：统一工具注册、参数 schema、权限声明、Agent 白名单、MCP 暴露标记和运行结果协议，并保持与 LangChain `BaseTool` / `StructuredTool` 兼容。
-- [ ] Tool 协议收敛：scene 工具以 LangChain `BaseTool` / `StructuredTool` 为主协议，自研 `ToolResult` 仅保留为业务 payload，逐步移除重复的 `RetrievalToolAdapter` / `RetrievalTool` 编排层协议。
-- [ ] Tool Routing 重构：将当前 scene definition 和 `AgenticRetriever` 中分散的候选工具解析、白名单和切换逻辑，收敛到 Tool Registry + LangGraph 条件边。
-- [ ] Tool Audit：记录工具调用输入摘要、输出摘要、耗时、错误类型、重试次数和权限判定结果。
-- [ ] Memory 升级：从短窗口历史扩展到任务状态记忆、用户偏好、长期摘要和跨会话上下文；会话历史继续兼容 LangChain message history，长任务状态交给 LangGraph checkpointer。
-- [ ] Query Rewrite 标准化：将手写 JSON 解析迁移到 LangChain structured output / output parser，继续保留关键 token 保护、unsafe rewrite 校验和 fallback 策略。
-- [ ] Streaming 重构：将当前 `ChatStreamEvent` / SSE 手写事件与 LangChain callback、LangGraph stream events 对齐，统一输出 token、tool、interrupt、resume、done 和 error 事件。
-- [ ] Workflow Evaluation：在现有 RAG 评测外，增加任务完成率、工具成功率、步骤失败率、恢复成功率和人工/LLM judge 评分。
-- [ ] Eval 标准化：保留 HTTP replay + qrels 指标，同时接入 LLM-as-a-judge / LangSmith 风格数据集与实验对比，用于生成质量和多步任务质量评测。
-- [ ] Cost & Latency Metrics：沉淀 token、模型成本、P50/P95 延迟、检索耗时、rerank 耗时和端到端耗时。
-- [ ] 场景扩展模板：提供新增 scene / workflow / tool / eval sample 的标准目录、接口约束和测试样例。
+- [ ] **工具中心**：统一工具注册、参数 schema、权限声明、Agent 白名单、MCP 暴露标记、调用结果协议和工具审计日志。
+- [ ] **记忆能力**：从短窗口会话历史扩展到任务状态记忆、用户偏好、长期摘要和跨会话上下文。
+- [ ] **流式体验**：统一 token、tool、interrupt、resume、done、error 等 SSE 事件，与 LangChain callback / LangGraph stream events 对齐。
+- [ ] **评测体系**：在现有 RAG 指标外增加任务完成率、工具成功率、恢复成功率、LLM-as-a-judge 和多步任务质量评测。
+- [ ] **成本与延迟指标**：沉淀 token、模型成本、P50/P95 延迟、检索耗时、rerank 耗时和端到端耗时。
+- [ ] **场景扩展模板**：提供新增 scene、workflow、tool、eval sample 的标准目录、接口约束和测试样例。
 
-### P1：继续强化 RAG 与知识库工程化
+### P1：强化知识库与检索体验
 
-- [ ] 知识库批量重建索引、失败重试、索引状态诊断和上传文件清理。
-- [ ] 增量更新与缓存：支持文档增量索引、检索结果缓存、Embedding 缓存和缓存失效策略。
-- [ ] Retrieval Benchmark 扩充：扩大 qrels 样本，稳定 Precision / Recall / MRR / NDCG / no-hit false positive 指标。
-- [ ] 关键词召回扩展：为当前小规模 BM25 实现预留持久化倒排索引或外部搜索引擎边界。
-- [ ] 检索诊断 UI：展示 query rewrite、候选召回、过滤、rerank、citation 对齐和失败原因。
+- [ ] **知识库运维**：支持批量重建索引、失败重试、索引状态诊断和上传文件清理。
+- [ ] **增量与缓存**：支持文档增量索引、检索结果缓存、Embedding 缓存和缓存失效策略。
+- [ ] **检索质量评估**：扩充 qrels 样本，稳定 Precision / Recall / MRR / NDCG / no-hit false positive 指标。
+- [ ] **关键词召回增强**：为当前小规模 BM25 实现预留持久化倒排索引或外部搜索引擎边界。
+- [ ] **检索诊断 UI**：展示 query rewrite、候选召回、过滤、rerank、citation 对齐和失败原因。
 
-### P2：面向开源与生产部署补齐工程闭环
+### P2：补齐生产化与开源闭环
 
-- [ ] 权限与安全：用户、角色、知识库权限、工具调用权限、API Key、敏感信息过滤和审计日志。
-- [ ] 可观测性：结构化日志、OpenTelemetry Trace、模型调用 trace、工具调用 trace 和 eval run trace。
-- [ ] 部署能力：Docker Compose、生产配置样例、健康检查、备份恢复和日志采集。
-- [ ] 模型治理：模型路由策略、降级策略、超时重试、成本预算、调用审计和 provider fallback。
-- [ ] 开源文档：补齐架构决策记录、插件开发指南、Workflow DSL 示例、贡献指南和 Roadmap。
-- [ ] 企业集成：预留 SSO、对象存储、外部知识源、工单系统、CRM、内部搜索或支付/订单系统扩展点。
+- [ ] **权限与安全**：补齐用户、角色、知识库权限、工具调用权限、API Key、敏感信息过滤和审计日志。
+- [ ] **可观测性**：接入结构化日志、OpenTelemetry Trace、模型调用 trace、工具调用 trace 和 eval run trace。
+- [ ] **部署能力**：补齐 Docker Compose、生产配置样例、健康检查、备份恢复和日志采集。
+- [ ] **模型治理**：支持模型路由策略、降级策略、超时重试、成本预算、调用审计和 provider fallback。
+- [ ] **开源文档**：补齐架构决策记录、插件开发指南、Workflow DSL 示例、贡献指南和 Roadmap。
+- [ ] **企业集成**：预留 SSO、对象存储、外部知识源、工单系统、CRM、内部搜索或支付/订单系统扩展点。
 
 ## Quick Start
 
@@ -173,37 +183,4 @@ backend\.venv\Scripts\python.exe backend\run.py
 
 接口和数据模型明细见：[API 文档](./docs/documents/reference/api-list.md)、[数据模型](./docs/documents/reference/data-model.md)。
 
-## 测试与评测
 
-运行后端测试：
-
-```powershell
-backend\.venv\Scripts\python.exe -m pytest backend\tests -q -c backend\tests\pytest.ini
-```
-
-常用回归：
-
-```powershell
-backend\.venv\Scripts\python.exe -m pytest backend\tests\test_agentic_retrieval.py backend\tests\test_chat_api.py backend\tests\test_document_hybrid_retrieval.py -q -c backend\tests\pytest.ini
-```
-
-运行评测：
-
-```powershell
-backend\.venv\Scripts\python.exe backend\evals\run_http_eval.py --base-url http://127.0.0.1:8000 --sample-set minimal --output backend\data\evals\latest.json
-```
-
-## 文档入口
-
-- [文档总索引](./docs/documents/README.md)
-- [系统架构图](./docs/documents/architecture/system-overview.svg)
-- [Main Chat Agent Runtime Flow](./docs/documents/runtime/main-chat-agent-runtime-flow.svg)
-- [ReAct / Plan Agent Runtime](./docs/documents/runtime/react-plan-agent-runtime.md)
-- [知识管理流程图](./docs/documents/knowledge/knowledge-document-flow.svg)
-- [Agentic RAG 流程图](./docs/documents/rag/agentic-rag-retrieval-flow.svg)
-- [Agentic RAG 设计说明](./docs/documents/rag/agentic-rag.md)
-- [常见坑与排障](./docs/documents/operations/common-pitfalls.md)
-
-## 项目定位
-
-这个项目的重点不是“能回答一句话”，而是展示一套可解释、可回归、可继续扩展的 Agentic RAG Runtime：回答有引用，检索有 Trace，状态有治理，人工介入有边界，调参有评测，场景能扩展，知识能管理。
