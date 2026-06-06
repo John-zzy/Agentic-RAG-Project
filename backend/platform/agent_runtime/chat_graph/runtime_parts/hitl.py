@@ -5,7 +5,9 @@ from typing import Any
 
 from langchain_core.messages import AIMessage, HumanMessage
 
-from backend.application.runtime.assembly.runtime_parts.agent_state import _coerce_optional_agent_mode
+from backend.platform.agent_runtime.chat_graph.runtime_parts.agent_state import (
+    _coerce_optional_agent_mode,
+)
 from backend.platform.agent_runtime.chat_graph.contracts import (
     HitlApproveExecutor,
     HitlResumeError,

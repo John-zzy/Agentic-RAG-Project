@@ -3,7 +3,6 @@
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from backend.application.runtime.api.chat.schemas import Citation
 from backend.platform.agent_runtime.chat_graph.contracts import HitlWaitInput
 from backend.platform.agent_runtime.contracts import AgentMode
 from backend.platform.agent_runtime.rag_tools import AGENTIC_RAG_TOOL_NAME, NATIVE_RAG_TOOL_NAME
@@ -17,7 +16,7 @@ class AgentRuntimeStateProjectionMixin:
         *,
         state: RuntimeGraphState,
         answer: str,
-        citations: Sequence[Citation],
+            citations: Sequence[Any],
         knowledge_used: bool,
     ) -> dict[str, Any]:
         """把既有检索回答归档为顶层 Agent Runtime 审计结构。"""

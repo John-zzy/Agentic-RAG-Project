@@ -6,18 +6,39 @@ flowchart TD
     CG1 --> CG2["ChatGraph.select_mode<br/>调用 ModeSelector"]
     CG2 --> CG3{"route_mode"}
 
-    CG3 -->|react| R1["react_branch<br/>调用 ReActRuntime"]
-    CG3 -->|plan| P1["plan_branch<br/>调用 MinimalPlanner + PlanExecutor"]
+    CG3 -->|react| R1["react_branch<br/>invoke ReActGraph"]
+    CG3 -->|plan| P1["plan_branch<br/>invoke PlanGraph"]
     CG3 -->|direct / fallback| S0["resolve_answer_mode"]
 
-    R1 --> R2["LLMReActActionSelector<br/>选择 tool_call / ask_user / final_answer"]
-    R2 -->|tool_call| T["ToolExecutor.execute<br/>只调用当前场景允许的工具"]
-    R2 -->|final_answer| D1["direct_answer<br/>不调用 RAG，不返回 citations"]
-    R2 -->|ask_user| U1["follow_up / HITL<br/>等待用户补充"]
+    subgraph RG["ReActGraph 子图"]
+        direction TB
+        R1 --> R0["initialize_run<br/>创建或恢复 ReActRun"]
+        R0 --> R2["select_action<br/>LLMReActActionSelector 输出 action"]
+        R2 --> R3["validate_action / route_action<br/>校验并路由 action"]
+        R3 -->|tool_call| T["execute_tool<br/>ToolExecutor.execute"]
+        R3 -->|final_answer| D1["direct_answer<br/>不调用 RAG，不返回 citations"]
+        R3 -->|ask_user| U1["ask_user / waiting_user<br/>等待用户补充"]
+        R4["record_observation / loop_or_finish<br/>记录 observation 并决定是否继续"]
+        R4 -->|continue| R2
+        R4 -->|finish| R5["synthesize_result<br/>投影 answer_mode / citations / trace"]
+        D1 --> R5
+        U1 --> R5
+    end
 
-    P1 --> P2["PlanExecutor.execute_step<br/>按 step 调用工具"]
-    P2 --> T
+    subgraph PG["PlanGraph 子图"]
+        direction TB
+        P1 --> P0["create_plan<br/>MinimalPlanner 生成 PlanRun"]
+        P0 --> P2["select_next_step<br/>选择依赖已满足的 step"]
+        P2 --> P3["execute_step<br/>PlanExecutor 调用 step 工具"]
+        P4["handle_retry<br/>继续 / 重试 / waiting_user / all done"]
+        P4 -->|continue / retry| P2
+        P4 -->|waiting_user| U2["handle_waiting_user<br/>等待用户补充"]
+        P4 -->|all done| P5["synthesize_plan_result / synthesize_result<br/>投影 answer_mode / citations / trace"]
+        U2 --> P5
+    end
+
     T --> T1{"tool_name"}
+    P3 --> T1
 
     T1 -->|agentic_rag_search| G1["AgenticRagToolAdapter.execute<br/>把 Agentic RAG 包装成工具"]
     T1 -->|native_rag_search| G0["NativeRagToolAdapter.execute<br/>把 Native RAG 包装成工具"]
@@ -43,15 +64,17 @@ flowchart TD
 
     A8 --> O1
     A9 --> O1
-    O1 --> S0
-    D1 --> S0
-    U1 --> S0
+    O1 -->|react observation| R4
+    O1 -->|plan observation| P4
+    R5 --> S0
+    P5 --> S0
     S0 --> S1["final_synthesis<br/>证据回答 / direct_answer / follow_up / fallback"]
     S1 --> S2["persist_turn<br/>保存 checkpoint 与 Agent run state"]
     S2 --> S3["ChatResponseMixin._persist_turn<br/>保存聊天历史"]
     S3 --> S4["ChatResponse / ChatStreamEvent<br/>返回 JSON 或 SSE done"]
 
     U1 --> H1["HitlRuntimeMixin.create_hitl_wait<br/>保存 interrupt_id、turn_id 或 step_id"]
+    U2 --> H1
     H1 --> H2["POST /chat/resume<br/>用户恢复等待点"]
     H2 --> H3{"ChatResumeRequest.action"}
     H3 -->|respond| C

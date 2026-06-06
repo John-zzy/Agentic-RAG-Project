@@ -30,8 +30,12 @@ flowchart TB
 
     subgraph RG["ReActSubGraph | Observe, act, and iterate"]
       direction TB
-      RGS((START)) --> RSEL["select_action"]
-      RSEL --> RROUTE{"route_action"}
+      RGS((START)) --> RINIT["initialize_run"]
+      RINIT --> RADT{"after_initialize"}
+      RADT -->|"active"| RSEL["select_action"]
+      RADT -->|"terminal / waiting"| RSYN["synthesize_result"]
+      RSEL --> RVAL["validate_action"]
+      RVAL --> RROUTE{"route_action"}
       RROUTE -->|"respond"| RRSP["respond"]
       RROUTE -->|"tool_call"| RTOOL["execute_tool"]
       RROUTE -->|"ask_user"| RASK["ask_user"]
@@ -42,7 +46,9 @@ flowchart TB
       ROBS --> RLOOP{"loop_or_finish"}
       RLOOP -->|"continue"| RSEL
       RLOOP -->|"finish"| RFNL
-      RFNL --> RGE((END))
+      RWAIT --> RSYN
+      RFNL --> RSYN
+      RSYN --> RGE((END))
     end
 
     subgraph PG["PlanSubGraph | Plan, execute, and recover"]
@@ -55,7 +61,9 @@ flowchart TB
       PRETRY -->|"waiting_user"| PWAIT["handle_waiting_user"]
       PRETRY -->|"continue"| PSEL
       PRETRY -->|"all done"| PSYN["synthesize_plan_result"]
-      PSYN --> PGE((END))
+      PWAIT --> PRSYN["synthesize_result"]
+      PSYN --> PRSYN
+      PRSYN --> PGE((END))
     end
   end
 
@@ -87,7 +95,7 @@ flowchart TB
   %% Alignment hints for stable lane placement.
   RGS ~~~ PGS
   RTOOL ~~~ PEXEC
-  RFNL ~~~ PSYN
+  RSYN ~~~ PRSYN
 
   classDef title fill:#0F172A,stroke:#0F172A,stroke-width:2px,color:#FFFFFF;
   classDef main fill:#EAF2FF,stroke:#2563EB,stroke-width:2px,color:#172033;
@@ -99,10 +107,10 @@ flowchart TB
 
   class TITLE title;
   class PT,SM,RB,PB,RS,FS,PP main;
-  class RSEL,RRSP,RTOOL,RASK,ROBS,RWAIT,RFNL react;
-  class PCREATE,PSEL,PEXEC,PWAIT,PSYN plan;
+  class RINIT,RSEL,RVAL,RRSP,RTOOL,RASK,ROBS,RWAIT,RFNL,RSYN react;
+  class PCREATE,PSEL,PEXEC,PWAIT,PSYN,PRSYN plan;
   class AINIT,AREW,ARET,ARER,AFB,AFIN rag;
-  class RM,RROUTE,RLOOP,PRETRY,ADT,ASUF decision;
+  class RM,RADT,RROUTE,RLOOP,PRETRY,ADT,ASUF decision;
   class CGS,CGE,RGS,RGE,PGS,PGE,AGS,AGE terminal;
 
   style CG fill:#F8FAFC,stroke:#2563EB,stroke-width:3px,color:#0F172A

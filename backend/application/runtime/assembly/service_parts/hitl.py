@@ -16,7 +16,11 @@ from backend.application.runtime.assembly.service_parts.contracts import (
     ChatServiceError,
     PreparedChatTurn,
 )
-from backend.application.runtime.assembly.runtime_factory import HitlResumeError, HitlResumeInput, HitlWaitInput
+from backend.platform.agent_runtime.chat_graph.contracts import (
+    HitlResumeError,
+    HitlResumeInput,
+    HitlWaitInput,
+)
 from backend.platform.agent_runtime.contracts import ReActAction, ReActRun, ReActTurn
 from backend.platform.workflow.langgraph.state import RuntimeGraphState
 from backend.platform.agent_runtime.tool_executor import ToolExecutor

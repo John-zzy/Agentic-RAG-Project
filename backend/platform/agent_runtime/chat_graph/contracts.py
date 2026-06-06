@@ -50,6 +50,17 @@ class ChatGraphDependencies(Protocol):
         [RuntimeGraphState, str, Sequence[Any], bool],
         dict[str, Any],
     ]
+    select_agent_mode: Callable[[PreparedChatTurn], dict[str, Any]] | None
+    build_react_graph_deps: Callable[[PreparedChatTurn, RuntimeGraphState], Any] | None
+    build_plan_graph_deps: Callable[[PreparedChatTurn, RuntimeGraphState], Any] | None
+    build_prepared_from_state: Callable[
+        [PreparedChatTurn, RuntimeGraphState],
+        PreparedChatTurn,
+    ] | None
+    build_hitl_wait_update: Callable[
+        [PreparedChatTurn, RuntimeGraphState],
+        dict[str, Any],
+    ] | None
 
 
 class HitlResumeError(ValueError):

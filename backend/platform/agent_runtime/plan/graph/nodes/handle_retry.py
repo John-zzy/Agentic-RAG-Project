@@ -13,6 +13,8 @@ def build_handle_retry_node(dependencies: PlanGraphDependencies):
         plan_run = state["plan_run"]
         step = state.get("step")
         if step is None:
+            if plan_run.workflow_status in {"waiting_user", "failed", "cancelled"}:
+                return {"plan_run": plan_run, "route": "synthesize_plan_result"}
             if all(item.status == "succeeded" for item in plan_run.steps) and plan_run.steps:
                 return {"plan_run": plan_run, "route": "synthesize_plan_result"}
             return {"plan_run": plan_run, "route": "select_next_step"}

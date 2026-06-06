@@ -15,6 +15,8 @@ from backend.platform.agent_runtime import (
     PlanSynthesisResult,
     ToolObservation,
 )
+from backend.platform.agent_runtime.plan.graph import build_plan_graph
+from backend.platform.agent_runtime.plan.graph.config import PlanGraphDependencies
 from backend.platform.agent_runtime.tool_executor import ToolExecutor
 from backend.platform.agent_runtime.validation import ToolAccessValidationError
 from backend.platform.tools.base import ToolResult
@@ -387,6 +389,51 @@ def test_plan_executor_blocks_steps_when_dependency_fails() -> None:
     assert result.steps[2].metadata["blocked_by"] == ["step-2"]
     assert failing_tool.calls == [{"query": "return", "limit": 1}]
     assert inventory_calls == []
+
+
+def test_plan_graph_finishes_when_no_step_is_executable() -> None:
+    executor = ToolExecutor(
+        tools={
+            "lookup_policy": _structured_tool(
+                name="lookup_policy",
+                calls=[],
+                records=[{"policy": "travel"}],
+            )
+        },
+        allowed_tools={"lookup_policy"},
+    )
+    plan = PlanRun(
+        plan_run_id="plan-no-executable-step",
+        session_id="session-1",
+        request_id="request-no-executable-step",
+        user_goal="依赖缺失的计划",
+        workflow_status="planning",
+        steps=[
+            PlanStep(
+                step_id="step-1",
+                goal="查制度",
+                tool_name="lookup_policy",
+                input={"query": "travel"},
+                status="blocked",
+            )
+        ],
+    )
+    graph = build_plan_graph(
+        PlanGraphDependencies(
+            tool_executor=executor,
+            project_result=lambda run: {
+                "answer_mode": "fallback",
+                "final_decision": "retrieval_failed",
+            },
+        )
+    )
+
+    result = graph.invoke({"plan_run": plan}, {"recursion_limit": 10})
+
+    assert result["plan_run"].workflow_status == "failed"
+    assert result["plan_run"].error == "Plan has pending steps but no executable dependency order."
+    assert result["answer_mode"] == "fallback"
+    assert result["final_decision"] == "retrieval_failed"
 
 
 def test_plan_final_synthesis_uses_successful_step_summaries_and_citations() -> None:

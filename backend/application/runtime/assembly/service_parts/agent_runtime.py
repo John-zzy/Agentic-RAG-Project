@@ -20,7 +20,6 @@ from backend.application.runtime.assembly.service_parts.contracts import (
     PreparedChatTurn,
 )
 from backend.platform.agent_runtime.contracts import (
-    ReActAction,
     PlanRun,
     ReActRun,
     ReActTurn,
@@ -28,7 +27,7 @@ from backend.platform.agent_runtime.contracts import (
     ToolObservation,
 )
 from backend.platform.agent_runtime.mode_selector import ModeSelection
-from backend.platform.agent_runtime.plan.executor import PlanExecutor
+from backend.platform.agent_runtime.plan.graph.config import PlanGraphDependencies
 from backend.platform.agent_runtime.plan.planner import MinimalPlanner
 from backend.platform.agent_runtime.rag_tools import (
     AGENTIC_RAG_TOOL_NAME,
@@ -37,10 +36,9 @@ from backend.platform.agent_runtime.rag_tools import (
 )
 from backend.platform.agent_runtime.react import (
     LLMReActActionSelector,
-    ReActRuntime,
     ReActScenePolicy,
 )
-from backend.platform.agent_runtime.react.selector import ReActSelectorError
+from backend.platform.agent_runtime.react.graph.config import ReActGraphDependencies
 from backend.platform.agent_runtime.tool_executor import ToolExecutor
 from backend.platform.knowledge.sources import DEFAULT_MOUNTED_KNOWLEDGE_SOURCES
 from backend.platform.models.base.router import TaskComplexity
@@ -62,26 +60,137 @@ class ChatAgentRuntimeMixin:
             "agent_mode_signals": dict(selection.signals),
         }
 
-    def _run_agent_runtime_for_graph(
+    def _mode_selection_from_graph_state(
             self,
             prepared: PreparedChatTurn,
             state: Mapping[str, Any],
-    ) -> dict[str, Any]:
+    ) -> ModeSelection:
         mode = str(state.get("agent_mode") or prepared.agent_mode)
-        mode_selection = ModeSelection(
+        return ModeSelection(
             mode="plan" if mode == "plan" else "react",
             reason=str(state.get("agent_mode_reason") or prepared.agent_mode_reason),
             signals=dict(state.get("agent_mode_signals") or prepared.agent_mode_signals or {}),
         )
-        agent_result = self._execute_agent_runtime(
+
+    def _build_react_graph_deps(
+            self,
+            prepared: PreparedChatTurn,
+            state: Mapping[str, Any],
+    ) -> ReActGraphDependencies:
+        mounted_knowledge_sources = self._mounted_knowledge_sources_for_session(
+            prepared.session_id
+        )
+        mode_selection = self._mode_selection_from_graph_state(prepared, state)
+        tool_executor = self._build_agent_tool_executor(
+            mounted_knowledge_sources=mounted_knowledge_sources
+        )
+        scene_policy = self._build_react_scene_policy(
+            tool_executor=tool_executor,
+            message=prepared.user_message,
+            mounted_knowledge_sources=mounted_knowledge_sources,
+        )
+        return ReActGraphDependencies(
+            tool_executor=tool_executor,
+            action_selector=LLMReActActionSelector(
+                model_client=self.model,
+                model_complexity=prepared.complexity or "simple",
+            ),
             session_id=prepared.session_id,
             request_id=prepared.request_id,
+            user_goal=prepared.user_message,
+            react_run_id=f"react-{prepared.request_id}",
+            scene_policy=scene_policy,
+            turn_id_factory=lambda index: f"turn-{index}",
+            max_turns=scene_policy.max_turns,
+            project_result=lambda run: self._project_react_graph_result(
+                run=run,
+                prepared=prepared,
+                mounted_knowledge_sources=mounted_knowledge_sources,
+                mode_selection=mode_selection,
+            ),
+        )
+
+    def _build_plan_graph_deps(
+            self,
+            prepared: PreparedChatTurn,
+            state: Mapping[str, Any],
+    ) -> PlanGraphDependencies:
+        mounted_knowledge_sources = self._mounted_knowledge_sources_for_session(
+            prepared.session_id
+        )
+        mode_selection = self._mode_selection_from_graph_state(prepared, state)
+        tool_executor = self._build_agent_tool_executor(
+            mounted_knowledge_sources=mounted_knowledge_sources
+        )
+        tool_name = self._select_rag_tool_name(
+            tool_executor=tool_executor,
+            request_id=prepared.request_id,
+        )
+        tool_input = self._build_rag_tool_input(
+            message=prepared.user_message,
+            mounted_knowledge_sources=mounted_knowledge_sources,
+        )
+        scene_policy = self._build_plan_scene_policy(
+            tool_name=tool_name,
+            tool_input=tool_input,
+        )
+        return PlanGraphDependencies(
+            tool_executor=tool_executor,
+            session_id=prepared.session_id,
+            request_id=prepared.request_id,
+            user_goal=prepared.user_message,
+            mounted_knowledge_sources=mounted_knowledge_sources,
+            candidate_tools=self._plan_candidate_tools(
+                tool_executor=tool_executor,
+                default_tool_name=tool_name,
+                scene_policy=scene_policy,
+            ),
+            scene_policy=scene_policy,
+            planner=MinimalPlanner(
+                tool_executor=tool_executor,
+                plan_run_id_factory=lambda: f"plan-{prepared.request_id}",
+                step_id_factory=lambda index: f"step-{index}",
+            ),
+            project_result=lambda run: self._project_plan_graph_result(
+                run=run,
+                prepared=prepared,
+                mounted_knowledge_sources=mounted_knowledge_sources,
+                mode_selection=mode_selection,
+            ),
+        )
+
+    def _project_react_graph_result(
+            self,
+            *,
+            run: ReActRun,
+            prepared: PreparedChatTurn,
+            mounted_knowledge_sources: tuple[str, ...],
+            mode_selection: ModeSelection,
+    ) -> dict[str, Any]:
+        agent_result = self._agent_execution_result_from_run(
             message=prepared.user_message,
             complexity=prepared.complexity,
-            mounted_knowledge_sources=self._mounted_knowledge_sources_for_session(
-                prepared.session_id
-            ),
+            mounted_knowledge_sources=mounted_knowledge_sources,
+            react_run=run,
+        )
+        return self._graph_state_update_from_agent_result(
+            agent_result=agent_result,
             mode_selection=mode_selection,
+        )
+
+    def _project_plan_graph_result(
+            self,
+            *,
+            run: PlanRun,
+            prepared: PreparedChatTurn,
+            mounted_knowledge_sources: tuple[str, ...],
+            mode_selection: ModeSelection,
+    ) -> dict[str, Any]:
+        agent_result = self._agent_execution_result_from_run(
+            message=prepared.user_message,
+            complexity=prepared.complexity,
+            mounted_knowledge_sources=mounted_knowledge_sources,
+            plan_run=run,
         )
         return self._graph_state_update_from_agent_result(
             agent_result=agent_result,
@@ -160,68 +269,6 @@ class ChatAgentRuntimeMixin:
             "tool_observation": agent_result.tool_observation,
         }
 
-    def _execute_agent_runtime(
-            self,
-            *,
-            session_id: str,
-            request_id: str,
-            message: str,
-            complexity: TaskComplexity | None,
-            mounted_knowledge_sources: tuple[str, ...],
-            mode_selection: ModeSelection,
-    ) -> AgentRuntimeExecutionResult:
-        """通过顶层 ReAct/Plan Runtime 执行工具，而不是在 /chat 前置检索。"""
-        # 构建工具执行器，绑定已挂载的知识源，供后续 Agent 调用
-        tool_executor = self._build_agent_tool_executor(
-            mounted_knowledge_sources=mounted_knowledge_sources
-        )
-
-        if mode_selection.mode == "plan":
-            # 根据工具执行器和请求上下文，选择合适的 RAG 工具名称
-            tool_name = self._select_rag_tool_name(
-                tool_executor=tool_executor,
-                request_id=request_id,
-            )
-            # 根据用户消息和已挂载的知识源，构建 RAG 工具的输入参数
-            tool_input = self._build_rag_tool_input(
-                message=message,
-                mounted_knowledge_sources=mounted_knowledge_sources,
-            )
-            # 以 Plan 模式运行 Agent：先制定执行计划，再按步骤调用工具
-            plan_run = self._run_plan_agent(
-                tool_executor=tool_executor,
-                session_id=session_id,
-                request_id=request_id,
-                message=message,
-                mounted_knowledge_sources=mounted_knowledge_sources,
-                tool_name=tool_name,
-                tool_input=tool_input,
-            )
-            # 将 Plan Agent 的运行结果转换为统一的执行结果
-            return self._agent_execution_result_from_run(
-                message=message,
-                complexity=complexity,
-                mounted_knowledge_sources=mounted_knowledge_sources,
-                plan_run=plan_run,
-            )
-
-        # 以 ReAct 模式运行 Agent：推理（Reason）与行动（Act）交替进行，逐步完成任务
-        react_run = self._run_react_agent(
-            tool_executor=tool_executor,
-            session_id=session_id,
-            request_id=request_id,
-            message=message,
-            mounted_knowledge_sources=mounted_knowledge_sources,
-            complexity=complexity,
-        )
-        # 将 ReAct Agent 的运行结果转换为统一的执行结果
-        return self._agent_execution_result_from_run(
-            message=message,
-            complexity=complexity,
-            mounted_knowledge_sources=mounted_knowledge_sources,
-            react_run=react_run,
-        )
-
     def _build_agent_tool_executor(
             self,
             *,
@@ -281,69 +328,6 @@ class ChatAgentRuntimeMixin:
             "rerank_top_n": policy.rerank_top_n,
         }
 
-    def _run_react_agent(
-            self,
-            *,
-            tool_executor: ToolExecutor,
-            session_id: str,
-            request_id: str,
-            message: str,
-            mounted_knowledge_sources: tuple[str, ...],
-            complexity: TaskComplexity | None,
-    ) -> ReActRun:
-        """运行 ReAct Agent：推理（Reason）与行动（Act）交替进行，逐步完成任务。"""
-        # 构建场景策略：定义该场景下可用的工具集、最大轮次等约束
-        scene_policy = self._build_react_scene_policy(
-            tool_executor=tool_executor,
-            message=message,
-            mounted_knowledge_sources=mounted_knowledge_sources,
-        )
-
-        # 初始化 ReAct 运行时：注入工具执行器、LLM 动作选择器和场景策略
-        runtime = ReActRuntime(
-            tool_executor=tool_executor,
-            # LLM 驱动的动作选择器，根据任务复杂度选择不同的模型参数
-            action_selector=LLMReActActionSelector(
-                model_client=self.model,
-                model_complexity=complexity or "simple",
-            ),
-            scene_policy=scene_policy,
-            turn_id_factory=lambda index: f"turn-{index}",
-            max_turns=scene_policy.max_turns,
-        )
-
-        try:
-            # 启动 ReAct 循环，逐轮执行推理和工具调用
-            react_run = runtime.run(
-                session_id=session_id,
-                request_id=request_id,
-                user_goal=message,
-                react_run_id=f"react-{request_id}",
-            )
-        except ReActSelectorError:
-            # LLM 动作选择器出错（如解析失败），降级为直接检索流程
-            return self._run_direct_react_retrieval(
-                tool_executor=tool_executor,
-                session_id=session_id,
-                request_id=request_id,
-                message=message,
-                mounted_knowledge_sources=mounted_knowledge_sources,
-                complexity=complexity,
-            )
-
-        # Agent 进入等待用户输入状态，且最新一轮选择器出错，降级为直接检索
-        if react_run.workflow_status == "waiting_user" and react_run.metadata.get("latest_selector_failure"):
-            return self._run_direct_react_retrieval(
-                tool_executor=tool_executor,
-                session_id=session_id,
-                request_id=request_id,
-                message=message,
-                mounted_knowledge_sources=mounted_knowledge_sources,
-                complexity=complexity,
-            )
-
-        return react_run
-
     def _build_react_scene_policy(
             self,
             *,
@@ -396,162 +380,6 @@ class ChatAgentRuntimeMixin:
         if self.scene_definition.retrieval_policy.no_hit_strategy == "ask_user":
             return "ask_user"
         return "final_answer"
-
-    def _run_direct_react_retrieval(
-            self,
-            *,
-            tool_executor: ToolExecutor,
-            session_id: str,
-            request_id: str,
-            message: str,
-            mounted_knowledge_sources: tuple[str, ...],
-            complexity: TaskComplexity | None,
-    ) -> ReActRun:
-        """在 selector 不可用时直接执行一次 RAG 检索，保留 generic assistant 的询问语义。"""
-        tool_name = self._select_rag_tool_name(
-            tool_executor=tool_executor,
-            request_id=request_id,
-        )
-        observation = tool_executor.execute(
-            tool_name=tool_name,
-            input_payload=self._build_rag_tool_input(
-                message=message,
-                mounted_knowledge_sources=mounted_knowledge_sources,
-            ),
-        )
-        scene_policy = self._build_react_scene_policy(
-            tool_executor=tool_executor,
-            message=message,
-            mounted_knowledge_sources=mounted_knowledge_sources,
-        )
-        turn = ReActTurn(
-            turn_id="turn-1",
-            round_index=1,
-            goal=message,
-            action=ReActAction(
-                action_type="tool_call",
-                tool_name=tool_name,
-                input={"query": message},
-                rationale_summary="首轮先调用允许的 RAG 工具。",
-                metadata={},
-            ),
-            status="waiting_user" if observation.requires_user else "succeeded",
-            input={"query": message},
-            tool_name=tool_name,
-            observation=observation,
-            observation_summary=observation.result_summary,
-            result_summary=observation.result_summary,
-            error=observation.error,
-        )
-        final_turn = ReActTurn(
-            turn_id="turn-2",
-            round_index=2,
-            goal=message,
-            action=ReActAction(
-                action_type="final_answer",
-                rationale_summary="已有工具观察，进入最终汇总。",
-                metadata={},
-            ),
-            status="succeeded",
-        )
-        # 直接回退时补齐第二轮汇总，保证 SSE 事件仍然投影成标准 ReAct 结构。
-        return ReActRun(
-            react_run_id=f"react-{request_id}",
-            session_id=session_id,
-            request_id=request_id,
-            user_goal=message,
-            workflow_status="waiting_user" if observation.requires_user else "succeeded",
-            max_turns=scene_policy.max_turns,
-            turns=[turn, final_turn] if not observation.requires_user else [turn],
-            observations=[observation],
-            current_turn_id=turn.turn_id,
-            current_tool_call=observation.execution if observation.requires_user else None,
-            final_answer=observation.result_summary if not observation.requires_user else None,
-            result_summary=observation.result_summary,
-            error=observation.error,
-            metadata={
-                "direct_retrieval_fallback": True,
-                "selected_tool": tool_name,
-                "query_complexity": complexity,
-                "attempted_tools": [tool_name],
-                "latest_action_selection": {
-                    "round_index": 2 if not observation.requires_user else 1,
-                    "selector_attempt": 1,
-                    "status": "validated",
-                    "action_type": "final_answer" if not observation.requires_user else "tool_call",
-                    "tool_name": None if not observation.requires_user else tool_name,
-                    "rationale_summary": "已有工具观察，进入最终汇总。"
-                    if not observation.requires_user
-                    else "首轮先调用允许的 RAG 工具。",
-                    "validation_result": "passed",
-                    "error": None,
-                },
-                "action_selection_audits": [
-                    {
-                        "round_index": 1,
-                        "selector_attempt": 1,
-                        "status": "validated",
-                        "action_type": "tool_call",
-                        "tool_name": tool_name,
-                        "rationale_summary": "首轮先调用允许的 RAG 工具。",
-                        "error": None,
-                    },
-                    {
-                        "round_index": 2,
-                        "selector_attempt": 1,
-                        "status": "validated",
-                        "action_type": "final_answer",
-                        "tool_name": None,
-                        "rationale_summary": "已有工具观察，进入最终汇总。",
-                        "error": None,
-                    },
-                ] if not observation.requires_user else [
-                    {
-                        "round_index": 1,
-                        "selector_attempt": 1,
-                        "status": "validated",
-                        "action_type": "tool_call",
-                        "tool_name": tool_name,
-                        "rationale_summary": "首轮先调用允许的 RAG 工具。",
-                        "error": None,
-                    }
-                ],
-            },
-        )
-
-    def _run_plan_agent(
-            self,
-            *,
-            tool_executor: ToolExecutor,
-            session_id: str,
-            request_id: str,
-            message: str,
-            mounted_knowledge_sources: tuple[str, ...],
-            tool_name: str,
-            tool_input: Mapping[str, Any],
-    ) -> PlanRun:
-        planner = MinimalPlanner(
-            tool_executor=tool_executor,
-            plan_run_id_factory=lambda: f"plan-{request_id}",
-            step_id_factory=lambda index: f"step-{index}",
-        )
-        scene_policy = self._build_plan_scene_policy(
-            tool_name=tool_name,
-            tool_input=tool_input,
-        )
-        plan_run = planner.create_plan(
-            session_id=session_id,
-            request_id=request_id,
-            user_goal=message,
-            mounted_knowledge_sources=mounted_knowledge_sources,
-            candidate_tools=self._plan_candidate_tools(
-                tool_executor=tool_executor,
-                default_tool_name=tool_name,
-                scene_policy=scene_policy,
-            ),
-            scene_policy=scene_policy,
-        )
-        return PlanExecutor(tool_executor=tool_executor).execute(plan_run)
 
     def _build_plan_scene_policy(
             self,

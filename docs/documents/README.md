@@ -6,7 +6,7 @@
 
 1. 先读 [系统架构图](./architecture/system-overview.svg)，理解 `platform / application / scenes` 三层关系。
 2. 如果关注对话主链路，读 [ReAct / Plan Agent Runtime](./runtime/react-plan-agent-runtime.md) 和 [Main Chat Agent Runtime Flow](./runtime/main-chat-agent-runtime-flow.svg)。
-   如果关注 ChatGraph + SubGraph 分层迁移，读 [ChatGraph SubGraphs](./runtime/chatgraph-subgraphs.svg)。
+   如果关注 ChatGraph + ReAct / Plan 子图分层，读 [ChatGraph SubGraphs](./runtime/chatgraph-subgraphs.svg)。
 3. 如果关注 Agentic RAG 内部检索轮次，读 [Agentic RAG 设计说明](./rag/agentic-rag.md) 和 [Agentic RAG 流程图](./rag/agentic-rag-retrieval-flow.svg)。
 4. 如果关注 LangGraph、HITL、状态治理，读 [Main Chat Agent Runtime Flow](./runtime/main-chat-agent-runtime-flow.svg)。
 5. 如果关注知识库入库、预处理和索引，读 [知识管理流程图](./knowledge/knowledge-document-flow.svg)。

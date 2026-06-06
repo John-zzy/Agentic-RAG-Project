@@ -3,6 +3,26 @@
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 
 
+def build_direct_answer_prompt_template(system_prompt: str | None = None) -> ChatPromptTemplate:
+    """构建不依赖检索证据的普通对话回答模板。"""
+    resolved_system_prompt = system_prompt or (
+        "你是一名通用助手。请直接、自然地回答用户问题。"
+    )
+    return ChatPromptTemplate.from_messages(
+        [
+            (
+                "system",
+                (
+                    f"{resolved_system_prompt}\n"
+                    "当前问题不要求使用知识库证据，不要编造引用编号。"
+                ),
+            ),
+            MessagesPlaceholder("history"),
+            ("human", "{input}"),
+        ]
+    )
+
+
 def build_rag_answer_prompt_template(system_prompt: str | None = None) -> ChatPromptTemplate:
     """构建可按场景定制 system prompt 的 RAG 问答模板。"""
     resolved_system_prompt = system_prompt or (

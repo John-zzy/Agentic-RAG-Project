@@ -45,9 +45,9 @@ def build_loop_or_finish_edge():
             return route
         run = state["run"]
         if run.workflow_status in {"waiting_user", "failed", "cancelled", "succeeded"}:
-            return END
+            return "synthesize_result"
         if len(run.turns) >= run.max_turns:
-            return END
+            return "synthesize_result"
         return "select_action"
 
     return loop_or_finish

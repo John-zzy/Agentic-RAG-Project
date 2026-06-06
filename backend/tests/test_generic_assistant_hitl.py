@@ -12,12 +12,12 @@ from backend.application.runtime.api.chat.schemas import (
     ChatResumeRequest,
     HitlResumePayload,
 )
-from backend.application.runtime.assembly.runtime_factory import (
-    ChatGraphRuntime,
+from backend.application.runtime.assembly.runtime_factory import ChatGraphRuntime
+from backend.application.runtime.service import ChatService
+from backend.platform.agent_runtime.chat_graph.contracts import (
     HitlResumeInput,
     HitlWaitInput,
 )
-from backend.application.runtime.service import ChatService
 from backend.platform.config.settings import AppSettings
 from backend.platform.memory.base.session_store import SQLiteSessionStore
 from backend.platform.memory.chat.prompt_context import PromptContextBuilder
@@ -454,7 +454,7 @@ def test_generic_assistant_chat_resume_respond_continues_retrieval_with_clarific
     assert response.resume_payload is not None
     assert response.resume_payload.response == "安全合规政策"
     assert response.resume_payload.source == "freeform"
-    assert [call["query"] for call in document_service.calls] == ["你好", "安全合规政策"]
+    assert [call["query"] for call in document_service.calls] == ["安全合规政策"]
     business_calls = [
         call
         for call in model.invoke_runnable_calls

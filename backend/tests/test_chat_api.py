@@ -1,4 +1,5 @@
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 import json
 from threading import Event, Lock
 from typing import Any
@@ -370,6 +371,8 @@ class DirectAnswerModel(FakeModel):
     ):
         if _is_react_selector_prompt(prompt_template):
             return DirectAnswerSelectorRunnable()
+        if prompt_template is None:
+            raise AssertionError("direct answer should use an explicit prompt template")
         return super().get_runnable(
             complexity=complexity,
             prompt_template=prompt_template,
@@ -1310,20 +1313,23 @@ def test_chat_api_react_aggregation_uses_all_successful_observations(monkeypatch
         metadata={"citations": [{"citation_id": "chunk-react-1"}, {"citation_id": "chunk-react-2"}]},
     )
 
-    def _fake_run_react_agent(**kwargs: Any) -> ReActRun:
-        session_id = kwargs["session_id"]
-        request_id = kwargs["request_id"]
-        message = kwargs["message"]
-        return react_run.model_copy(
+    inner_service = service._get_scene_service("generic_assistant")
+    original_build_react_graph_deps = inner_service._build_react_graph_deps
+
+    def _fake_build_react_graph_deps(prepared: Any, state: Any) -> Any:
+        seeded_run = react_run.model_copy(
             update={
-                "session_id": session_id,
-                "request_id": request_id,
-                "user_goal": message,
+                "session_id": prepared.session_id,
+                "request_id": prepared.request_id,
+                "user_goal": prepared.user_message,
             }
         )
+        return replace(
+            original_build_react_graph_deps(prepared, state),
+            initial_run=seeded_run,
+        )
 
-    inner_service = service._get_scene_service("generic_assistant")
-    monkeypatch.setattr(inner_service, "_run_react_agent", _fake_run_react_agent)
+    monkeypatch.setattr(inner_service, "_build_react_graph_deps", _fake_build_react_graph_deps)
 
     with TestClient(app) as client:
         response = client.post("/chat", json={"message": "聚合测试"})
@@ -1562,11 +1568,14 @@ def test_chat_api_react_ask_user_without_observation_enters_hitl_wait(monkeypatc
     )
     app = create_app(chat_service=service)
 
-    def _fake_run_react_agent(**kwargs: Any) -> ReActRun:
-        session_id = kwargs["session_id"]
-        request_id = kwargs["request_id"]
-        message = kwargs["message"]
-        return ReActRun(
+    inner_service = service._get_scene_service("generic_assistant")
+    original_build_react_graph_deps = inner_service._build_react_graph_deps
+
+    def _fake_build_react_graph_deps(prepared: Any, state: Any) -> Any:
+        session_id = prepared.session_id
+        request_id = prepared.request_id
+        message = prepared.user_message
+        seeded_run = ReActRun(
             react_run_id=f"react-{request_id}",
             session_id=session_id,
             request_id=request_id,
@@ -1597,9 +1606,12 @@ def test_chat_api_react_ask_user_without_observation_enters_hitl_wait(monkeypatc
                 }
             },
         )
+        return replace(
+            original_build_react_graph_deps(prepared, state),
+            initial_run=seeded_run,
+        )
 
-    inner_service = service._get_scene_service("generic_assistant")
-    monkeypatch.setattr(inner_service, "_run_react_agent", _fake_run_react_agent)
+    monkeypatch.setattr(inner_service, "_build_react_graph_deps", _fake_build_react_graph_deps)
 
     with TestClient(app) as client:
         response = client.post(
@@ -2014,6 +2026,8 @@ def test_chat_api_sse_error_path_keeps_runtime_event_order() -> None:
             *,
             config: Any | None = None,
         ) -> str:
+            if isinstance(runnable, FakeReactSelectorRunnable):
+                return runnable.invoke(input, config=config)
             self.invoke_runnable_calls.append({"runnable": runnable, "input": input, "config": config})
             raise ValueError("Model returned empty content")
 

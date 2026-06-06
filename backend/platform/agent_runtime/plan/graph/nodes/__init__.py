@@ -4,6 +4,7 @@ from backend.platform.agent_runtime.plan.graph.nodes.handle_retry import build_h
 from backend.platform.agent_runtime.plan.graph.nodes.handle_waiting_user import build_handle_waiting_user_node
 from backend.platform.agent_runtime.plan.graph.nodes.select_next_step import build_select_next_step_node
 from backend.platform.agent_runtime.plan.graph.nodes.synthesize_plan_result import build_synthesize_plan_result_node
+from backend.platform.agent_runtime.plan.graph.nodes.synthesize_result import build_synthesize_result_node
 
 __all__ = [
     "build_create_plan_node",
@@ -12,4 +13,5 @@ __all__ = [
     "build_handle_waiting_user_node",
     "build_select_next_step_node",
     "build_synthesize_plan_result_node",
+    "build_synthesize_result_node",
 ]

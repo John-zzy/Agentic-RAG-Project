@@ -11,6 +11,8 @@ def build_synthesize_plan_result_node(dependencies: PlanGraphDependencies):
 
     def synthesize_plan_result(state: PlanGraphState):
         plan_run = state["plan_run"]
+        if plan_run.workflow_status in {"waiting_user", "failed", "cancelled"}:
+            return {"plan_run": plan_run}
         return {"plan_run": executor.synthesize_plan_result(plan_run)}
 
     return synthesize_plan_result

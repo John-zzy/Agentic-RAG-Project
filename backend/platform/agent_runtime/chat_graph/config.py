@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 from backend.platform.agent_runtime.chat_graph.contracts import PreparedChatTurn
+from backend.platform.agent_runtime.plan.graph.config import PlanGraphDependencies
+from backend.platform.agent_runtime.react.graph.config import ReActGraphDependencies
 from backend.platform.workflow.langgraph.state import RuntimeGraphState
 
 
@@ -18,7 +20,14 @@ class ChatGraphDependencies:
         dict[str, Any],
     ]
     select_agent_mode: Callable[[PreparedChatTurn], dict[str, Any]] | None = None
-    run_agent_runtime: Callable[[PreparedChatTurn, RuntimeGraphState], dict[str, Any]] | None = None
+    build_react_graph_deps: Callable[
+        [PreparedChatTurn, RuntimeGraphState],
+        ReActGraphDependencies,
+    ] | None = None
+    build_plan_graph_deps: Callable[
+        [PreparedChatTurn, RuntimeGraphState],
+        PlanGraphDependencies,
+    ] | None = None
     build_prepared_from_state: Callable[
         [PreparedChatTurn, RuntimeGraphState],
         PreparedChatTurn,
@@ -27,4 +36,3 @@ class ChatGraphDependencies:
         [PreparedChatTurn, RuntimeGraphState],
         dict[str, Any],
     ] | None = None
-

@@ -24,6 +24,7 @@ from backend.platform.agent_runtime.validation import (
     ToolAccessValidationError,
     ToolInputValidationError,
 )
+from backend.platform.agent_runtime.graph_logging import log_llm_output
 
 
 class ReActActionContext(AgentRuntimeModel):
@@ -183,6 +184,11 @@ class LLMReActActionSelector:
         raw_output = self._model_client.invoke_runnable(
             runnable,
             build_selector_prompt_variables(context),
+        )
+        log_llm_output(
+            source="react_selector",
+            request_id=context.request_id,
+            output=raw_output,
         )
         payload = _load_selector_payload(raw_output)
         try:

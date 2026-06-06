@@ -12,6 +12,8 @@ def build_select_action_node(dependencies: ReActGraphDependencies):
     def select_action(state: ReActGraphState):
         run = state["run"]
         action = runtime.select_action(run=run, round_index=len(run.turns) + 1)
-        return {"action": action}
+        if action is None:
+            runtime.mark_failed_from_selector(run=run)
+        return {"run": run, "action": action}
 
     return select_action

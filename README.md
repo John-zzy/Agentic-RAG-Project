@@ -6,7 +6,7 @@
 
 ## 核心能力
 
-- **统一对话入口**：`/chat` 由顶层 Agent Runtime 编排 ReAct / Plan，再按会话 scene 和 mounted knowledge sources 选择工具，支持普通 JSON 和 SSE 流式输出。
+- **统一对话入口**：`/chat` 由顶层 ChatGraph 编排模式选择、回答分支、HITL 和持久化；ReAct / Plan 子图负责执行工具调用，支持普通 JSON 和 SSE 流式输出。
 - **Agentic RAG 工具链路**：先做 query rewrite 和工具决策，再多轮检索、判断证据是否足够，最后生成带引用的回答。它是顶层 Agent 可调用的工具能力，不是唯一入口。
 - **Hybrid Search**：文档检索支持语义召回、BM25 关键词召回、融合排序、相关性过滤和 no-hit fallback。
 - **引用与可观测性**：回答返回结构化 `citations`、正文引用编号、`retrieval_trace`、rerank trace 和 SSE `tool / waiting_user / done` 事件。
@@ -28,14 +28,14 @@
 
 ## 架构概览
 
-![系统架构图](./docs/documents/architecture/system-overview-high-end.png)
+![系统架构图](./docs/documents/architecture/system-overview.svg)
 
 ```text
 backend/
 ├─ application/        # FastAPI API、ChatService facade、运行时装配
-│  └─ runtime/         # API 路由、服务工厂、ChatGraphRuntime 装配
+│  └─ runtime/         # API 路由、ChatService facade、服务工厂和配置装配
 ├─ platform/           # RAG、知识处理、工具协议、Agent / Workflow Runtime
-│  ├─ agent_runtime/   # ChatGraph、ReAct / Plan 子图、工具执行
+│  ├─ agent_runtime/   # ChatGraph runtime、ReAct / Plan 子图、工具执行
 │  ├─ knowledge/       # 知识文档管理、处理、发布
 │  ├─ rag/             # Agentic Retrieval、Hybrid Search、rerank
 │  └─ workflow/        # LangGraph checkpoint、run lifecycle、状态机
@@ -64,8 +64,9 @@ openspec/              # 变更提案、规格与归档记录
 ```text
 用户问题
   -> 会话与场景解析
-  -> ChatService / ChatGraph
-  -> ReAct / Plan Agent Runtime
+  -> ChatService 准备 turn context
+  -> ChatGraphRuntime / ChatGraph
+  -> ReAct / Plan 子图
   -> RAG 工具或业务工具
   -> Hybrid Search / Agentic Retrieval / HITL
   -> 回答生成
@@ -93,7 +94,7 @@ openspec/              # 变更提案、规格与归档记录
 - [x] **智能对话工作台**：提供统一 `/chat`、`/chat/resume` 和 `/sessions` 能力，支持普通 JSON 响应、SSE 流式输出、会话场景绑定和多知识源挂载。
 - [x] **知识库管理**：支持文件上传、预处理预览、正式入库、重处理、重切块、软删除、索引状态查看和本地文档知识源检索。
 - [x] **检索增强问答**：支持 query rewrite、Agentic Retrieval、Hybrid Search、相关性过滤、no-hit fallback、结构化引用、正文引用编号和检索 trace。
-- [x] **多步 Agent 执行**：支持 ReAct / Plan 两类运行模式，顶层 ChatGraph 负责模式选择、工具调用、RAG 调用、最终回答合成和会话持久化。
+- [x] **多步 Agent 执行**：支持 ReAct / Plan 两类运行模式，顶层 ChatGraph 负责模式选择、分支路由、回答合成和会话持久化；ReAct / Plan 子图负责工具调用，RAG 只作为工具在子图内触发。
 - [x] **人工介入流程**：支持澄清等待、工具审批、外部 API 审批，以及 `approve / reject / respond` 恢复；拒绝和取消会进入明确终态。
 - [x] **运行状态与恢复**：基于 LangGraph checkpoint 和 Workflow State Machine 管理 `created / planning / running / waiting_user / retrying / succeeded / failed / cancelled` 状态，避免终态重复恢复。
 - [x] **多场景扩展**：`generic_assistant` 作为通用知识助手主线，`ecommerce` 作为业务扩展示例；场景负责 prompt、工具范围和可用知识源。
@@ -102,7 +103,8 @@ openspec/              # 变更提案、规格与归档记录
 
 ### P0：增强 Agent 任务可靠性
 
-- [ ] **运行时重构审计**：继续检查状态机、流式事件、历史消息、工具路由等 glue code，优先收敛到 LangGraph graph / node / conditional edge / interrupt。
+- [x] **ChatGraph 子图迁移**：`/chat` 同步链路进入顶层 ChatGraph，`react_branch` / `plan_branch` 调用 ReAct / Plan 子图，不再在 application 层硬编码完整 Agent 执行循环。
+- [ ] **运行时重构审计**：继续检查状态机、流式事件、历史消息、工具路由、结果投影等 glue code，优先收敛到 LangGraph graph / node / conditional edge / interrupt。
 - [ ] **跨场景业务流转**：将 `generic_assistant` 到 `ecommerce` 的 handoff / follow-up 逻辑沉淀为可复用 router 或业务子图。
 - [ ] **失败恢复**：为工具调用、模型调用和长链路任务补齐超时、重试、失败补偿、可恢复执行和幂等控制。
 - [ ] **结果自检**：在多步任务中加入结果校验、失败原因归类和必要时的自我修正。

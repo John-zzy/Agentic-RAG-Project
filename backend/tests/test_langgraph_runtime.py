@@ -15,16 +15,16 @@ from backend.application.runtime.api.chat.schemas import (
     HitlState,
     RetrievalTrace,
 )
-from backend.application.runtime.assembly.runtime_factory import (
-    ChatGraphRuntime,
-    HitlResumeError,
-    HitlResumeInput,
-    HitlWaitInput,
-)
+from backend.application.runtime.assembly.runtime_factory import ChatGraphRuntime
 from backend.application.runtime.service import ChatService
 from backend.application.runtime.stream_events import (
     GraphRuntimeStreamEvent,
     GraphStreamEventMapper,
+)
+from backend.platform.agent_runtime.chat_graph.contracts import (
+    HitlResumeError,
+    HitlResumeInput,
+    HitlWaitInput,
 )
 from backend.platform.config.settings import AppSettings
 from backend.platform.memory.base.session_store import SQLiteSessionStore

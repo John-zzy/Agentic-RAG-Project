@@ -14,6 +14,7 @@ from backend.application.runtime.assembly.service_parts.contracts import (
 from backend.platform.workflow.langgraph.state import RuntimeGraphState
 from backend.platform.memory.base.chat_history import SQLiteChatMessageHistory
 from backend.platform.models.base.router import TaskComplexity
+from backend.platform.agent_runtime.graph_logging import log_llm_output
 
 
 class ChatAnsweringMixin:
@@ -27,7 +28,8 @@ class ChatAnsweringMixin:
             answer_builder=self._generate_answer_direct,
             history_loader=self._load_graph_seed_history,
             select_agent_mode=self._select_agent_mode_for_graph,
-            run_agent_runtime=self._run_agent_runtime_for_graph,
+            build_react_graph_deps=self._build_react_graph_deps,
+            build_plan_graph_deps=self._build_plan_graph_deps,
             build_prepared_from_state=self._prepared_from_graph_state,
             build_hitl_wait_update=self._build_hitl_wait_update_for_graph,
         )
@@ -58,12 +60,17 @@ class ChatAnsweringMixin:
             prepared: PreparedChatTurn,
     ) -> tuple[str, list[Citation]]:
         """调用模型链生成答案，并返回答案与引用。"""
-        runnable = self._get_answer_runnable(prepared)
         try:
+            runnable = self._get_answer_runnable(prepared)
             answer = self.model.invoke_runnable(
                 runnable,
                 self._build_answer_variables(prepared),
                 config=self._build_runnable_config(prepared.session_id),
+            )
+            log_llm_output(
+                source="evidence_answer",
+                request_id=prepared.request_id,
+                output=answer,
             )
         except ValueError as exc:
             if str(exc) == "Model returned empty content":
@@ -91,8 +98,8 @@ class ChatAnsweringMixin:
 
     def _stream_model_answer(self, prepared: PreparedChatTurn) -> Iterator[str]:
         """对最终答案生成阶段执行流式调用。"""
-        runnable = self._get_answer_runnable(prepared)
         try:
+            runnable = self._get_answer_runnable(prepared)
             for chunk in self.model.stream_runnable(
                     runnable,
                     self._build_answer_variables(prepared),
@@ -136,6 +143,11 @@ class ChatAnsweringMixin:
                 message="Model returned empty response.",
                 request_id=prepared.request_id,
             )
+        log_llm_output(
+            source="stream_answer",
+            request_id=prepared.request_id,
+            output=joined_answer,
+        )
         return self._finalize_answer_text(joined_answer, prepared.citations)
 
     def _build_non_evidence_answer(self, prepared: PreparedChatTurn) -> tuple[str, list[Citation]]:
@@ -148,12 +160,17 @@ class ChatAnsweringMixin:
 
     def _invoke_direct_answer_template(self, prepared: PreparedChatTurn) -> str:
         """不依赖知识证据时，走普通对话回答链，不生成 citations。"""
-        runnable = self._get_direct_answer_runnable(prepared)
         try:
+            runnable = self._get_direct_answer_runnable(prepared)
             answer = self.model.invoke_runnable(
                 runnable,
                 {"input": prepared.user_message},
                 config=self._build_runnable_config(prepared.session_id),
+            )
+            log_llm_output(
+                source="direct_answer",
+                request_id=prepared.request_id,
+                output=answer,
             )
         except ValueError as exc:
             if str(exc) == "Model returned empty content":
@@ -239,7 +256,10 @@ class ChatAnsweringMixin:
 
     def _get_direct_answer_runnable(self, prepared: PreparedChatTurn) -> RunnableWithMessageHistory:
         """为无需知识库的普通回答构建带历史的 runnable。"""
-        base_runnable = self.model.get_runnable(complexity=prepared.complexity or "simple")
+        base_runnable = self.model.get_runnable(
+            complexity=prepared.complexity or "simple",
+            prompt_template=self._direct_answer_template,
+        )
 
         def history_factory(session_id: str) -> SQLiteChatMessageHistory:
             return self._get_session_history(

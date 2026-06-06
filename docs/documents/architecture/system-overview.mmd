@@ -11,8 +11,8 @@ flowchart LR
         APP2["Runtime Bootstrap<br/>装配 chat service、knowledge services、scene registry"]
         APP3["ActiveSceneChatService<br/>按 session 解析 scene 并分发请求"]
         APP4["SceneRegistry<br/>注册 generic_assistant / ecommerce scene definitions"]
-        APP5["ChatService<br/>准备 turn、选择 Agent mode、组装工具、持久化回答"]
-        APP6["ChatGraphRuntime<br/>LangGraph run lifecycle / checkpoint / final answer graph"]
+        APP5["ChatService<br/>准备 turn、注入 graph deps、组装回答响应"]
+        APP6["Runtime Factory<br/>按配置创建 platform ChatGraphRuntime"]
         APP7["GraphStreamEventMapper<br/>LangGraph 内部事件映射为 SSE 业务事件"]
     end
 
@@ -28,11 +28,13 @@ flowchart LR
         direction TB
         subgraph AGENT["platform.agent_runtime<br/>Top-level Agent Runtime"]
             direction TB
+            AR0["ChatGraphRuntime + ChatGraph<br/>run lifecycle / checkpoint / HITL / final answer graph"]
             AR1["ModeSelector<br/>简单问题 ReAct，复杂问题 Plan"]
-            AR2["ReActRuntime<br/>turn / action / observation"]
-            AR3["MinimalPlanner + PlanExecutor<br/>PlanRun / PlanStep / retry / waiting_user"]
+            AR2["ReActGraph<br/>initialize / select / validate / execute / synthesize"]
+            AR3["PlanGraph<br/>create_plan / execute_step / retry / synthesize"]
             AR4["ToolExecutor<br/>按 scene 白名单执行工具"]
             AR5["RAG Tool Adapters<br/>native_rag_search / agentic_rag_search"]
+            AR6["Graph Logging<br/>关键节点、条件边和 LLM 输出调试日志"]
         end
         subgraph TOOLS["platform.tools<br/>Neutral Tool Protocol"]
             direction TB
@@ -97,9 +99,10 @@ flowchart LR
     SC2 --> SC3
     SC2 -. 注入业务扩展 .-> SC4
 
-    APP5 --> AR1
-    APP5 --> AR2
-    APP5 --> AR3
+    APP6 --> AR0
+    AR0 --> AR1
+    AR0 --> AR2
+    AR0 --> AR3
     AR1 --> AR2
     AR1 --> AR3
     AR2 --> AR4
@@ -124,10 +127,10 @@ flowchart LR
     PL3 --> DB2
     PL3 --> DB3
     PL4 --> DB1
-    APP6 --> WF1
-    APP6 --> WF2
-    APP6 --> WF3
-    APP6 -. 首次 graph run 从兼容读模型种子化 .-> PL4
+    AR0 --> WF1
+    AR0 --> WF2
+    AR0 --> WF3
+    AR0 -. 首次 graph run 从兼容读模型种子化 .-> PL4
     APP7 -. 对外保持 start / history / tool / chunk / waiting_user / done / error .-> APP1
     WF3 --> DB5
     PL5 --> EX1

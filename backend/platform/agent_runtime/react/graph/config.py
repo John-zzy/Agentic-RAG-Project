@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Callable
+from collections.abc import Callable, Mapping
+from typing import Any
 
+from backend.platform.agent_runtime.contracts import ReActRun
 from backend.platform.agent_runtime.react.policy import ReActScenePolicy
 from backend.platform.agent_runtime.react.runtime import ReActRuntime
 from backend.platform.agent_runtime.react.selector import ReActActionSelector
@@ -16,6 +18,12 @@ class ReActGraphDependencies:
 
     tool_executor: ToolExecutor
     action_selector: ReActActionSelector
+    session_id: str = ""
+    request_id: str = ""
+    user_goal: str = ""
+    react_run_id: str | None = None
+    initial_run: ReActRun | None = None
+    project_result: Callable[[ReActRun], Mapping[str, Any]] | None = None
     final_synthesizer: Any | None = None
     max_turns: int = 5
     scene_policy: ReActScenePolicy | None = None

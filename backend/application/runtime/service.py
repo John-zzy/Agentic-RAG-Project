@@ -4,7 +4,10 @@ from collections.abc import Iterator
 from typing import Any
 from uuid import uuid4
 
-from backend.application.runtime.api.chat.prompts import build_rag_answer_prompt_template
+from backend.application.runtime.api.chat.prompts import (
+    build_direct_answer_prompt_template,
+    build_rag_answer_prompt_template,
+)
 from backend.application.runtime.api.chat.schemas import (
     ChatRequest,
     ChatResumeRequest,
@@ -110,6 +113,9 @@ class ChatService(
         self.model = model or model_client
         self.graph_runtime = graph_runtime or ChatGraphRuntime.from_settings(self.settings)
         self._rag_answer_template = build_rag_answer_prompt_template(
+            system_prompt=scene_definition.system_prompt
+        )
+        self._direct_answer_template = build_direct_answer_prompt_template(
             system_prompt=scene_definition.system_prompt
         )
         self._retriever = scene_definition.build_retriever()

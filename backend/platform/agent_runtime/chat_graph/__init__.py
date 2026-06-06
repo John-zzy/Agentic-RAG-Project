@@ -2,6 +2,12 @@
 
 from backend.platform.agent_runtime.chat_graph.config import ChatGraphDependencies
 from backend.platform.agent_runtime.chat_graph.graph import build_chat_graph
+from backend.platform.agent_runtime.chat_graph.runtime import ChatGraphRuntime
 from backend.platform.agent_runtime.chat_graph.state import ChatGraphState
 
-__all__ = ["ChatGraphDependencies", "ChatGraphState", "build_chat_graph"]
+__all__ = [
+    "ChatGraphDependencies",
+    "ChatGraphRuntime",
+    "ChatGraphState",
+    "build_chat_graph",
+]
