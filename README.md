@@ -28,7 +28,7 @@
 
 ## 架构概览
 
-![系统架构图](./docs/documents/architecture/system-overview.svg)
+![系统架构图](./docs/documents/architecture/system-overview-infographic.png)
 
 ```text
 backend/
@@ -58,6 +58,14 @@ openspec/              # 变更提案、规格与归档记录
 ├─ changes/
 └─ specs/
 ```
+
+### ChatGraph 核心流程
+
+![ChatGraph 核心流程图](./docs/documents/runtime/chatgraph-subgraphs-infographic.png)
+
+对话运行时采用分层编排结构：顶层 **ChatGraph** 负责会话上下文准备、执行模式选择、分支路由、最终回答合成，以及记忆与 trace 持久化；**ReAct / Plan 子图** 分别承载即时工具调用与多步任务执行；**Agentic_RAG SubGraph** 作为嵌套检索能力，在执行过程中提供 query rewrite、文档召回、rerank、证据充分性判断和证据汇总。
+
+该结构将主流程调度、任务执行和检索增强能力解耦，使系统能够同时支持普通问答、复杂任务规划、人工介入、运行状态恢复和可观测企业级助手场景。
 
 核心链路：
 

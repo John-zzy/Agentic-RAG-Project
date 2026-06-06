@@ -29,6 +29,17 @@
 - 如果终端输出出现乱码，先判断是不是读取编码错误，不要直接认定文件已损坏。
 - 不要基于乱码输出制作 patch；重新用 UTF-8 读取后再修改。
 
+## Imagegen 生图命令
+
+- 用户明确要求 `gpt-image-2` / `gpt-image2` 时，走 `imagegen` skill 的 CLI fallback：`C:\Users\zzy\.codex\skills\.system\imagegen\scripts\image_gen.py`；普通生图默认才优先内置 `image_gen`。
+- Windows 上不要直接用系统 `python`，优先用 `backend\.venv\Scripts\python.exe`。
+- CLI fallback 需要 `OPENAI_API_KEY`，并要求当前 Python 环境已有 `openai`；后处理、尺寸校验或升采样需要 `Pillow`。
+- 中文、多行、带引号的复杂 prompt 不要直接塞进 PowerShell 命令参数。先写入 `tmp\imagegen\<name>-prompt.txt`，再用 `--prompt-file` 传入，避免参数被拆开或中文在错误输出中乱码。
+- PowerShell 5.1 下不要把 imagegen CLI 的 stderr 轻易 `2>&1` 合并后判断成失败；CLI 会把 `OPENAI_API_KEY is set.` 等状态写到 stderr，合并后可能显示成 `NativeCommandError`。优先看 CLI 是否真正写出目标文件。
+- `gpt-image-2` 不支持 `--background transparent`；透明图不要静默降级到 `gpt-image-1.5`，除非用户明确确认。
+- `--size 3840x2160` 是请求参数，不保证最终 PNG 一定按该尺寸落盘。生成后用 Pillow 检查 `im.size`；如果只是文档插图需要高分辨率版本，可以本地 LANCZOS 升采样并保留原图。
+- 输出不要覆盖既有资产，除非用户明确要求替换；新图优先使用语义化文件名，例如 `<source-name>-infographic.png` 和 `<source-name>-infographic-3840x2160.png`。
+
 ## Git 工作区
 
 - 工作区可能已有用户或其他任务留下的未提交改动，不要执行 `git reset --hard` 或 `git checkout --` 回退它们。
