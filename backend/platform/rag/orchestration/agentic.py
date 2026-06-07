@@ -27,11 +27,11 @@ from backend.platform.rag.post_retrieval.rerank import (
     disabled_rerank_trace,
     remove_rerank_scores,
 )
-from backend.platform.rag.orchestration.langgraph import build_agentic_rag_graph
-from backend.platform.rag.orchestration.langgraph.config import (
+from backend.platform.rag.orchestration.retrieval_graph import build_agentic_rag_graph
+from backend.platform.rag.orchestration.retrieval_graph.config import (
     AgenticRagGraphDependencies,
 )
-from backend.platform.rag.orchestration.langgraph.state import build_agentic_rag_graph_state
+from backend.platform.rag.orchestration.retrieval_graph.state import build_agentic_rag_graph_state
 from backend.platform.rag.pre_retrieval.query_rewrite import QueryRewrite, QueryRewriter
 
 logger = logging.getLogger(__name__)

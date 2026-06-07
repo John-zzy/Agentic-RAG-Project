@@ -111,6 +111,7 @@ class ChatTurnPreparationMixin:
             *,
             message: str,
             mounted_knowledge_sources: tuple[str, ...],
+            request_id: str,
     ) -> RetrievalTrace:
         return RetrievalTrace(
             original_query=message,
@@ -118,8 +119,9 @@ class ChatTurnPreparationMixin:
             rewritten_query=None,
             tool_call_count=0,
             candidate_tools=list(
-                self.scene_definition.resolve_candidate_retrieval_tools(
-                    mounted_knowledge_sources
+                self._resolve_runtime_candidate_retrieval_tools(
+                    mounted_knowledge_sources=mounted_knowledge_sources,
+                    request_id=request_id,
                 )
             ),
             exit_reason="pending_chat_graph",
@@ -208,6 +210,7 @@ class ChatTurnPreparationMixin:
         retrieval_trace = self._empty_retrieval_trace(
             message=message,
             mounted_knowledge_sources=tuple(mounted_knowledge_sources),
+            request_id=request_id,
         )
 
         # ── 第4步：打包成只读上下文对象 ──────────────────────────────────

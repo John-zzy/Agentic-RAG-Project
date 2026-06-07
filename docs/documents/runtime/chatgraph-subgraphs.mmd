@@ -1,6 +1,6 @@
 %%{init: {"flowchart": {"curve": "basis", "nodeSpacing": 44, "rankSpacing": 72, "padding": 18}, "theme": "base", "themeVariables": {"fontFamily": "Inter, Segoe UI, Arial, sans-serif", "primaryTextColor": "#172033", "lineColor": "#64748B", "clusterBkg": "#FFFFFF", "clusterBorder": "#CBD5E1"}}}%%
 flowchart TB
-  TITLE["ChatGraph Runtime Architecture<br/>Main orchestration, mode subgraphs, and nested Agentic_RAG retrieval"]
+  TITLE["ChatGraph Runtime Architecture<br/>Main orchestration, mode subgraphs, and nested Agentic RAG retrieval graph"]
 
   %% =====================
   %% Layer 01: ChatGraph
@@ -71,9 +71,9 @@ flowchart TB
   PB -. "invokes" .-> PGS
 
   %% =====================
-  %% Layer 03: Nested Agentic RAG
+  %% Layer 03: Nested Agentic RAG Retrieval Graph
   %% =====================
-  subgraph RAGL["03 Nested Retrieval Capability | Agentic_RAG SubGraph"]
+  subgraph RAGL["03 Nested Retrieval Capability | Agentic RAG Retrieval Graph"]
     direction LR
     AGS((START)) --> AINIT["initialize_plan"]
     AINIT --> ADT{"tool_decision"}

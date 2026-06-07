@@ -229,14 +229,19 @@ class MinimalPlanner:
         if not allowed:
             raise ValueError("Planner cannot create a plan without allowed tools.")
 
-        if "documents" in set(context.mounted_knowledge_sources):
-            for rag_tool_name in (AGENTIC_RAG_TOOL_NAME, NATIVE_RAG_TOOL_NAME):
-                if rag_tool_name in allowed:
-                    return rag_tool_name
+        configured_default = context.scene_policy.get("default_retrieval_tool")
+        if isinstance(configured_default, str) and configured_default in allowed:
+            return configured_default
 
-        for tool_name in sorted(allowed):
-            if "rag" in tool_name or "search" in tool_name:
-                return tool_name
+        for rag_tool_name in (AGENTIC_RAG_TOOL_NAME, NATIVE_RAG_TOOL_NAME):
+            if rag_tool_name in allowed:
+                return rag_tool_name
+
+        if "documents" in set(context.mounted_knowledge_sources) and "candidate_tools" in context.scene_policy:
+            raise ValueError(
+                "AGENT_RUNTIME_TOOL_UNAVAILABLE: no explicit retrieval tool is available "
+                "for current scene and mounted sources."
+            )
         return sorted(allowed)[0]
 
     def _new_plan_run_id(self) -> str:

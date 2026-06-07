@@ -160,24 +160,18 @@ class ChatService(
 
         流程概览：
         1. 准备回合上下文(session、场景、历史窗口)
-        2. 提前捕获历史快照(必须在 ChatGraph 写入本轮消息之前)
-        3. 通过 ChatGraph 完成完整的编排流程(模式选择、ReAct/Plan 执行、回答生成)
-        4. 依次产出 SSE 事件推送给前端
+        2. 通过 ChatGraph 完成完整的编排流程(模式选择、ReAct/Plan 执行、回答生成)
+        3. 依次产出 UI 需要的 SSE 事件推送给前端
         """
         # ── 第1步：准备回合上下文 ──
         # 将 API payload 解析为标准聊天回合，包含 session、场景配置、历史窗口等
         prepared = self._prepare_chat_turn(payload)
 
-        # ── 第2步：提前捕获历史快照 ──
-        # 记录的是"本轮 Agent 执行前，模型看到的历史消息"，
-        # 必须在 ChatGraph 写入本轮 human/ai 消息之前拿到，否则会被污染
-        history_event = self._build_history_event(prepared)
-
-        # ── 第3步：通过 ChatGraph 执行完整的编排流程 ──
+        # ── 第2步：通过 ChatGraph 执行完整的编排流程 ──
         # 图内依次完成：模式选择 → ReAct/Plan 分支执行 → 回答模式判定 → HITL 判断 → 生成最终回答
         prepared, answer, citations, run_id, graph_state = self._generate_answer(prepared)
 
-        # ── 第4步：依次产出 SSE 事件 ──
+        # ── 第3步：依次产出 SSE 事件 ──
 
         # 通知前端：graph run 已创建，附带本轮元信息（session、场景、agent 模式等）
         yield self._map_graph_stream_event(
@@ -195,19 +189,6 @@ class ChatService(
             },
         )
 
-        # 推送历史上下文快照，方便前端展示"模型看到了什么"
-        yield self._map_graph_stream_event(
-            "history_snapshot",
-            history_event,
-        )
-
-        # 推送 Agent/RAG 工具的检索结果和审计信息
-        # 即使 ReAct 没有调用工具，也会带上 direct_answer / no_evidence 等分支信息
-        yield self._map_graph_stream_event(
-            "retrieval_tool_result",
-            self._build_tool_event(prepared),
-        )
-
         # 如果 Agent 进入 HITL（人工确认）等待，SSE 流到此结束
         # 后续需要前端调用 resume_stream 恢复同一个 checkpoint
         if graph_state.get("status") == "waiting_user":
@@ -221,8 +202,9 @@ class ChatService(
             )
             return
 
-        # 推送最终回答（完整文本作为一个 chunk 发出）
-        yield self._map_graph_stream_event("answer_chunk", {"delta": answer})
+        # 当前模型链路没有稳定 token 级 graph stream 时，按显示块模拟打字机输出。
+        for chunk in _chunk_stream_answer(answer):
+            yield self._map_graph_stream_event("answer_chunk", {"delta": chunk})
 
         # 持久化本轮对话记录（会话记忆，非 graph checkpoint）
         self._persist_turn(prepared=prepared, answer=answer, citations=citations)
@@ -403,6 +385,15 @@ class ActiveSceneChatService:
 
 
 SceneChatService = ActiveSceneChatService
+
+
+def _chunk_stream_answer(answer: str, *, chunk_size: int = 80) -> Iterator[str]:
+    """没有真实 token stream 时，把完整回答切成稳定显示块。"""
+    text = str(answer or "")
+    if not text:
+        return
+    for index in range(0, len(text), chunk_size):
+        yield text[index:index + chunk_size]
 
 
 def build_default_scene_registry(

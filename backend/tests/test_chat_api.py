@@ -460,6 +460,27 @@ def _parse_sse_events(raw_text: str) -> list[dict[str, Any]]:
     return events
 
 
+def _assert_display_sse_events(
+    events: list[dict[str, Any]],
+    *,
+    final_event: str = "done",
+) -> None:
+    event_names = [event["event"] for event in events]
+    assert event_names[0] == "start"
+    assert event_names[-1] == final_event
+    assert "history" not in event_names
+    assert "tool" not in event_names
+    assert set(event_names) <= {"start", "thinking", "chunk", "waiting_user", "done", "error"}
+
+
+def _event_payloads(events: list[dict[str, Any]], event_name: str) -> list[dict[str, Any]]:
+    return [
+        json.loads(event["data"])
+        for event in events
+        if event["event"] == event_name and event["data"]
+    ]
+
+
 def _build_chat_service(
     test_name: str,
     knowledge_service: FakeKnowledgeService,
@@ -938,20 +959,16 @@ def test_chat_api_sse_success_path_returns_structured_events() -> None:
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/event-stream")
     events = _parse_sse_events(response.text)
-    assert [event["event"] for event in events] == ["start", "history", "tool", "chunk", "done"]
+    _assert_display_sse_events(events)
 
     start_data = events[0]["data"]
-    history_data = events[1]["data"]
-    tool_data = events[2]["data"]
+    chunk_payloads = _event_payloads(events, "chunk")
     done_data = events[-1]["data"]
     assert start_data
-    assert history_data
-    assert tool_data
+    assert chunk_payloads
     assert done_data
 
     start_payload = json.loads(start_data)
-    history_payload = json.loads(history_data)
-    tool_payload = json.loads(tool_data)
     done_payload = json.loads(done_data)
     assert start_payload["session_id"]
     assert start_payload["request_id"]
@@ -959,49 +976,9 @@ def test_chat_api_sse_success_path_returns_structured_events() -> None:
     assert start_payload["agent_mode"] == "react"
     assert start_payload["state"] == "running"
     assert start_payload["state_event"] == "run_start"
-    assert history_payload["message_count"] == 0
-    assert history_payload["messages"] == []
-    assert tool_payload["knowledge_used"] is True
-    assert tool_payload["stage"] == "react_turn"
-    assert tool_payload["retrieval_stage"] == "retrieval"
-    assert tool_payload["agent_mode"] == "react"
-    assert tool_payload["react_run_id"].startswith("react-")
-    assert tool_payload["turn_id"] == "turn-1"
-    assert tool_payload["turn_status"] == "succeeded"
-    assert tool_payload["workflow_status"] == "succeeded"
-    assert tool_payload["action_type"] == "tool_call"
-    assert tool_payload["rationale_summary"] == "首轮先调用允许的 RAG 工具。"
-    assert tool_payload["tool_name"] == "agentic_rag_search"
-    assert tool_payload["turn_count"] == 2
-    assert tool_payload["max_turns"] == 2
-    assert tool_payload["attempted_tools"] == ["agentic_rag_search"]
-    assert tool_payload["active_turn"]["turn_id"] == "turn-1"
-    assert tool_payload["latest_action_selection"]["status"] == "validated"
-    assert tool_payload["latest_action_selection"]["action_type"] == "final_answer"
-    assert tool_payload["latest_action_selection"]["tool_name"] is None
-    assert tool_payload["action_validation_result"] == "passed"
-    assert tool_payload["current_turn_id"] == "turn-1"
-    assert tool_payload["current_step_id"] is None
-    assert tool_payload["react_run"]["react_run_id"] == tool_payload["react_run_id"]
-    assert tool_payload["plan_run"] is None
-    assert tool_payload["tool_observation"]["tool_name"] == "agentic_rag_search"
-    assert tool_payload["current_tool_call"]["tool_name"] == "agentic_rag_search"
-    assert tool_payload["final_decision"] == "answer_with_evidence"
-    assert tool_payload["answer_mode"] == "evidence_answer"
-    assert tool_payload["documents"] == 1
-    assert tool_payload["rounds"][0]["tool_name"] == "knowledge_document_search"
-    assert tool_payload["retrieval_trace"]["tool_call_count"] == 1
-    assert tool_payload["retrieval_trace"]["final_decision"] == "answer_with_evidence"
-    assert tool_payload["retrieval_trace"]["top_k_chunks"][0]["citation_id"] == "chunk-doc-1"
-    assert tool_payload["rounds"][0]["rerank"] == tool_payload["retrieval_trace"]["rounds"][0]["rerank"]
-    assert tool_payload["retrieval_policy"] == {
-        "top_k": 5,
-        "min_relevance_score": 0.8,
-        "recall_strategy": "hybrid",
-        "no_hit_strategy": "ask_user",
-        "rerank_enabled": False,
-        "rerank_top_n": None,
-    }
+    assert "".join(payload["delta"] for payload in chunk_payloads) == (
+        "推荐 P001，续航表现较好。[1]"
+    )
     assert done_payload["answer"] == "推荐 P001，续航表现较好。[1]"
     assert done_payload["knowledge_used"] is True
     assert done_payload["scene"] == "generic_assistant"
@@ -1009,7 +986,9 @@ def test_chat_api_sse_success_path_returns_structured_events() -> None:
     assert done_payload["final_state"] == "succeeded"
     assert done_payload["run_id"]
     assert len(done_payload["citations"]) == 1
-    assert done_payload["retrieval_trace"] == tool_payload["retrieval_trace"]
+    assert done_payload["retrieval_trace"]["tool_call_count"] == 1
+    assert done_payload["retrieval_trace"]["final_decision"] == "answer_with_evidence"
+    assert done_payload["retrieval_trace"]["top_k_chunks"][0]["citation_id"] == "chunk-doc-1"
     assert done_payload["retrieval_trace"]["citations"] == done_payload["citations"]
     saved_turns, total_turns = service.session_store.get_session_detail(
         done_payload["session_id"],
@@ -1033,6 +1012,8 @@ def test_chat_api_sse_success_path_returns_structured_events() -> None:
     assert restored.checkpoint["channel_values"]["status"] == "succeeded"
     assert restored.checkpoint["channel_values"]["run_id"] == done_payload["run_id"]
     assert restored.checkpoint["channel_values"]["agent_mode"] == "react"
+    assert restored.checkpoint["channel_values"]["retrieval_trace"] == done_payload["retrieval_trace"]
+    assert restored.checkpoint["channel_values"]["citations"] == done_payload["citations"]
     assert restored.checkpoint["channel_values"]["react_run"]["turns"][0]["observation"]["trace"][
         "retrieval_trace"
     ]["final_decision"] == "answer_with_evidence"
@@ -1076,27 +1057,12 @@ def test_chat_api_sse_plan_request_uses_plan_step_tool_stage() -> None:
 
     assert response.status_code == 200
     events = _parse_sse_events(response.text)
-    assert [event["event"] for event in events] == ["start", "history", "tool", "chunk", "done"]
+    _assert_display_sse_events(events)
     start_payload = json.loads(events[0]["data"])
-    tool_payload = json.loads(events[2]["data"])
     done_payload = json.loads(events[-1]["data"])
     assert start_payload["agent_mode"] == "plan"
-    assert tool_payload["stage"] == "plan_step"
-    assert tool_payload["agent_mode"] == "plan"
-    assert tool_payload["plan_run_id"].startswith("plan-")
-    assert tool_payload["step_id"] == "step-1"
-    assert tool_payload["step_status"] == "succeeded"
-    assert tool_payload["workflow_status"] == "succeeded"
-    assert tool_payload["step_count"] == 1
-    assert tool_payload["execution_order"] == ["step-1"]
-    assert tool_payload["current_step_id"] == "step-1"
-    assert tool_payload["current_turn_id"] is None
-    assert tool_payload["plan_run"]["plan_run_id"] == tool_payload["plan_run_id"]
-    assert tool_payload["react_run"] is None
-    assert tool_payload["tool_observation"]["tool_name"] == "agentic_rag_search"
-    assert tool_payload["current_tool_call"]["tool_name"] == "agentic_rag_search"
-    assert tool_payload["retrieval_trace"]["rounds"][0]["tool_name"] == "knowledge_document_search"
     assert done_payload["final_state"] == "succeeded"
+    assert done_payload["retrieval_trace"]["rounds"][0]["tool_name"] == "knowledge_document_search"
     restored = service.graph_runtime.checkpointer.get_tuple(
         {
             "configurable": {
@@ -1106,6 +1072,13 @@ def test_chat_api_sse_plan_request_uses_plan_step_tool_stage() -> None:
         }
     )
     assert restored is not None
+    assert restored.checkpoint["channel_values"]["agent_mode"] == "plan"
+    assert restored.checkpoint["channel_values"]["react_run"] is None
+    assert restored.checkpoint["channel_values"]["plan_run"]["workflow_status"] == "succeeded"
+    assert restored.checkpoint["channel_values"]["plan_run"]["steps"][0]["status"] == "succeeded"
+    assert restored.checkpoint["channel_values"]["current_step_id"] is None
+    assert restored.checkpoint["channel_values"]["current_turn_id"] is None
+    assert restored.checkpoint["channel_values"]["tool_observation"]["tool_name"] == "agentic_rag_search"
     planner_metadata = restored.checkpoint["channel_values"]["plan_run"]["metadata"]["planner"]
     assert planner_metadata["step_source"] == "scene_policy.plan_tools"
 
@@ -1457,22 +1430,15 @@ def test_chat_api_sse_no_hit_uses_fallback_without_model_streaming() -> None:
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/event-stream")
     events = _parse_sse_events(response.text)
-    assert [event["event"] for event in events] == ["start", "history", "tool", "chunk", "done"]
+    _assert_display_sse_events(events)
 
-    history_payload = json.loads(events[1]["data"])
-    tool_payload = json.loads(events[2]["data"])
-    chunk_payload = json.loads(events[3]["data"])
-    done_payload = json.loads(events[4]["data"])
-    assert history_payload["messages"] == []
-    assert history_payload["message_count"] == 0
-    assert tool_payload["knowledge_used"] is False
-    assert tool_payload["documents"] == 0
-    assert tool_payload["retrieval_trace"]["knowledge_used"] is False
-    assert tool_payload["retrieval_trace"]["filtered_candidates_count"] == 0
+    chunk_payload = _event_payloads(events, "chunk")[0]
+    done_payload = json.loads(events[-1]["data"])
     assert "暂时没有检索到足够相关的文档知识" in chunk_payload["delta"]
     assert done_payload["knowledge_used"] is False
     assert done_payload["citations"] == []
-    assert done_payload["retrieval_trace"] == tool_payload["retrieval_trace"]
+    assert done_payload["retrieval_trace"]["knowledge_used"] is False
+    assert done_payload["retrieval_trace"]["filtered_candidates_count"] == 0
     assert model.get_runnable_calls == []
     assert model.stream_runnable_calls == []
     assert model.invoke_runnable_calls == []
@@ -1541,18 +1507,13 @@ def test_chat_api_sse_ask_user_matches_json_semantics_without_stream_model() -> 
 
     assert response.status_code == 200
     events = _parse_sse_events(response.text)
-    assert [event["event"] for event in events] == ["start", "history", "tool", "chunk", "done"]
-    tool_payload = json.loads(events[2]["data"])
-    chunk_payload = json.loads(events[3]["data"])
-    done_payload = json.loads(events[4]["data"])
+    _assert_display_sse_events(events)
+    chunk_payload = _event_payloads(events, "chunk")[0]
+    done_payload = json.loads(events[-1]["data"])
     assert chunk_payload["delta"] == "请说明需要查询的知识范围。"
-    assert tool_payload["final_decision"] == "ask_user"
-    assert tool_payload["knowledge_used"] is False
-    assert tool_payload["citations"] == []
-    assert tool_payload["retrieval_trace"]["final_decision"] == "ask_user"
     assert done_payload["knowledge_used"] is False
     assert done_payload["citations"] == []
-    assert done_payload["retrieval_trace"] == tool_payload["retrieval_trace"]
+    assert done_payload["retrieval_trace"]["final_decision"] == "ask_user"
     assert model.get_runnable_calls == []
     assert model.stream_runnable_calls == []
     assert model.invoke_runnable_calls == []
@@ -1663,12 +1624,7 @@ def test_chat_api_sse_hitl_reject_resume_returns_done_cancelled() -> None:
 
     assert wait_response.status_code == 200
     wait_events = _parse_sse_events(wait_response.text)
-    assert [event["event"] for event in wait_events] == [
-        "start",
-        "history",
-        "tool",
-        "waiting_user",
-    ]
+    assert [event["event"] for event in wait_events] == ["start", "waiting_user"]
     wait_payload = json.loads(wait_events[-1]["data"])
     assert wait_payload["state"] == "waiting_user"
     assert wait_payload["hitl"]["metadata"]["mode"] == "react"
@@ -1753,14 +1709,11 @@ def test_chat_api_sse_max_rounds_with_documents_keeps_tool_done_consistent() -> 
 
     assert response.status_code == 200
     events = _parse_sse_events(response.text)
-    tool_payload = json.loads(events[2]["data"])
     done_payload = json.loads(events[-1]["data"])
-    assert tool_payload["final_decision"] == "max_rounds_reached"
-    assert tool_payload["knowledge_used"] is False
-    assert tool_payload["citations"] == []
+    _assert_display_sse_events(events)
+    assert done_payload["retrieval_trace"]["final_decision"] == "max_rounds_reached"
     assert done_payload["knowledge_used"] is False
     assert done_payload["citations"] == []
-    assert done_payload["retrieval_trace"] == tool_payload["retrieval_trace"]
     assert model.get_runnable_calls == []
     assert model.stream_runnable_calls == []
     assert model.invoke_runnable_calls == []
@@ -1815,14 +1768,11 @@ def test_chat_api_sse_failed_outcome_with_documents_keeps_tool_done_consistent()
 
     assert response.status_code == 200
     events = _parse_sse_events(response.text)
-    tool_payload = json.loads(events[2]["data"])
     done_payload = json.loads(events[-1]["data"])
-    assert tool_payload["final_decision"] == "retrieval_failed"
-    assert tool_payload["knowledge_used"] is False
-    assert tool_payload["citations"] == []
+    _assert_display_sse_events(events)
+    assert done_payload["retrieval_trace"]["final_decision"] == "retrieval_failed"
     assert done_payload["knowledge_used"] is False
     assert done_payload["citations"] == []
-    assert done_payload["retrieval_trace"] == tool_payload["retrieval_trace"]
     assert model.get_runnable_calls == []
     assert model.stream_runnable_calls == []
     assert model.invoke_runnable_calls == []
@@ -1992,20 +1942,16 @@ def test_chat_api_sse_no_hit_with_unrelated_docs_keeps_done_without_citations(mo
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/event-stream")
     events = _parse_sse_events(response.text)
-    assert [event["event"] for event in events] == ["start", "history", "tool", "chunk", "done"]
+    _assert_display_sse_events(events)
 
-    tool_payload = json.loads(events[2]["data"])
-    chunk_payload = json.loads(events[3]["data"])
-    done_payload = json.loads(events[4]["data"])
-    assert tool_payload["knowledge_used"] is False
-    assert tool_payload["documents"] == 0
-    assert tool_payload["retrieval_trace"]["knowledge_used"] is False
-    assert tool_payload["retrieval_trace"]["filtered_candidates_count"] == 0
-    assert tool_payload["retrieval_trace"]["citations"] == []
+    chunk_payload = _event_payloads(events, "chunk")[0]
+    done_payload = json.loads(events[-1]["data"])
     assert "暂时没有检索到足够相关的文档知识" in chunk_payload["delta"]
     assert done_payload["knowledge_used"] is False
     assert done_payload["citations"] == []
-    assert done_payload["retrieval_trace"] == tool_payload["retrieval_trace"]
+    assert done_payload["retrieval_trace"]["knowledge_used"] is False
+    assert done_payload["retrieval_trace"]["filtered_candidates_count"] == 0
+    assert done_payload["retrieval_trace"]["citations"] == []
     assert [call["query"] for call in document_retrieval_service.calls] == [
         "VOID-ALPHA-7788 secret handshake?",
         "VOID-ALPHA-7788 secret handshake?",
@@ -2297,7 +2243,7 @@ def test_chat_api_message_history_respects_window_size() -> None:
     assert len(messages) == 6
 
 
-def test_chat_api_sse_history_event_uses_trimmed_message_window() -> None:
+def test_chat_api_sse_display_protocol_does_not_emit_history_event() -> None:
     knowledge = FakeKnowledgeService()
     document_retrieval_service = FakeDocumentRetrievalService(
         documents=[
@@ -2346,15 +2292,9 @@ def test_chat_api_sse_history_event_uses_trimmed_message_window() -> None:
                 events = _parse_sse_events(response.text)
 
     assert session_id is not None
-    assert [event["event"] for event in events] == ["start", "history", "tool", "chunk", "done"]
-    history_payload = json.loads(events[1]["data"])
-    assert history_payload["message_count"] == 4
-    assert [message["content"] for message in history_payload["messages"]] == [
-        "第1轮问题",
-        "AeroPhone X 当前有货，售价 4599 元。[1]",
-        "第2轮问题",
-        "AeroPhone X 当前有货，售价 4599 元。[1]",
-    ]
+    _assert_display_sse_events(events)
+    done_payload = json.loads(events[-1]["data"])
+    assert done_payload["answer"] == "AeroPhone X 当前有货，售价 4599 元。[1]"
 
 
 def test_session_management_endpoints() -> None:

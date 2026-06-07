@@ -13,6 +13,7 @@ from backend.platform.agent_runtime import (
     PlanStep,
     PlanSynthesisContext,
     PlanSynthesisResult,
+    ToolExecutionMetadata,
     ToolObservation,
 )
 from backend.platform.agent_runtime.plan.graph import build_plan_graph
@@ -503,6 +504,235 @@ def test_plan_executor_tool_observation_requires_user_creates_wait_metadata() ->
     assert result.observations == [result.steps[0].observation]
     assert result.observations[0].metadata["hitl"] == result.metadata["hitl"]
     assert tool.calls == [{"query": "approval", "limit": 1}]
+
+
+def test_plan_respond_continuation_resumes_waiting_step_with_user_context() -> None:
+    executor = PlanExecutor(tool_executor=ToolExecutor(tools={}, allowed_tools=set()))
+    plan = PlanRun(
+        plan_run_id="plan-respond",
+        session_id="session-respond",
+        request_id="request-respond",
+        user_goal="补充执行范围。",
+        workflow_status="waiting_user",
+        current_step_id="step-1",
+        steps=[
+            PlanStep(
+                step_id="step-1",
+                goal="补充执行范围。",
+                tool_name="approval_tool",
+                input={"query": "scope"},
+                status="waiting_user",
+                result_summary="需要补充执行范围。",
+                metadata={
+                    "hitl": {
+                        "mode": "plan",
+                        "plan_run_id": "plan-respond",
+                        "current_step_id": "step-1",
+                    }
+                },
+            )
+        ],
+        metadata={
+            "hitl": {
+                "mode": "plan",
+                "plan_run_id": "plan-respond",
+                "current_step_id": "step-1",
+            }
+        },
+    )
+
+    resumed = executor.continue_after_respond(
+        run=plan,
+        response="仅处理 2026 年制度。",
+        source="freeform",
+        metadata={"operator": "user-1"},
+    )
+
+    assert resumed is plan
+    assert plan.workflow_status in {"running", "succeeded"}
+    assert plan.steps[0].metadata["continuation"] == {
+        "mode": "plan",
+        "action": "respond",
+        "plan_run_id": "plan-respond",
+        "waiting_step_id": "step-1",
+        "continued_from_step_id": "step-1",
+        "metadata": {"operator": "user-1"},
+        "response": "仅处理 2026 年制度。",
+        "source": "freeform",
+        "suggestion_id": None,
+    }
+    assert plan.metadata["resume"] == plan.steps[0].metadata["continuation"]
+
+
+def test_plan_approve_continuation_executes_waiting_step_once() -> None:
+    calls: list[dict[str, Any]] = []
+    executor = PlanExecutor(
+        tool_executor=ToolExecutor(
+            tools={
+                "approval_tool": _structured_tool(
+                    name="approval_tool",
+                    calls=calls,
+                    records=[{"approved": True}],
+                )
+            },
+            allowed_tools={"approval_tool"},
+        )
+    )
+    plan = PlanRun(
+        plan_run_id="plan-approve",
+        session_id="session-approve",
+        request_id="request-approve",
+        user_goal="执行审批步骤。",
+        workflow_status="waiting_user",
+        current_step_id="step-1",
+        steps=[
+            PlanStep(
+                step_id="step-1",
+                goal="执行审批步骤。",
+                tool_name="approval_tool",
+                input={"query": "approved"},
+                status="waiting_user",
+            )
+        ],
+    )
+
+    resumed = executor.continue_after_approve(
+        run=plan,
+        approval_result={"approved_by": "user-1"},
+        pending_tool_call={"tool_name": "approval_tool", "args": {"query": "approved"}},
+    )
+
+    assert resumed is plan
+    assert calls == [{"query": "approved", "limit": 1}]
+    assert plan.steps[0].status == "succeeded"
+    assert plan.observations[-1].tool_name == "approval_tool"
+    assert plan.metadata["resume"]["action"] == "approve"
+    assert plan.metadata["resume"]["pending_tool_call"] == {
+        "tool_name": "approval_tool",
+        "args": {"query": "approved"},
+    }
+
+
+def test_plan_reject_continuation_cancels_plan_and_skips_pending_side_effect() -> None:
+    calls: list[dict[str, Any]] = []
+    executor = PlanExecutor(
+        tool_executor=ToolExecutor(
+            tools={
+                "external_call": _structured_tool(
+                    name="external_call",
+                    calls=calls,
+                    records=[{"executed": True}],
+                )
+            },
+            allowed_tools={"external_call"},
+        )
+    )
+    plan = PlanRun(
+        plan_run_id="plan-reject",
+        session_id="session-reject",
+        request_id="request-reject",
+        user_goal="调用外部接口。",
+        workflow_status="waiting_user",
+        current_step_id="step-1",
+        current_tool_call=ToolExecutionMetadata(
+            tool_name="external_call",
+            metadata={"args": {"query": "send"}},
+        ),
+        steps=[
+            PlanStep(
+                step_id="step-1",
+                goal="调用外部接口。",
+                tool_name="external_call",
+                input={"query": "send"},
+                status="waiting_user",
+            )
+        ],
+    )
+
+    cancelled = executor.continue_after_reject(
+        run=plan,
+        reason="用户拒绝外部调用。",
+        pending_tool_call={"tool_name": "external_call", "args": {"query": "send"}},
+    )
+
+    assert cancelled is plan
+    assert calls == []
+    assert plan.workflow_status == "cancelled"
+    assert plan.steps[0].status == "cancelled"
+    assert plan.current_step_id is None
+    assert plan.current_tool_call is None
+    assert plan.metadata["resume"] == {
+        "mode": "plan",
+        "action": "reject",
+        "plan_run_id": "plan-reject",
+        "waiting_step_id": "step-1",
+        "continued_from_step_id": "step-1",
+        "metadata": {},
+        "reason": "用户拒绝外部调用。",
+        "pending_tool_call": {"tool_name": "external_call", "args": {"query": "send"}},
+        "side_effect_executed": False,
+    }
+
+
+def test_plan_runtime_rejects_continue_for_stale_or_terminal_step() -> None:
+    executor = PlanExecutor(tool_executor=ToolExecutor(tools={}, allowed_tools=set()))
+    stale_plan = PlanRun(
+        plan_run_id="plan-stale",
+        session_id="session-stale",
+        request_id="request-stale",
+        user_goal="stale",
+        workflow_status="waiting_user",
+        current_step_id="step-current",
+        steps=[
+            PlanStep(
+                step_id="step-waiting",
+                goal="stale",
+                tool_name="approval_tool",
+                input={"query": "stale"},
+                status="waiting_user",
+            )
+        ],
+    )
+    terminal_plan = PlanRun(
+        plan_run_id="plan-terminal",
+        session_id="session-terminal",
+        request_id="request-terminal",
+        user_goal="terminal",
+        workflow_status="succeeded",
+        steps=[],
+    )
+
+    with pytest.raises(ValueError, match="current_step_id"):
+        executor.continue_after_respond(run=stale_plan, response="continue")
+    with pytest.raises(ValueError, match="already terminal"):
+        executor.continue_after_respond(run=terminal_plan, response="continue")
+
+
+def test_minimal_planner_requires_explicit_default_retrieval_tool_without_name_guessing() -> None:
+    executor = ToolExecutor(
+        tools={
+            "alpha_lookup": _structured_tool(
+                name="alpha_lookup",
+                calls=[],
+                records=[{"record": "alpha"}],
+            ),
+            "legacy_search_alias": _structured_tool(
+                name="legacy_search_alias",
+                calls=[],
+                records=[{"record": "legacy"}],
+            ),
+        },
+        allowed_tools={"alpha_lookup", "legacy_search_alias"},
+    )
+
+    with pytest.raises(ValueError, match="AGENT_RUNTIME_TOOL_UNAVAILABLE"):
+        MinimalPlanner(tool_executor=executor).create_plan(
+            session_id="session-policy",
+            request_id="request-policy",
+            user_goal="需要检索但没有显式默认 retrieval tool。",
+            mounted_knowledge_sources=("documents",),
+            scene_policy={"candidate_tools": []},
+        )
 
 
 def _single_step_plan(*, tool_name: str, query: str) -> PlanRun:

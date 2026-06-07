@@ -107,7 +107,7 @@ class AgentRuntimeStateProjectionMixin:
                 "react_run": None,
                 "current_step_id": step_id,
                 "current_turn_id": None,
-                "current_tool_call": tool_call,
+                "current_tool_call": _tool_execution_payload(tool_call),
             }
 
         turn_id = str(metadata.get("current_turn_id") or "")
@@ -123,7 +123,7 @@ class AgentRuntimeStateProjectionMixin:
             "plan_run": None,
             "current_turn_id": turn_id,
             "current_step_id": None,
-            "current_tool_call": tool_call,
+            "current_tool_call": _tool_execution_payload(tool_call),
         }
 
     def _build_agent_runtime_resume_update(
@@ -477,7 +477,7 @@ def _build_react_wait_payload(
         ],
         "observations": [],
         "current_turn_id": turn_id,
-        "current_tool_call": dict(tool_call) if tool_call else None,
+        "current_tool_call": _tool_execution_payload(tool_call),
         "final_answer": None,
         "result_summary": wait.reason,
         "error": None,
@@ -519,7 +519,7 @@ def _build_plan_wait_payload(
         ],
         "observations": [],
         "current_step_id": step_id,
-        "current_tool_call": dict(tool_call) if tool_call else None,
+        "current_tool_call": _tool_execution_payload(tool_call),
         "final_answer": None,
         "result_summary": wait.reason,
         "error": None,
@@ -532,6 +532,22 @@ def _build_plan_wait_payload(
             ],
         },
     }
+
+
+def _tool_execution_payload(tool_call: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    """把 HITL proposed_tool_call 收敛为 ToolExecutionMetadata 可接受的字段。"""
+    if not tool_call:
+        return None
+    payload: dict[str, Any] = {
+        "tool_name": str(tool_call.get("tool_name") or ""),
+        "metadata": {},
+    }
+    if tool_call.get("tool_call_id") is not None:
+        payload["tool_call_id"] = str(tool_call["tool_call_id"])
+    args = tool_call.get("args")
+    if isinstance(args, Mapping):
+        payload["metadata"] = {"args": dict(args)}
+    return payload
 
 
 def _update_react_run_status(
@@ -684,6 +700,7 @@ def _last_user_goal(state: RuntimeGraphState) -> str:
         if message_type == "human" and isinstance(content, str):
             return content
     return ""
+
 
 
 

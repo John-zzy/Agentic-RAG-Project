@@ -22,8 +22,9 @@ from backend.platform.agent_runtime.chat_graph.contracts import (
     HitlWaitInput,
 )
 from backend.platform.agent_runtime.contracts import ReActAction, ReActRun, ReActTurn
-from backend.platform.workflow.langgraph.state import RuntimeGraphState
+from backend.platform.agent_runtime.plan.executor import PlanExecutor
 from backend.platform.agent_runtime.tool_executor import ToolExecutor
+from backend.platform.workflow.langgraph.state import RuntimeGraphState
 from backend.scenes.generic_assistant.hitl import (
     GenericAssistantHitlOptions,
     GenericAssistantHitlPlanner,
@@ -198,6 +199,10 @@ class ChatHitlMixin:
                 ),
                 approve_executor=self._execute_approved_scene_tool,
                 respond_handler=self._handle_clarification_response,
+                plan_executor=self._build_plan_hitl_resume_executor(
+                    session_id=payload.session_id,
+                    request_id=request_id,
+                ),
             )
         except HitlResumeError as exc:
             raise ChatServiceError(
@@ -223,6 +228,26 @@ class ChatHitlMixin:
         executor = ToolExecutor(tools=tools, allowed_tools={tool_name})
         observation = executor.execute(tool_name=tool_name, input_payload=dict(args))
         return observation.model_dump()
+
+    def _build_plan_hitl_resume_executor(
+            self,
+            *,
+            session_id: str,
+            request_id: str,
+    ) -> PlanExecutor:
+        """为 Plan HITL resume 组装平台执行器，具体 continuation 仍由 PlanExecutor 负责。"""
+        session = self.session_store.get_session(session_id)
+        mounted_knowledge_sources = (
+            tuple(session.mounted_knowledge_sources)
+            if session is not None
+            else tuple()
+        )
+        return PlanExecutor(
+            tool_executor=self._build_agent_tool_executor(
+                mounted_knowledge_sources=mounted_knowledge_sources,
+                request_id=request_id,
+            )
+        )
 
     def _handle_clarification_response(
             self,
@@ -284,7 +309,8 @@ class ChatHitlMixin:
             raise HitlResumeError("session is required for ReAct respond.")
         mounted_knowledge_sources = tuple(session.mounted_knowledge_sources)
         tool_executor = self._build_agent_tool_executor(
-            mounted_knowledge_sources=mounted_knowledge_sources
+            mounted_knowledge_sources=mounted_knowledge_sources,
+            request_id=request_id,
         )
         continued_run = self._build_react_clarification_run(
             run=react_run,
@@ -356,8 +382,14 @@ class ChatHitlMixin:
             response=response,
             resume_payload=resume_payload,
         )
-        tool_name = self._select_rag_tool_name(
+        tool_policy = self._build_runtime_tool_policy(
             tool_executor=tool_executor,
+            message=response,
+            mounted_knowledge_sources=mounted_knowledge_sources,
+            request_id=run.request_id,
+        )
+        tool_name = self._require_default_retrieval_tool(
+            tool_policy=tool_policy,
             request_id=run.request_id,
         )
         observation = tool_executor.execute(
@@ -365,6 +397,7 @@ class ChatHitlMixin:
             input_payload=self._build_rag_tool_input(
                 message=response,
                 mounted_knowledge_sources=mounted_knowledge_sources,
+                request_id=run.request_id,
             ),
         )
         waiting_turn = self._react_waiting_turn(run=run)

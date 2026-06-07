@@ -9,7 +9,7 @@
 - **统一对话入口**：`/chat` 由顶层 ChatGraph 编排模式选择、回答分支、HITL 和持久化；ReAct / Plan 子图负责执行工具调用，支持普通 JSON 和 SSE 流式输出。
 - **Agentic RAG 工具链路**：先做 query rewrite 和工具决策，再多轮检索、判断证据是否足够，最后生成带引用的回答。它是顶层 Agent 可调用的工具能力，不是唯一入口。
 - **Hybrid Search**：文档检索支持语义召回、BM25 关键词召回、融合排序、相关性过滤和 no-hit fallback。
-- **引用与可观测性**：回答返回结构化 `citations`、正文引用编号、`retrieval_trace`、rerank trace 和 SSE `tool / waiting_user / done` 事件。
+- **引用与可观测性**：回答返回结构化 `citations`、正文引用编号、`retrieval_trace`、rerank trace；SSE 面向界面展示 `chunk / waiting_user / done`，审计细节保留在最终 payload 和 checkpoint。
 - **Human-in-the-Loop**：支持澄清等待、工具审批、外部 API 审批，以及 `approve / reject / respond` 恢复。
 - **Workflow State Machine**：运行时状态统一为 `created / planning / running / waiting_user / retrying / succeeded / failed / cancelled`，终态防重复恢复。
 - **Knowledge Admin**：支持文件上传、预处理预览、正式入库、重处理、重切块、软删除和索引状态查看。
@@ -63,7 +63,7 @@ openspec/              # 变更提案、规格与归档记录
 
 ![ChatGraph 核心流程图](./docs/documents/runtime/chatgraph-subgraphs-infographic.png)
 
-对话运行时采用分层编排结构：顶层 **ChatGraph** 负责会话上下文准备、执行模式选择、分支路由、最终回答合成，以及记忆与 trace 持久化；**ReAct / Plan 子图** 分别承载即时工具调用与多步任务执行；**Agentic_RAG SubGraph** 作为嵌套检索能力，在执行过程中提供 query rewrite、文档召回、rerank、证据充分性判断和证据汇总。
+对话运行时采用分层编排结构：顶层 **ChatGraph** 负责会话上下文准备、执行模式选择、分支路由、最终回答合成，以及记忆与 trace 持久化；**ReAct / Plan 子图** 分别承载即时工具调用与多步任务执行；**Agentic RAG Retrieval Graph** 作为嵌套检索能力，在执行过程中提供 query rewrite、文档召回、rerank、证据充分性判断和证据汇总。
 
 该结构将主流程调度、任务执行和检索增强能力解耦，使系统能够同时支持普通问答、复杂任务规划、人工介入、运行状态恢复和可观测企业级助手场景。
 
@@ -106,13 +106,13 @@ openspec/              # 变更提案、规格与归档记录
 - [x] **人工介入流程**：支持澄清等待、工具审批、外部 API 审批，以及 `approve / reject / respond` 恢复；拒绝和取消会进入明确终态。
 - [x] **运行状态与恢复**：基于 LangGraph checkpoint 和 Workflow State Machine 管理 `created / planning / running / waiting_user / retrying / succeeded / failed / cancelled` 状态，避免终态重复恢复。
 - [x] **多场景扩展**：`generic_assistant` 作为通用知识助手主线，`ecommerce` 作为业务扩展示例；场景负责 prompt、工具范围和可用知识源。
-- [x] **模型与工具接入**：统一 LLM、Embedding、ReRank 配置，提供工具注册、RAG tool adapter、业务工具调用和 SSE 工具事件输出。
+- [x] **模型与工具接入**：统一 LLM、Embedding、ReRank 配置，提供工具注册、RAG tool adapter、业务工具调用和显式 scene-scoped tool policy。
 - [x] **评测与诊断**：支持 HTTP replay、SSE replay、retrieval benchmark、baseline / candidate 对比、benchmark artifact 和评测看板。
 
 ### P0：增强 Agent 任务可靠性
 
 - [x] **ChatGraph 子图迁移**：`/chat` 同步链路进入顶层 ChatGraph，`react_branch` / `plan_branch` 调用 ReAct / Plan 子图，不再在 application 层硬编码完整 Agent 执行循环。
-- [ ] **运行时重构审计**：继续检查状态机、流式事件、历史消息、工具路由、结果投影等 glue code，优先收敛到 LangGraph graph / node / conditional edge / interrupt。
+- [x] **运行时重构审计**：已收敛 SSE 显示协议、ReAct / Plan 图内 HITL 恢复、runtime projection 和 scene-scoped tool policy，ChatService 保持 API facade 边界。
 - [ ] **跨场景业务流转**：将 `generic_assistant` 到 `ecommerce` 的 handoff / follow-up 逻辑沉淀为可复用 router 或业务子图。
 - [ ] **失败恢复**：为工具调用、模型调用和长链路任务补齐超时、重试、失败补偿、可恢复执行和幂等控制。
 - [ ] **结果自检**：在多步任务中加入结果校验、失败原因归类和必要时的自我修正。

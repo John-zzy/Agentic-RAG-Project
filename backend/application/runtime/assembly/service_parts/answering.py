@@ -22,7 +22,17 @@ class ChatAnsweringMixin:
         self,
         prepared: PreparedChatTurn,
     ) -> tuple[PreparedChatTurn, str, list[Citation], str, RuntimeGraphState]:
-        """根据准备结果生成最终答案。"""
+        """通过 ChatGraph 执行一次完整回答流程，并返回响应组装所需结果。
+
+        流程概览：
+        1. 把 application 层能力作为回调传给 ChatGraph
+        2. 由 ChatGraph 完成状态流转、HITL、ReAct/Plan 分支和回答生成
+        3. 将图运行后的 state 和 citations 转成 API 响应可以直接使用的结构
+        """
+
+        # ── 第1步：进入 platform 层 ChatGraph 主流程 ──
+        # application 只提供“如何生成答案、如何加载历史、如何构建子图依赖”等具体能力，
+        # 具体编排顺序由 ChatGraph 统一负责，避免主流程散落在 application 层。
         result = self.graph_runtime.invoke(
             prepared=prepared,
             answer_builder=self._generate_answer_direct,
@@ -33,7 +43,15 @@ class ChatAnsweringMixin:
             build_prepared_from_state=self._prepared_from_graph_state,
             build_hitl_wait_update=self._build_hitl_wait_update_for_graph,
         )
+        
+        # ── 第2步：用图运行后的最新 state 重建 prepared ──
+        # state 可能已经被工具调用、人工节点或 ReAct/Plan 子图更新过，
+        # 这里重新投影成 PreparedChatTurn，保证后续响应组装拿到的是最新上下文。
         resolved_prepared = self._prepared_from_graph_state(prepared, result.state)
+
+        # ── 第3步：统一 citations 的数据形态 ──
+        # platform 返回的 citations 可能是 dict，也可能已经是 Citation；
+        # application 边界统一转成 API schema，避免响应层再判断多种格式。
         citations = [
             citation if isinstance(citation, Citation) else Citation.model_validate(citation)
             for citation in result.citations
@@ -47,7 +65,7 @@ class ChatAnsweringMixin:
         return self._invoke_answer_template(prepared=prepared)
 
     def _load_graph_seed_history(self, prepared: PreparedChatTurn) -> list[BaseMessage]:
-        """读取首次 graph run 的旧会话消息种子。"""
+        """读取当前会话的历史消息，作为 ChatGraph 本轮运行的初始上下文。"""
         return self._get_session_history(
             prepared.session_id,
             request_id=prepared.request_id,
@@ -295,6 +313,5 @@ class ChatAnsweringMixin:
     def _build_runnable_config(self, session_id: str) -> dict[str, Any]:
         """构造 RunnableWithMessageHistory 所需的 configurable config。"""
         return {"configurable": {"session_id": session_id}}
-
 
 

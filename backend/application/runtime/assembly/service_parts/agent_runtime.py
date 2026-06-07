@@ -4,8 +4,6 @@ from collections.abc import Mapping
 from dataclasses import replace
 from typing import Any
 
-from langchain_core.documents import Document
-
 from backend.application.runtime.api.chat.schemas import (
     Citation,
     RetrievalTrace,
@@ -22,13 +20,16 @@ from backend.application.runtime.assembly.service_parts.contracts import (
 from backend.platform.agent_runtime.contracts import (
     PlanRun,
     ReActRun,
-    ReActTurn,
-    ToolExecutionMetadata,
     ToolObservation,
 )
 from backend.platform.agent_runtime.mode_selector import ModeSelection
 from backend.platform.agent_runtime.plan.graph.config import PlanGraphDependencies
 from backend.platform.agent_runtime.plan.planner import MinimalPlanner
+from backend.platform.agent_runtime.projection import (
+    RuntimeRunProjection,
+    project_runtime_run,
+    raw_retrieval_trace,
+)
 from backend.platform.agent_runtime.rag_tools import (
     AGENTIC_RAG_TOOL_NAME,
     NATIVE_RAG_TOOL_NAME,
@@ -40,6 +41,7 @@ from backend.platform.agent_runtime.react import (
 )
 from backend.platform.agent_runtime.react.graph.config import ReActGraphDependencies
 from backend.platform.agent_runtime.tool_executor import ToolExecutor
+from backend.platform.agent_runtime.tool_policy import RuntimeToolPolicy
 from backend.platform.knowledge.sources import DEFAULT_MOUNTED_KNOWLEDGE_SOURCES
 from backend.platform.models.base.router import TaskComplexity
 from backend.scenes.base import SceneRetrievalPolicy
@@ -82,12 +84,17 @@ class ChatAgentRuntimeMixin:
         )
         mode_selection = self._mode_selection_from_graph_state(prepared, state)
         tool_executor = self._build_agent_tool_executor(
-            mounted_knowledge_sources=mounted_knowledge_sources
+            mounted_knowledge_sources=mounted_knowledge_sources,
+            request_id=prepared.request_id,
         )
-        scene_policy = self._build_react_scene_policy(
+        tool_policy = self._build_runtime_tool_policy(
             tool_executor=tool_executor,
             message=prepared.user_message,
             mounted_knowledge_sources=mounted_knowledge_sources,
+            request_id=prepared.request_id,
+        )
+        scene_policy = self._build_react_scene_policy(
+            tool_policy=tool_policy,
         )
         return ReActGraphDependencies(
             tool_executor=tool_executor,
@@ -120,19 +127,21 @@ class ChatAgentRuntimeMixin:
         )
         mode_selection = self._mode_selection_from_graph_state(prepared, state)
         tool_executor = self._build_agent_tool_executor(
-            mounted_knowledge_sources=mounted_knowledge_sources
-        )
-        tool_name = self._select_rag_tool_name(
-            tool_executor=tool_executor,
+            mounted_knowledge_sources=mounted_knowledge_sources,
             request_id=prepared.request_id,
         )
-        tool_input = self._build_rag_tool_input(
+        tool_policy = self._build_runtime_tool_policy(
+            tool_executor=tool_executor,
             message=prepared.user_message,
             mounted_knowledge_sources=mounted_knowledge_sources,
+            request_id=prepared.request_id,
+        )
+        tool_name = self._require_default_retrieval_tool(
+            tool_policy=tool_policy,
+            request_id=prepared.request_id,
         )
         scene_policy = self._build_plan_scene_policy(
-            tool_name=tool_name,
-            tool_input=tool_input,
+            tool_policy=tool_policy,
         )
         return PlanGraphDependencies(
             tool_executor=tool_executor,
@@ -140,11 +149,7 @@ class ChatAgentRuntimeMixin:
             request_id=prepared.request_id,
             user_goal=prepared.user_message,
             mounted_knowledge_sources=mounted_knowledge_sources,
-            candidate_tools=self._plan_candidate_tools(
-                tool_executor=tool_executor,
-                default_tool_name=tool_name,
-                scene_policy=scene_policy,
-            ),
+            candidate_tools=self._plan_candidate_tools(tool_policy=tool_policy),
             scene_policy=scene_policy,
             planner=MinimalPlanner(
                 tool_executor=tool_executor,
@@ -273,9 +278,11 @@ class ChatAgentRuntimeMixin:
             self,
             *,
             mounted_knowledge_sources: tuple[str, ...],
+            request_id: str,
     ) -> ToolExecutor:
-        candidate_tools = self.scene_definition.resolve_candidate_retrieval_tools(
-            mounted_knowledge_sources
+        candidate_tools = self._resolve_runtime_candidate_retrieval_tools(
+            mounted_knowledge_sources=mounted_knowledge_sources,
+            request_id=request_id,
         )
         rag_tools = {
             tool.name: tool
@@ -287,38 +294,88 @@ class ChatAgentRuntimeMixin:
         return ToolExecutor.from_scene(
             scene_definition=self.scene_definition,
             mounted_knowledge_sources=mounted_knowledge_sources,
+            candidate_retrieval_tools=candidate_tools,
             rag_tools=rag_tools,
         )
 
-    def _select_rag_tool_name(self, *, tool_executor: ToolExecutor, request_id: str) -> str:
-        """第一版保守选择 RAG 工具；是否多轮检索留在 RAG tool 内部。"""
-        allowed = tool_executor.allowed_tools
-        if AGENTIC_RAG_TOOL_NAME in allowed:
-            return AGENTIC_RAG_TOOL_NAME
-        if NATIVE_RAG_TOOL_NAME in allowed:
-            return NATIVE_RAG_TOOL_NAME
-        for tool_name in sorted(allowed):
-            if "rag" in tool_name or "search" in tool_name:
-                return tool_name
-        raise ChatServiceError(
-            status_code=500,
-            code="AGENT_RUNTIME_TOOL_UNAVAILABLE",
-            message="No RAG tool is available for current scene.",
+    def _resolve_runtime_candidate_retrieval_tools(
+            self,
+            *,
+            mounted_knowledge_sources: tuple[str, ...],
+            request_id: str,
+    ) -> tuple[str, ...]:
+        """把 scene 的知识源解析错误收敛为统一 runtime 工具错误。"""
+        try:
+            return tuple(
+                self.scene_definition.resolve_candidate_retrieval_tools(
+                    mounted_knowledge_sources
+                )
+            )
+        except ValueError as exc:
+            raise ChatServiceError(
+                status_code=500,
+                code="AGENT_RUNTIME_TOOL_UNAVAILABLE",
+                message="No RAG tool is available for current scene.",
+                request_id=request_id,
+            ) from exc
+
+    def _build_runtime_tool_policy(
+            self,
+            *,
+            tool_executor: ToolExecutor,
+            message: str,
+            mounted_knowledge_sources: tuple[str, ...],
+            request_id: str,
+    ) -> RuntimeToolPolicy:
+        rag_input = self._build_rag_tool_input(
+            message=message,
+            mounted_knowledge_sources=mounted_knowledge_sources,
             request_id=request_id,
         )
+        default_inputs: dict[str, dict[str, Any]] = {}
+        for tool_name in (AGENTIC_RAG_TOOL_NAME, NATIVE_RAG_TOOL_NAME):
+            if tool_name in tool_executor.allowed_tools:
+                default_inputs[tool_name] = dict(rag_input)
+        return RuntimeToolPolicy.build(
+            allowed_tools=sorted(tool_executor.allowed_tools),
+            candidate_retrieval_tools=self._resolve_runtime_candidate_retrieval_tools(
+                mounted_knowledge_sources=mounted_knowledge_sources,
+                request_id=request_id,
+            ),
+            default_inputs=default_inputs,
+            metadata=getattr(self.scene_definition, "metadata", {}) or {},
+        )
+
+    def _require_default_retrieval_tool(
+            self,
+            *,
+            tool_policy: RuntimeToolPolicy,
+            request_id: str,
+    ) -> str:
+        try:
+            return tool_policy.require_default_retrieval_tool()
+        except ValueError as exc:
+            raise ChatServiceError(
+                status_code=500,
+                code="AGENT_RUNTIME_TOOL_UNAVAILABLE",
+                message="No RAG tool is available for current scene.",
+                request_id=request_id,
+            ) from exc
 
     def _build_rag_tool_input(
             self,
             *,
             message: str,
             mounted_knowledge_sources: tuple[str, ...],
+            request_id: str,
     ) -> dict[str, Any]:
         policy = self.scene_definition.retrieval_policy
         return {
             "query": message,
             "candidate_tools": list(
-                self.scene_definition.resolve_candidate_retrieval_tools(
-                    mounted_knowledge_sources
+                self._resolve_runtime_candidate_retrieval_tools(
+                    mounted_knowledge_sources=mounted_knowledge_sources,
+                    request_id=request_id,
                 )
             ),
             "top_k": policy.top_k,
@@ -331,50 +388,16 @@ class ChatAgentRuntimeMixin:
     def _build_react_scene_policy(
             self,
             *,
-            tool_executor: ToolExecutor,
-            message: str,
-            mounted_knowledge_sources: tuple[str, ...],
+            tool_policy: RuntimeToolPolicy,
     ) -> ReActScenePolicy:
         """把 scene metadata 和 /chat 当前上下文整理成 LLM ReAct 调度策略。"""
-        allowed_tools = sorted(tool_executor.allowed_tools)
-        preferred_tools = self._react_preferred_tools(allowed_tools)
-        tool_input_hints = self._react_tool_input_hints(
-            message=message,
-            mounted_knowledge_sources=mounted_knowledge_sources,
-            allowed_tools=allowed_tools,
-        )
         return ReActScenePolicy.from_metadata(
             getattr(self.scene_definition, "metadata", {}) or {},
-            default_preferred_tools=preferred_tools,
+            default_preferred_tools=list(tool_policy.preferred_tools),
             default_max_turns=2,
             default_no_evidence_action=self._react_no_evidence_action(),
-            tool_input_hints=tool_input_hints,
+            tool_input_hints=tool_policy.default_inputs,
         )
-
-    def _react_preferred_tools(self, allowed_tools: list[str]) -> list[str]:
-        preferred: list[str] = []
-        for tool_name in (AGENTIC_RAG_TOOL_NAME, NATIVE_RAG_TOOL_NAME):
-            if tool_name in allowed_tools:
-                preferred.append(tool_name)
-        preferred.extend(tool_name for tool_name in allowed_tools if tool_name not in preferred)
-        return preferred
-
-    def _react_tool_input_hints(
-            self,
-            *,
-            message: str,
-            mounted_knowledge_sources: tuple[str, ...],
-            allowed_tools: list[str],
-    ) -> dict[str, dict[str, Any]]:
-        rag_input = self._build_rag_tool_input(
-            message=message,
-            mounted_knowledge_sources=mounted_knowledge_sources,
-        )
-        hints: dict[str, dict[str, Any]] = {}
-        for tool_name in allowed_tools:
-            if "rag" in tool_name or "search" in tool_name:
-                hints[tool_name] = dict(rag_input)
-        return hints
 
     def _react_no_evidence_action(self) -> str:
         if self.scene_definition.retrieval_policy.no_hit_strategy == "ask_user":
@@ -384,17 +407,20 @@ class ChatAgentRuntimeMixin:
     def _build_plan_scene_policy(
             self,
             *,
-            tool_name: str,
-            tool_input: Mapping[str, Any],
+            tool_policy: RuntimeToolPolicy,
     ) -> dict[str, Any]:
         """读取 scene 暴露的 plan 策略；没有策略时保持保守单工具计划。"""
         policy = self._agent_runtime_plan_policy()
         if not self._has_explicit_plan_policy(policy):
-            policy["preferred_plan_tools"] = [tool_name]
+            policy["preferred_plan_tools"] = [tool_policy.require_default_retrieval_tool()]
 
         # RAG adapter 的输入由 application 统一注入检索策略，scene 可按工具覆盖。
         plan_tool_inputs = dict(policy.get("plan_tool_inputs") or {})
-        plan_tool_inputs.setdefault(tool_name, dict(tool_input))
+        for tool_name, tool_input in tool_policy.default_inputs.items():
+            plan_tool_inputs.setdefault(tool_name, dict(tool_input))
+        policy["candidate_tools"] = list(tool_policy.candidate_retrieval_tools)
+        policy["allowed_tools"] = list(tool_policy.allowed_tools)
+        policy["high_risk_tools"] = list(tool_policy.high_risk_tools)
         policy["plan_tool_inputs"] = plan_tool_inputs
         return policy
 
@@ -425,17 +451,13 @@ class ChatAgentRuntimeMixin:
     def _plan_candidate_tools(
             self,
             *,
-            tool_executor: ToolExecutor,
-            default_tool_name: str,
-            scene_policy: Mapping[str, Any],
+            tool_policy: RuntimeToolPolicy,
     ) -> tuple[str, ...]:
-        selected: list[str] = []
-        selected.extend(self._policy_step_tool_names(scene_policy.get("plan_steps")))
-        for key in ("preferred_plan_tools", "default_plan_tools", "plan_tools", "candidate_tools"):
-            selected.extend(self._policy_tool_names(scene_policy.get(key)))
-        if not selected:
+        selected = list(tool_policy.preferred_tools)
+        default_tool_name = tool_policy.default_retrieval_tool
+        if default_tool_name and default_tool_name not in selected:
             selected.append(default_tool_name)
-        allowed = tool_executor.allowed_tools
+        allowed = set(tool_policy.allowed_tools)
         return tuple(tool_name for tool_name in selected if tool_name in allowed)
 
     def _policy_step_tool_names(self, value: Any) -> list[str]:
@@ -464,24 +486,26 @@ class ChatAgentRuntimeMixin:
             plan_run: PlanRun | None = None,
     ) -> AgentRuntimeExecutionResult:
         del complexity
-        run = self._require_single_agent_run(react_run=react_run, plan_run=plan_run)
-        if not run.observations:
+        projection = project_runtime_run(react_run=react_run, plan_run=plan_run)
+        run = projection.run
+        if not projection.observations:
             return self._agent_execution_result_from_observationless_run(
                 message=message,
                 mounted_knowledge_sources=mounted_knowledge_sources,
-                react_run=react_run,
-                plan_run=plan_run,
+                projection=projection,
             )
-        observations = self._run_level_observations(run)
-        successful_observations = [
-            observation for observation in observations if observation.success
-        ]
-        current_observation = observations[-1]
-        documents = self._deduplicate_documents(
-            self._documents_from_observations(successful_observations)
-        )
+        observations = projection.observations
+        current_observation = projection.current_observation
+        if current_observation is None:
+            raise ChatServiceError(
+                status_code=500,
+                code="AGENT_RUNTIME_DATA_INCOMPLETE",
+                message="Agent runtime current observation is missing.",
+                request_id=run.request_id,
+            )
+        documents = projection.documents
         candidate_citations = self._citation_mapper.citations_from_documents(documents)
-        final_decision = self._final_decision_from_observations(observations)
+        final_decision = projection.final_decision
         knowledge_used = self._can_answer_with_evidence(
             final_decision=final_decision,
             citations=candidate_citations,
@@ -495,9 +519,11 @@ class ChatAgentRuntimeMixin:
             message=message,
             observations=observations,
             mounted_knowledge_sources=mounted_knowledge_sources,
+            request_id=run.request_id,
             citations=citations,
             knowledge_used=knowledge_used,
             final_decision=final_decision,
+            follow_up_question=projection.follow_up_question,
         )
         answer_mode = self._resolve_answer_mode(
             final_decision=final_decision,
@@ -506,14 +532,11 @@ class ChatAgentRuntimeMixin:
         adopted_documents = documents if knowledge_used else []
         tool_event = self._tool_event_from_observations(
             observations=observations,
-            successful_observation_count=len(successful_observations),
+            successful_observation_count=len(projection.successful_observations),
             document_count=len(documents),
             retrieval_trace=retrieval_trace,
             mounted_knowledge_sources=mounted_knowledge_sources,
-        )
-        current_tool_call = self._current_tool_call_from_run(
-            run=run,
-            observation=current_observation,
+            request_id=run.request_id,
         )
         return AgentRuntimeExecutionResult(
             documents=adopted_documents,
@@ -522,18 +545,18 @@ class ChatAgentRuntimeMixin:
             citations=citations,
             knowledge_used=knowledge_used,
             final_decision=final_decision,
-            follow_up_question=self._follow_up_question_from_observations(observations),
+            follow_up_question=projection.follow_up_question,
             answer_mode=answer_mode,
-            react_run=react_run.model_dump() if react_run is not None else None,
-            plan_run=plan_run.model_dump() if plan_run is not None else None,
-            current_turn_id=self._event_turn_id(react_run) if react_run is not None else None,
-            current_step_id=self._event_step_id(plan_run) if plan_run is not None else None,
+            react_run=projection.react_run,
+            plan_run=projection.plan_run,
+            current_turn_id=projection.current_turn_id,
+            current_step_id=projection.current_step_id,
             current_tool_call=(
-                current_tool_call.model_dump()
-                if current_tool_call is not None
+                projection.current_tool_call.model_dump()
+                if projection.current_tool_call is not None
                 else None
             ),
-            tool_observation=current_observation.model_dump(),
+            tool_observation=projection.tool_observation,
         )
 
     def _agent_execution_result_from_observationless_run(
@@ -541,10 +564,9 @@ class ChatAgentRuntimeMixin:
             *,
             message: str,
             mounted_knowledge_sources: tuple[str, ...],
-            react_run: ReActRun | None = None,
-            plan_run: PlanRun | None = None,
+            projection: RuntimeRunProjection,
     ) -> AgentRuntimeExecutionResult:
-        run = self._require_single_agent_run(react_run=react_run, plan_run=plan_run)
+        run = projection.run
         if run.workflow_status in {"failed", "cancelled"}:
             raise ChatServiceError(
                 status_code=500,
@@ -552,22 +574,21 @@ class ChatAgentRuntimeMixin:
                 message=run.error or run.result_summary or "Agent runtime run failed.",
                 request_id=run.request_id,
             )
-        final_decision = self._final_decision_from_observationless_run(run)
-        follow_up_question = self._follow_up_question_from_observationless_run(run)
         retrieval_trace = RetrievalTrace(
             original_query=message,
             final_query=message,
             rewritten_query=None,
             tool_call_count=0,
             candidate_tools=list(
-                self.scene_definition.resolve_candidate_retrieval_tools(
-                    mounted_knowledge_sources
+                self._resolve_runtime_candidate_retrieval_tools(
+                    mounted_knowledge_sources=mounted_knowledge_sources,
+                    request_id=run.request_id,
                 )
             ),
-            exit_reason=self._exit_reason_from_observationless_run(run),
-            final_decision=final_decision,
+            exit_reason=projection.exit_reason,
+            final_decision=projection.final_decision,
             success=False,
-            follow_up_question=follow_up_question,
+            follow_up_question=projection.follow_up_question,
             raw_candidates_count=0,
             filtered_candidates_count=0,
             top_k_chunks=[],
@@ -584,59 +605,23 @@ class ChatAgentRuntimeMixin:
             retrieval_trace=retrieval_trace,
             citations=[],
             knowledge_used=False,
-            final_decision=final_decision,
-            follow_up_question=follow_up_question,
+            final_decision=projection.final_decision,
+            follow_up_question=projection.follow_up_question,
             answer_mode=self._resolve_answer_mode(
-                final_decision=final_decision,
+                final_decision=projection.final_decision,
                 knowledge_used=False,
             ),
-            react_run=react_run.model_dump() if react_run is not None else None,
-            plan_run=plan_run.model_dump() if plan_run is not None else None,
-            current_turn_id=self._event_turn_id(react_run) if react_run is not None else None,
-            current_step_id=self._event_step_id(plan_run) if plan_run is not None else None,
-            current_tool_call=run.current_tool_call.model_dump() if run.current_tool_call else None,
-            tool_observation=None,
+            react_run=projection.react_run,
+            plan_run=projection.plan_run,
+            current_turn_id=projection.current_turn_id,
+            current_step_id=projection.current_step_id,
+            current_tool_call=(
+                projection.current_tool_call.model_dump()
+                if projection.current_tool_call is not None
+                else None
+            ),
+            tool_observation=projection.tool_observation,
         )
-
-    def _final_decision_from_observationless_run(
-            self,
-            run: ReActRun | PlanRun,
-    ) -> RuntimeFinalDecision:
-        if isinstance(run, ReActRun):
-            turn = self._latest_react_turn(run)
-            action_type = turn.action.action_type if turn is not None else None
-            if run.workflow_status == "waiting_user" or action_type == "ask_user":
-                return "ask_user"
-            if run.workflow_status == "succeeded" and action_type in {"final_answer", "stop"}:
-                return "direct_answer"
-        return "no_evidence"
-
-    def _follow_up_question_from_observationless_run(
-            self,
-            run: ReActRun | PlanRun,
-    ) -> str | None:
-        if not isinstance(run, ReActRun):
-            return None
-        turn = self._latest_react_turn(run)
-        if turn is None:
-            return None
-        if turn.action.instruction:
-            return turn.action.instruction
-        if turn.result_summary:
-            return turn.result_summary
-        hitl = turn.metadata.get("hitl") if isinstance(turn.metadata, Mapping) else None
-        if isinstance(hitl, Mapping):
-            user_prompt = hitl.get("user_prompt")
-            if isinstance(user_prompt, str) and user_prompt.strip():
-                return user_prompt.strip()
-        return None
-
-    def _exit_reason_from_observationless_run(self, run: ReActRun | PlanRun) -> str:
-        if run.workflow_status == "waiting_user":
-            return "ask_user"
-        if run.workflow_status == "succeeded":
-            return "no_tool_observation"
-        return str(run.workflow_status)
 
     def _tool_event_from_observationless_run(
             self,
@@ -667,166 +652,19 @@ class ChatAgentRuntimeMixin:
             "tool_observation": None,
         }
 
-    def _latest_react_turn(self, run: ReActRun) -> ReActTurn | None:
-        if run.current_turn_id:
-            for turn in reversed(run.turns):
-                if turn.turn_id == run.current_turn_id:
-                    return turn
-        return run.turns[-1] if run.turns else None
-
-    def _require_single_agent_run(
-            self,
-            *,
-            react_run: ReActRun | None,
-            plan_run: PlanRun | None,
-    ) -> ReActRun | PlanRun:
-        if (react_run is None) == (plan_run is None):
-            raise ChatServiceError(
-                status_code=500,
-                code="AGENT_RUNTIME_RUN_INVALID",
-                message="Exactly one agent runtime run must be provided.",
-                request_id=(react_run or plan_run).request_id if (react_run or plan_run) else "N/A",
-            )
-        return react_run if react_run is not None else plan_run  # type: ignore[return-value]
-
-    def _run_level_observations(self, run: ReActRun | PlanRun) -> list[ToolObservation]:
-        if run.observations:
-            return list(run.observations)
-        raise ChatServiceError(
-            status_code=500,
-            code="AGENT_RUNTIME_DATA_INCOMPLETE",
-            message="Agent runtime run-level observations are missing.",
-            request_id=run.request_id,
-        )
-
-    def _documents_from_observations(
-            self,
-            observations: list[ToolObservation],
-    ) -> list[Document]:
-        documents: list[Document] = []
-        for observation in observations:
-            documents.extend(self._documents_from_observation(observation))
-        return documents
-
-    def _deduplicate_documents(self, documents: list[Document]) -> list[Document]:
-        """按稳定证据标识去重，避免多步骤聚合后重复塞入回答上下文。"""
-        deduplicated: list[Document] = []
-        seen: set[tuple[str, str]] = set()
-        for document in documents:
-            key = self._document_identity(document)
-            if key in seen:
-                continue
-            seen.add(key)
-            deduplicated.append(document)
-        return deduplicated
-
-    def _document_identity(self, document: Document) -> tuple[str, str]:
-        metadata = document.metadata
-        namespace = str(metadata.get("namespace", "knowledge"))
-        value = (
-            metadata.get("chunk_id")
-            or metadata.get("citation_id")
-            or metadata.get("document_id")
-            or metadata.get("source_path")
-            or document.page_content[:256]
-        )
-        return namespace, str(value)
-
-    def _documents_from_observation(self, observation: ToolObservation) -> list[Document]:
-        output = observation.output if isinstance(observation.output, Mapping) else {}
-        raw_documents = output.get("documents") if isinstance(output, Mapping) else None
-        documents: list[Document] = []
-        if isinstance(raw_documents, list):
-            for item in raw_documents:
-                if not isinstance(item, Mapping):
-                    continue
-                page_content = str(item.get("page_content") or item.get("content") or "")
-                if not page_content:
-                    continue
-                metadata = item.get("metadata")
-                documents.append(
-                    Document(
-                        page_content=page_content,
-                        metadata=dict(metadata) if isinstance(metadata, Mapping) else {},
-                    )
-                )
-        return documents
-
-    def _final_decision_from_observation(
-            self,
-            observation: ToolObservation,
-    ) -> RuntimeFinalDecision | None:
-        for source in (
-            observation.metadata,
-            observation.output if isinstance(observation.output, Mapping) else {},
-            self._raw_retrieval_trace(observation),
-        ):
-            value = source.get("final_decision") if isinstance(source, Mapping) else None
-            if value in {
-                "answer_with_evidence",
-                "ask_user",
-                "max_rounds_reached",
-                "no_evidence",
-                "retrieval_failed",
-            }:
-                return value  # type: ignore[return-value]
-        if observation.success:
-            return "no_evidence"
-        return "retrieval_failed"
-
-    def _follow_up_question_from_observation(self, observation: ToolObservation) -> str | None:
-        if observation.user_prompt:
-            return observation.user_prompt
-        output = observation.output if isinstance(observation.output, Mapping) else {}
-        value = output.get("follow_up_question") if isinstance(output, Mapping) else None
-        if isinstance(value, str) and value.strip():
-            return value.strip()
-        trace = self._raw_retrieval_trace(observation)
-        value = trace.get("follow_up_question")
-        return value if isinstance(value, str) and value.strip() else None
-
-    def _follow_up_question_from_observations(
-            self,
-            observations: list[ToolObservation],
-    ) -> str | None:
-        for observation in reversed(observations):
-            value = self._follow_up_question_from_observation(observation)
-            if value:
-                return value
-        return None
-
-    def _final_decision_from_observations(
-            self,
-            observations: list[ToolObservation],
-    ) -> RuntimeFinalDecision | None:
-        decisions = [
-            decision
-            for observation in observations
-            if (decision := self._final_decision_from_observation(observation)) is not None
-        ]
-        if "answer_with_evidence" in decisions:
-            return "answer_with_evidence"
-        if decisions:
-            return decisions[-1]
-        if any(observation.success for observation in observations):
-            return "no_evidence"
-        return "retrieval_failed"
-
-    def _raw_retrieval_trace(self, observation: ToolObservation) -> dict[str, Any]:
-        trace = observation.trace.get("retrieval_trace")
-        return dict(trace) if isinstance(trace, Mapping) else {}
-
     def _retrieval_trace_from_observations(
             self,
             *,
             message: str,
             observations: list[ToolObservation],
             mounted_knowledge_sources: tuple[str, ...],
+            request_id: str,
             citations: list[Citation],
             knowledge_used: bool,
             final_decision: RuntimeFinalDecision | None,
+            follow_up_question: str | None,
     ) -> RetrievalTrace:
-        raw_traces = [self._raw_retrieval_trace(observation) for observation in observations]
+        raw_traces = [raw_retrieval_trace(observation) for observation in observations]
         rounds = self._rounds_from_observations(observations=observations)
         top_k_chunks = self._top_chunks_from_citations(citations)
         last_trace = self._last_non_empty_trace(raw_traces)
@@ -856,11 +694,12 @@ class ChatAgentRuntimeMixin:
             candidate_tools=self._candidate_tools_from_traces(
                 raw_traces=raw_traces,
                 mounted_knowledge_sources=mounted_knowledge_sources,
+                request_id=request_id,
             ),
             exit_reason=self._last_trace_text(raw_traces, "exit_reason"),
             final_decision=final_decision,
             success=any(observation.success for observation in observations),
-            follow_up_question=self._follow_up_question_from_observations(observations),
+            follow_up_question=follow_up_question,
             raw_candidates_count=raw_candidates_count,
             filtered_candidates_count=filtered_candidates_count,
             top_k_chunks=top_k_chunks,
@@ -876,7 +715,7 @@ class ChatAgentRuntimeMixin:
     ) -> list[RetrievalTraceRound]:
         rounds: list[RetrievalTraceRound] = []
         for observation in observations:
-            raw_trace = self._raw_retrieval_trace(observation)
+            raw_trace = raw_retrieval_trace(observation)
             for round_trace in self._rounds_from_raw_trace(raw_trace):
                 rounds.append(round_trace.model_copy(update={"round_index": len(rounds) + 1}))
         return rounds
@@ -957,6 +796,7 @@ class ChatAgentRuntimeMixin:
             *,
             raw_traces: list[dict[str, Any]],
             mounted_knowledge_sources: tuple[str, ...],
+            request_id: str,
     ) -> list[str]:
         candidate_tools: list[str] = []
         seen: set[str] = set()
@@ -971,9 +811,12 @@ class ChatAgentRuntimeMixin:
                 candidate_tools.append(tool_name)
         if candidate_tools:
             return candidate_tools
-        return list(self.scene_definition.resolve_candidate_retrieval_tools(
-            mounted_knowledge_sources
-        ))
+        return list(
+            self._resolve_runtime_candidate_retrieval_tools(
+                mounted_knowledge_sources=mounted_knowledge_sources,
+                request_id=request_id,
+            )
+        )
 
     def _rounds_from_raw_trace(self, raw_trace: Mapping[str, Any]) -> list[RetrievalTraceRound]:
         raw_rounds = raw_trace.get("rounds")
@@ -1042,9 +885,10 @@ class ChatAgentRuntimeMixin:
             document_count: int,
             retrieval_trace: RetrievalTrace,
             mounted_knowledge_sources: tuple[str, ...],
+            request_id: str,
     ) -> dict[str, Any]:
         current_observation = observations[-1]
-        raw_trace = self._raw_retrieval_trace(current_observation)
+        raw_trace = raw_retrieval_trace(current_observation)
         return {
             "stage": "retrieval",
             "mode": "agent_runtime_tool",
@@ -1052,8 +896,9 @@ class ChatAgentRuntimeMixin:
             "tool_names": self._tool_names_from_observations(observations),
             "retrieval_policy": self._build_policy_summary(self.scene_definition.retrieval_policy),
             "candidate_tools": list(
-                self.scene_definition.resolve_candidate_retrieval_tools(
-                    mounted_knowledge_sources
+                self._resolve_runtime_candidate_retrieval_tools(
+                    mounted_knowledge_sources=mounted_knowledge_sources,
+                    request_id=request_id,
                 )
             ),
             "documents": document_count,
@@ -1066,7 +911,7 @@ class ChatAgentRuntimeMixin:
             "rounds": [round_trace.model_dump() for round_trace in retrieval_trace.rounds],
             "nested_retrieval_trace": raw_trace,
             "nested_retrieval_traces": [
-                self._raw_retrieval_trace(observation) for observation in observations
+                raw_retrieval_trace(observation) for observation in observations
             ],
             "current_tool_call": (
                 current_observation.execution.model_dump()
@@ -1085,35 +930,6 @@ class ChatAgentRuntimeMixin:
             seen.add(observation.tool_name)
             tool_names.append(observation.tool_name)
         return tool_names
-
-    def _current_tool_call_from_run(
-            self,
-            *,
-            run: ReActRun | PlanRun,
-            observation: ToolObservation,
-    ) -> ToolExecutionMetadata | None:
-        return run.current_tool_call or observation.execution
-
-    def _event_turn_id(self, react_run: ReActRun | None) -> str | None:
-        if react_run is None:
-            return None
-        if react_run.current_turn_id:
-            return react_run.current_turn_id
-        for turn in reversed(react_run.turns):
-            if turn.observation is not None:
-                return turn.turn_id
-        if react_run.turns:
-            return react_run.turns[-1].turn_id
-        return None
-
-    def _event_step_id(self, plan_run: PlanRun | None) -> str | None:
-        if plan_run is None:
-            return None
-        if plan_run.current_step_id:
-            return plan_run.current_step_id
-        if plan_run.steps:
-            return plan_run.steps[-1].step_id
-        return None
 
     def _top_chunks_from_citations(self, citations: list[Citation]) -> list[RetrievalTraceTopChunk]:
         return [

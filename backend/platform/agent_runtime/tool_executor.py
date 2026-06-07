@@ -41,6 +41,7 @@ class ToolExecutor:
         *,
         scene_definition: Any,
         mounted_knowledge_sources: Sequence[str] = (),
+        candidate_retrieval_tools: Sequence[str] | None = None,
         rag_tools: Mapping[str, Any] | None = None,
         internal_tools: Mapping[str, Any] | None = None,
     ) -> "ToolExecutor":
@@ -50,13 +51,15 @@ class ToolExecutor:
         for tool in scene_definition.build_tools():
             _register_tool(tools, tool)
 
-        candidate_retrieval_tools = set(
-            scene_definition.resolve_candidate_retrieval_tools(
+        resolved_candidate_tools = set(
+            candidate_retrieval_tools
+            if candidate_retrieval_tools is not None
+            else scene_definition.resolve_candidate_retrieval_tools(
                 tuple(mounted_knowledge_sources)
             )
         )
         # scene resolver 是 mounted knowledge source 的边界；只放行当前会话解析出的工具名。
-        allowed_tools.update(tool_name for tool_name in candidate_retrieval_tools if tool_name in tools)
+        allowed_tools.update(tool_name for tool_name in resolved_candidate_tools if tool_name in tools)
         if _should_allow_scene_structured_tools(
             scene_definition=scene_definition,
             mounted_knowledge_sources=mounted_knowledge_sources,

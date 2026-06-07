@@ -225,6 +225,154 @@ class PlanExecutor:
             return plan_run
         return plan_run
 
+    def continue_after_respond(
+        self,
+        *,
+        run: PlanRun,
+        response: str,
+        source: str = "freeform",
+        suggestion_id: str | None = None,
+        metadata: Mapping[str, Any] | None = None,
+    ) -> PlanRun:
+        """把人工补充写回当前等待 step，后续仍由 Plan 图继续执行。"""
+        step = _require_waiting_step(run)
+        continuation = _record_plan_continuation(
+            plan_run=run,
+            waiting_step=step,
+            action="respond",
+            metadata=metadata,
+            extra={
+                "response": response,
+                "source": source,
+                "suggestion_id": suggestion_id,
+            },
+        )
+        step_input = dict(step.input)
+        step_input["human_response"] = response
+        step.input = step_input
+        step.status = "pending"
+        run.workflow_status = validate_transition(run.workflow_status, "resume_respond")
+        run.current_step_id = None
+        run.current_tool_call = None
+        run.metadata["resume"] = continuation
+        return run
+
+    def continue_after_approve(
+        self,
+        *,
+        run: PlanRun,
+        approval_result: Mapping[str, Any] | None = None,
+        pending_tool_call: Mapping[str, Any] | None = None,
+    ) -> PlanRun:
+        """人工批准后，通过 ToolExecutor 执行等待 step 的工具。"""
+        step = _require_waiting_step(run)
+        tool_call = dict(pending_tool_call or {})
+        tool_name = str(tool_call.get("tool_name") or step.tool_name)
+        args = tool_call.get("args")
+        input_payload = dict(args) if isinstance(args, Mapping) else dict(step.input)
+        continuation = _record_plan_continuation(
+            plan_run=run,
+            waiting_step=step,
+            action="approve",
+            metadata=approval_result,
+            extra={
+                "pending_tool_call": dict(pending_tool_call or {}),
+                "side_effect_executed": True,
+            },
+        )
+        run.workflow_status = validate_transition(run.workflow_status, "resume_approve")
+        observation = self._tool_executor.execute(
+            tool_name=tool_name,
+            input_payload=input_payload,
+        )
+        _persist_step_observation(plan_run=run, step=step, observation=observation)
+        step.status = "succeeded" if observation.success else "failed"
+        run.current_step_id = None
+        run.current_tool_call = None
+        run.metadata["resume"] = continuation
+        if observation.success:
+            run.workflow_status = validate_transition(run.workflow_status, "success")
+            run.final_answer = observation.result_summary
+            run.result_summary = observation.result_summary
+            run.error = None
+        else:
+            run.workflow_status = validate_transition(run.workflow_status, "fail")
+            run.error = observation.error or observation.result_summary
+            run.result_summary = run.error
+        return run
+
+    def continue_after_reject(
+        self,
+        *,
+        run: PlanRun,
+        reason: str,
+        pending_tool_call: Mapping[str, Any] | None = None,
+    ) -> PlanRun:
+        """人工拒绝后取消当前 Plan，不能执行等待中的副作用。"""
+        step = _require_waiting_step(run)
+        continuation = _record_plan_continuation(
+            plan_run=run,
+            waiting_step=step,
+            action="reject",
+            metadata=None,
+            extra={
+                "reason": reason,
+                "pending_tool_call": dict(pending_tool_call or {}),
+                "side_effect_executed": False,
+            },
+        )
+        run.workflow_status = validate_transition(run.workflow_status, "resume_reject")
+        step.status = "cancelled"
+        step.error = None
+        step.result_summary = reason
+        run.current_step_id = None
+        run.current_tool_call = None
+        run.error = None
+        run.result_summary = reason
+        run.metadata["resume"] = continuation
+        return run
+
+
+def _require_waiting_step(plan_run: PlanRun) -> PlanStep:
+    if plan_run.workflow_status in {"succeeded", "failed", "cancelled"}:
+        raise ValueError(f"Plan run is already terminal: {plan_run.workflow_status}.")
+    if plan_run.workflow_status != "waiting_user":
+        raise ValueError(f"Plan run is not waiting_user: {plan_run.workflow_status}.")
+    if not plan_run.current_step_id:
+        raise ValueError("Plan run current_step_id is required for continuation.")
+    for step in plan_run.steps:
+        if step.step_id == plan_run.current_step_id:
+            if step.status != "waiting_user":
+                raise ValueError("Plan current step is not waiting_user.")
+            return step
+    raise ValueError("Plan current_step_id does not match any waiting step.")
+
+
+def _record_plan_continuation(
+    *,
+    plan_run: PlanRun,
+    waiting_step: PlanStep,
+    action: str,
+    metadata: Mapping[str, Any] | None,
+    extra: Mapping[str, Any],
+) -> dict[str, Any]:
+    continuation = {
+        "mode": "plan",
+        "action": action,
+        "plan_run_id": plan_run.plan_run_id,
+        "waiting_step_id": waiting_step.step_id,
+        "continued_from_step_id": waiting_step.step_id,
+        "metadata": dict(metadata or {}),
+        **dict(extra),
+    }
+    history = list(plan_run.metadata.get("continuations") or [])
+    history.append(continuation)
+    plan_run.metadata["continuations"] = history
+    step_metadata = dict(waiting_step.metadata or {})
+    step_metadata["continuation"] = continuation
+    waiting_step.metadata = step_metadata
+    return continuation
+
 
 def _transition(plan_run: PlanRun, event: str) -> None:
     previous_status = plan_run.workflow_status

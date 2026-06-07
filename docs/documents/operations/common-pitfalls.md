@@ -61,6 +61,14 @@
 - `reject` 或 cancel 进入 `cancelled`，不是 `failed`。
 - `succeeded / failed / cancelled` 是终态，不能继续 resume、retry 或写回 running。
 - `/chat/resume` 必须校验最新 checkpoint 中的 `interrupt_id`，不能接受旧等待点。
+- 顶层 ReAct/Plan HITL 恢复要回到所属图节点继续执行；不要在 application 层直接用临时 handler 绕过 waiting turn/step。
+- 接受 resume 时可以先消费顶层 `hitl` 防重复提交，但不要提前把嵌套的 ReAct turn 或 Plan step 改成终态，副作用必须由所属 resume graph 处理。
+
+## SSE 流式输出
+
+- `/chat?stream=true` 是面向界面展示的协议，普通输出只依赖 `start`、`chunk`、可选安全 `thinking`、`waiting_user`、`done`、`error`。
+- 不要把历史窗口、工具参数或 retrieval trace 作为 `history` / `tool` 业务事件再推给 UI；审计信息保留在 `done`、JSON 响应、session detail 和 checkpoint。
+- 没有真实 token streaming 时，后端会把最终回答拆成 `chunk` 模拟打字机输出；不要为此重新暴露工具进度事件。
 
 ## 测试
 
@@ -81,5 +89,4 @@ backend\.venv\Scripts\python.exe -m pytest backend\tests\test_langgraph_runtime.
 ```powershell
 backend\.venv\Scripts\python.exe -m pytest backend\tests\test_agentic_retrieval.py backend\tests\test_document_hybrid_retrieval.py backend\tests\test_chat_api.py -q -c backend\tests\pytest.ini
 ```
-
 

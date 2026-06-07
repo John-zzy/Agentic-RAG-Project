@@ -84,6 +84,7 @@ def test_new_modular_rag_stage_imports_are_canonical() -> None:
         "backend.platform.rag.post_retrieval.rerank",
         "backend.platform.rag.orchestration.decisions",
         "backend.platform.rag.orchestration.agentic",
+        "backend.platform.rag.orchestration.retrieval_graph",
     )
 
     imported = {module: importlib.import_module(module) for module in modules}
@@ -94,6 +95,13 @@ def test_new_modular_rag_stage_imports_are_canonical() -> None:
     assert hasattr(imported["backend.platform.rag.post_retrieval.rerank"], "IdentityRetrievalReranker")
     assert hasattr(imported["backend.platform.rag.orchestration.decisions"], "SufficiencyDecision")
     assert hasattr(imported["backend.platform.rag.orchestration.agentic"], "AgenticRetriever")
+    assert hasattr(imported["backend.platform.rag.orchestration.retrieval_graph"], "build_agentic_rag_graph")
+
+
+def test_agentic_rag_retrieval_graph_does_not_keep_legacy_langgraph_package() -> None:
+    legacy_package = PROJECT_ROOT / "platform" / "rag" / "orchestration" / "langgraph"
+
+    assert not legacy_package.exists()
 
 
 def test_project_code_does_not_import_legacy_root_rag_modules() -> None:

@@ -2,7 +2,7 @@
 
 from typing import Any, Callable
 
-from backend.platform.agent_runtime.chat_graph.config import ChatGraphDependencies
+from backend.platform.agent_runtime.chat_graph.graph.config import ChatGraphDependencies
 from backend.platform.agent_runtime.chat_graph.graph import build_chat_graph
 from backend.platform.agent_runtime.chat_graph.contracts import AnswerBuilder, PreparedGraphTurn
 
@@ -38,7 +38,6 @@ class AnswerGraphMixin:
             ),
             checkpointer=self.checkpointer,
         )
-
 
 
 

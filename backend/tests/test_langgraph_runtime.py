@@ -26,6 +26,8 @@ from backend.platform.agent_runtime.chat_graph.contracts import (
     HitlResumeInput,
     HitlWaitInput,
 )
+from backend.platform.agent_runtime.plan.executor import PlanExecutor
+from backend.platform.agent_runtime.tool_executor import ToolExecutor
 from backend.platform.config.settings import AppSettings
 from backend.platform.memory.base.session_store import SQLiteSessionStore
 from backend.platform.memory.chat.prompt_context import PromptContextBuilder
@@ -106,6 +108,20 @@ class _FakeModel:
     def invoke_runnable(self, runnable: Any, input: Any, *, config: Any | None = None) -> str:
         self.invoke_runnable_calls.append({"input": input, "config": config})
         return str(runnable.invoke(input, config=config))
+
+
+class _RecordingPlanTool:
+    def __init__(self, name: str, calls: list[dict[str, Any]]) -> None:
+        self.name = name
+        self.calls = calls
+        self.args_schema = None
+
+    def invoke(self, input_payload: dict[str, Any]) -> dict[str, Any]:
+        self.calls.append(dict(input_payload))
+        return {
+            "records": [dict(input_payload)],
+            "executed_tool": self.name,
+        }
 
 
 def _is_react_selector_prompt(prompt_template: Any | None) -> bool:
@@ -804,7 +820,7 @@ def test_chat_graph_runtime_plan_reject_cancels_waiting_step() -> None:
         ),
         interrupt_id="interrupt-plan-reject",
     )
-    executed = False
+    plan_tool_calls: list[dict[str, Any]] = []
 
     result = runtime.resume_hitl(
         resume=HitlResumeInput(
@@ -813,10 +829,13 @@ def test_chat_graph_runtime_plan_reject_cancels_waiting_step() -> None:
             interrupt_id="interrupt-plan-reject",
             action="reject",
         ),
-        approve_executor=lambda _: {"executed": executed},
+        plan_executor=_plan_resume_executor(
+            tool_name="native_rag_search",
+            calls=plan_tool_calls,
+        ),
     )
 
-    assert executed is False
+    assert plan_tool_calls == []
     assert result.state["status"] == "cancelled"
     assert result.state["plan_run"]["workflow_status"] == "cancelled"
     assert result.state["plan_run"]["steps"][0]["status"] == "cancelled"
@@ -856,6 +875,7 @@ def test_chat_graph_runtime_creates_react_clarification_wait_metadata() -> None:
 
 def test_chat_graph_runtime_creates_plan_approval_wait_metadata_and_approve_resumes_step() -> None:
     runtime = _build_chat_graph_runtime("runtime-graph-plan-hitl-approve")
+    plan_tool_calls: list[dict[str, Any]] = []
 
     runtime.create_hitl_wait(
         wait=HitlWaitInput(
@@ -882,20 +902,25 @@ def test_chat_graph_runtime_creates_plan_approval_wait_metadata_and_approve_resu
             interrupt_id="interrupt-plan-hitl",
             action="approve",
         ),
-        approve_executor=lambda tool_call: {"executed_tool": tool_call["tool_name"]},
+        plan_executor=_plan_resume_executor(
+            tool_name="generic_write",
+            calls=plan_tool_calls,
+        ),
     )
 
+    assert plan_tool_calls == [{"query": "publish"}]
     assert result.state["status"] == "succeeded"
     assert result.state["plan_run"]["workflow_status"] == "succeeded"
     assert result.state["plan_run"]["steps"][0]["status"] == "succeeded"
-    assert result.state["plan_run"]["final_answer"] == "已批准并执行待审批操作。"
-    assert result.state["plan_run"]["result_summary"] == "已批准并执行待审批操作。"
+    assert result.state["plan_run"]["final_answer"] == "generic_write succeeded."
+    assert result.state["plan_run"]["result_summary"] == "generic_write succeeded."
     assert result.state["hitl_resume"]["metadata"]["mode"] == "plan"
-    assert result.tool_result == {"executed_tool": "generic_write"}
+    assert result.tool_result["tool_name"] == "generic_write"
 
 
 def test_chat_graph_runtime_plan_respond_settles_nested_run_result() -> None:
     runtime = _build_chat_graph_runtime("runtime-graph-plan-hitl-respond")
+    plan_tool_calls: list[dict[str, Any]] = []
     runtime.create_hitl_wait(
         wait=HitlWaitInput(
             session_id="session-plan-respond",
@@ -923,17 +948,27 @@ def test_chat_graph_runtime_plan_respond_settles_nested_run_result() -> None:
             action="respond",
             payload={"response": "补充范围", "source": "freeform"},
         ),
-        respond_handler=lambda payload, state: {
-            "status": "succeeded",
-            "answer": f"继续执行：{payload['response']}",
-        },
+        plan_executor=_plan_resume_executor(
+            tool_name="native_rag_search",
+            calls=plan_tool_calls,
+        ),
     )
 
+    assert plan_tool_calls == [{"query": "执行计划", "human_response": "补充范围"}]
     assert result.state["status"] == "succeeded"
     assert result.state["plan_run"]["workflow_status"] == "succeeded"
     assert result.state["plan_run"]["steps"][0]["status"] == "succeeded"
-    assert result.state["plan_run"]["final_answer"] == "继续执行：补充范围"
-    assert result.state["plan_run"]["result_summary"] == "继续执行：补充范围"
+    assert result.state["plan_run"]["final_answer"] == "native_rag_search succeeded."
+    assert result.state["plan_run"]["result_summary"] == "Synthesized 1 successful plan step(s)."
+    assert result.state["final_state"] == "succeeded"
+    assert result.state["current_step_id"] is None
+    assert result.state["current_tool_call"] is None
+    restored = runtime.checkpointer.get_tuple(result.config)
+    assert restored is not None
+    checkpoint_values = restored.checkpoint["channel_values"]
+    assert checkpoint_values["plan_run"] == result.state["plan_run"]
+    assert checkpoint_values["current_step_id"] is None
+    assert checkpoint_values["final_state"] == "succeeded"
 
 
 def test_chat_graph_runtime_react_respond_settles_nested_run_result() -> None:
@@ -976,6 +1011,15 @@ def test_chat_graph_runtime_react_respond_settles_nested_run_result() -> None:
     assert result.state["react_run"]["turns"][0]["status"] == "succeeded"
     assert result.state["react_run"]["final_answer"] == "继续检索：安全制度"
     assert result.state["react_run"]["result_summary"] == "继续检索：安全制度"
+    assert result.state["final_state"] == "succeeded"
+    assert result.state["current_turn_id"] is None
+    assert result.state["current_tool_call"] is None
+    restored = runtime.checkpointer.get_tuple(result.config)
+    assert restored is not None
+    checkpoint_values = restored.checkpoint["channel_values"]
+    assert checkpoint_values["react_run"] == result.state["react_run"]
+    assert checkpoint_values["current_turn_id"] is None
+    assert checkpoint_values["final_state"] == "succeeded"
 
 
 def test_chat_graph_runtime_rejects_stale_agent_runtime_hitl_identity() -> None:
@@ -1028,6 +1072,102 @@ def test_chat_graph_runtime_rejects_stale_agent_runtime_hitl_identity() -> None:
         assert "current_turn_id" in str(exc)
     else:
         raise AssertionError("stale ReAct turn id should reject resume")
+
+
+def test_chat_graph_runtime_rejects_stale_plan_hitl_identity() -> None:
+    runtime = _build_chat_graph_runtime("runtime-graph-stale-plan-hitl")
+
+    runtime.create_hitl_wait(
+        wait=HitlWaitInput(
+            session_id="session-stale-plan-hitl",
+            request_id="req-stale-plan-hitl",
+            reason="计划步骤需要人工审批。",
+            pending_action="tool_approval",
+            proposed_tool_call={"tool_name": "generic_write", "args": {"query": "publish"}},
+            allowed_actions=["approve", "reject"],
+            metadata={
+                "mode": "plan",
+                "plan_run_id": "plan-expected",
+                "current_step_id": "step-expected",
+            },
+        ),
+        interrupt_id="interrupt-stale-plan-hitl",
+    )
+    config = build_runtime_graph_config(
+        session_id="session-stale-plan-hitl",
+        request_id="req-stale-plan-hitl",
+    )
+    state = runtime._load_or_build_thread_state(  # noqa: SLF001 - stale checkpoint setup.
+        session_id="session-stale-plan-hitl",
+        request_id="req-stale-plan-hitl",
+        config=config,
+        require_checkpoint=True,
+    )
+    runtime._persist_state_update(  # noqa: SLF001 - stale checkpoint setup.
+        state=state,
+        config=config,
+        update={"current_step_id": "step-stale"},
+    )
+
+    try:
+        runtime.resume_hitl(
+            resume=HitlResumeInput(
+                session_id="session-stale-plan-hitl",
+                request_id="req-stale-plan-hitl-resume",
+                interrupt_id="interrupt-stale-plan-hitl",
+                action="approve",
+            ),
+            approve_executor=lambda tool_call: {"executed": tool_call},
+        )
+    except HitlResumeError as exc:
+        assert "current_step_id" in str(exc)
+    else:
+        raise AssertionError("stale Plan step id should reject resume")
+
+
+def test_chat_graph_runtime_rejects_terminal_agent_runtime_resume() -> None:
+    runtime = _build_chat_graph_runtime("runtime-graph-terminal-agent-hitl")
+
+    result = runtime.create_hitl_wait(
+        wait=HitlWaitInput(
+            session_id="session-terminal-agent-hitl",
+            request_id="req-terminal-agent-hitl",
+            reason="计划步骤需要人工审批。",
+            pending_action="tool_approval",
+            proposed_tool_call={"tool_name": "generic_write", "args": {"query": "publish"}},
+            allowed_actions=["approve", "reject"],
+            metadata={
+                "mode": "plan",
+                "plan_run_id": "plan-terminal",
+                "current_step_id": "step-terminal",
+            },
+        ),
+        interrupt_id="interrupt-terminal-agent-hitl",
+    )
+    runtime._persist_state_update(  # noqa: SLF001 - terminal checkpoint setup.
+        state=result.state,
+        config=result.config,
+        update={
+            "status": "succeeded",
+            "final_state": "succeeded",
+            "hitl": None,
+        },
+    )
+
+    try:
+        runtime.resume_hitl(
+            resume=HitlResumeInput(
+                session_id="session-terminal-agent-hitl",
+                request_id="req-terminal-agent-hitl-resume",
+                interrupt_id="interrupt-terminal-agent-hitl",
+                action="approve",
+            ),
+            approve_executor=lambda tool_call: {"executed": tool_call},
+        )
+    except HitlResumeError as exc:
+        assert "terminal" in str(exc)
+    else:
+        raise AssertionError("terminal HITL checkpoint should reject resume")
 
 
 def test_chat_graph_runtime_rejects_invalid_hitl_wait_protocol() -> None:
@@ -1495,8 +1635,8 @@ def test_graph_stream_event_mapper_keeps_business_event_protocol() -> None:
 
     assert [event.event for event in events] == [
         "start",
-        "history",
-        "tool",
+        "thinking",
+        "thinking",
         "chunk",
         "waiting_user",
         "resume",
@@ -1505,12 +1645,47 @@ def test_graph_stream_event_mapper_keeps_business_event_protocol() -> None:
     ]
     assert all(not event.event.startswith("graph_") for event in events)
     assert all("graph_run_created" not in event.data for event in events)
+    thinking_payloads = [event.data for event in events if event.event == "thinking"]
+    assert thinking_payloads
+    assert all("messages" not in payload for payload in thinking_payloads)
+    assert all("retrieval_trace" not in payload for payload in thinking_payloads)
+
+
+def test_graph_stream_event_mapper_converts_audit_events_to_safe_thinking_status() -> None:
+    mapper = GraphStreamEventMapper()
+
+    events = list(
+        mapper.map_events(
+            [
+                GraphRuntimeStreamEvent("history_snapshot", {"messages": [{"content": "old"}]}),
+                GraphRuntimeStreamEvent(
+                    "retrieval_tool_result",
+                    {"retrieval_trace": {"final_decision": "answer_with_evidence"}},
+                ),
+            ]
+        )
+    )
+
+    assert [event.event for event in events] == ["thinking", "thinking"]
+    assert all("messages" not in event.data for event in events)
+    assert all("retrieval_trace" not in event.data for event in events)
+    assert all("status" in event.data or "message" in event.data for event in events)
 
 
 def _build_chat_graph_runtime(test_name: str) -> ChatGraphRuntime:
     runtime_dir = make_test_runtime_dir(test_name)
     return ChatGraphRuntime(
         checkpointer=SQLiteLangGraphCheckpointer(runtime_dir / "langgraph.db")
+    )
+
+
+def _plan_resume_executor(*, tool_name: str, calls: list[dict[str, Any]]) -> PlanExecutor:
+    tool = _RecordingPlanTool(name=tool_name, calls=calls)
+    return PlanExecutor(
+        tool_executor=ToolExecutor(
+            tools={tool_name: tool},
+            allowed_tools={tool_name},
+        )
     )
 
 

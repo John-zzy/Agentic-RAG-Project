@@ -36,10 +36,9 @@
     - `retrieval_trace.final_decision`: Runtime 归一化后的最终决策，常见为 `answer_with_evidence`、`direct_answer`、`ask_user`、`max_rounds_reached`、`no_evidence`、`retrieval_failed`；`direct_answer` 表示 ReAct 判断无需调用 RAG，响应不返回 citations。
   - 流式 `stream=true`：
     - 响应头为 `Content-Type: text/event-stream`。
-    - 事件类型为 `start`、`history`、`tool`、`chunk`、`waiting_user`、`done`、`error`，且 `data` 一律为 JSON。
+    - 事件类型为 `start`、`chunk`、可选安全状态 `thinking`、`waiting_user`、`done`、`error`，且 `data` 一律为 JSON；普通 UI 展示不再要求 `history` 或 `tool` 业务事件。
     - `start.data` 包含 `session_id`、`request_id`、`knowledge_used`、`scene`、`agent`、`agent_mode`、`state`、`state_event`。
-    - `history.data` 包含 `session_id`、`request_id`、`window_size`、`message_count`、`messages`，用于暴露本轮注入模型前的历史消息窗口；`messages` 每项包含 `type` 与 `content`。
-    - `tool.data` 包含顶层 Agent 工具进度和 retrieval 阶段结构化结果，固定补充 `session_id`、`request_id`、`agent_mode`、`knowledge_used`、`citations`；`stage` 取 `react_turn` 或 `plan_step`，原检索阶段保存在 `retrieval_stage`；ReAct payload 包含 `react_run_id`、`turn_id`、`active_turn`、`turn_status`、`workflow_status`、`action`、`action_type`、`tool_name`、`turn_count`、`max_turns`、`attempted_tools`、`rationale_summary`、`latest_action_selection`、`action_validation_result`，Plan payload 包含 `plan_run_id`、`step_id`、`step_status`、`workflow_status`、`tool_name`、`step_count`、`execution_order`；RAG 细节继续保存在 `retrieval_trace` 和 `rounds`。
+    - `thinking.data` 只包含安全状态文案和少量定位字段，不暴露历史消息、工具参数或 retrieval trace 明细。
     - `chunk.data` 包含 `delta`，表示最终回答文本增量。
     - `waiting_user.data` 包含 `session_id`、`request_id`、`status="waiting_user"`、`state="waiting_user"`、`state_event="interrupt"`、`run_id`、`hitl`；客户端需要使用 `hitl.interrupt_id` 调用 `/chat/resume`。
     - `done.data` 与非流式 `ChatResponse` 结构一致，客户端应以 `done.answer` 作为最终权威文本，并可读取 `final_state`。
@@ -47,14 +46,13 @@
 
 补充说明：
 
-- `stream=true` 只会对“最终回答生成阶段”按 `chunk` 推送文本增量；但在生成回答前，服务端会先发送 `history` 和 `tool` 事件用于暴露可观测上下文。
+- `stream=true` 只对最终回答或安全状态按 UI 友好事件推送；工具调用、历史窗口、检索 trace 等审计信息保留在 `done`、非流式 JSON 响应、session detail 和 LangGraph checkpoint 中。
 - `/chat` 请求体不再接收检索数量参数；检索数量、最低相关性阈值、召回策略和 ReRank 接入位由当前 scene 的 `retrieval_policy` 控制。
-- `tool.data.retrieval_policy` 只包含可观测的策略配置摘要：`top_k`、`min_relevance_score`、`recall_strategy`、`no_hit_strategy`、`rerank_enabled`、`rerank_top_n`。
 - 普通问候、能力说明或不依赖知识库的问题可返回 `direct_answer`，此时 `retrieval_trace.tool_call_count = 0`、`knowledge_used = false`、`citations = []`。
-- 命中知识时，成功路径事件顺序通常为 `start -> history -> tool -> chunk... -> done`。
-- 无知识命中时，仍返回 SSE 成功态，事件顺序为 `start -> history -> tool -> chunk -> done`，其中 `tool.documents = 0`，`done.knowledge_used = false`。
-- HITL 澄清等待路径事件顺序为 `start -> history -> tool -> waiting_user`，不会在等待用户时生成 `chunk` 或 `done`；`waiting_user` 不是失败。
-- 失败路径事件顺序为 `start -> history -> tool -> error`，`final_state=failed`。
+- 命中知识时，成功路径事件顺序通常为 `start -> chunk... -> done`，中间可出现安全 `thinking`。
+- 无知识命中时，仍返回 SSE 成功态，事件顺序通常为 `start -> chunk -> done`，其中 `done.knowledge_used = false`。
+- HITL 澄清等待路径事件顺序为 `start -> waiting_user`，不会在等待用户时生成 `chunk` 或 `done`；`waiting_user` 不是失败。
+- 失败路径事件顺序为 `error`，或在已发出 `start` 后进入 `error`；`final_state=failed`。
 
 ### `POST /chat/resume`
 

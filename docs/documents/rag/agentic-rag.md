@@ -289,12 +289,13 @@ knowledge_document_search
 - `CitationMapper.citations_from_documents()`
 - `_invoke_chain_with_docs()`
 
-### Agentic RAG 编排核心
+### Agentic RAG Retrieval Graph 编排核心
 
 - `backend/platform/rag/contracts.py`
 - `backend/platform/rag/pre_retrieval/query_rewrite.py`
 - `backend/platform/rag/orchestration/decisions.py`
 - `backend/platform/rag/orchestration/agentic.py`
+- `backend/platform/rag/orchestration/retrieval_graph/`
 
 重点关注：
 
