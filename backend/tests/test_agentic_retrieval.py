@@ -10,6 +10,7 @@ from backend.platform.rag.retrieval.documents.filters import DOCUMENT_MINIMUM_RE
 from backend.platform.rag.contracts import RetrievalContext, RetrievalPlan, RetrievalResult
 from backend.platform.rag.orchestration.decisions import SufficiencyDecision
 from backend.platform.rag.post_retrieval import DashScopeRetrievalReranker, IdentityRetrievalReranker
+from backend.platform.models.llm.guards import JsonSchemaGuard
 from backend.platform.search_foundation import VectorSearchResult, VectorStoreDocument
 from backend.platform.rag.retrieval.documents import DocumentChunkRetrievalResult
 from backend.platform.tools import build_retrieval_tool
@@ -227,6 +228,25 @@ class FakeQueryRewriteModelClient:
             {"runnable": runnable, "input": input, "config": config}
         )
         return self.output
+
+    def invoke_json_schema(
+        self,
+        runnable: object,
+        input: object,
+        *,
+        schema_model: type[object],
+        schema_source: str,
+        config: object | None = None,
+        complexity: str = "unknown",
+        metadata: dict[str, object] | None = None,
+    ) -> object:
+        del complexity, metadata
+        raw_output = self.invoke_runnable(runnable, input, config=config)
+        return JsonSchemaGuard().validate(
+            raw_output,
+            schema_model=schema_model,
+            source=schema_source,
+        )
 
 
 class FailingQueryRewriteModelClient(FakeQueryRewriteModelClient):
@@ -564,13 +584,14 @@ def test_generic_query_rewriter_falls_back_for_invalid_json_empty_query_and_mode
         assert rewrite.metadata["strategy"] == "llm_json"
         assert rewrite.metadata["preserved_tokens"] == []
         assert rewrite.metadata["fallback_reason"] in {
-            "invalid_json_or_empty_query",
+            "model_schema_error",
             "RuntimeError",
         }
         if isinstance(model, FailingQueryRewriteModelClient):
             assert rewrite.metadata["fallback_reason"] == "RuntimeError"
         else:
-            assert rewrite.metadata["fallback_reason"] == "invalid_json_or_empty_query"
+            assert rewrite.metadata["fallback_reason"] == "model_schema_error"
+            assert rewrite.metadata["failure"]["category"] == "model_schema_error"
         assert model.get_runnable_calls == ["simple"]
         assert len(model.invoke_runnable_calls) == 1
 

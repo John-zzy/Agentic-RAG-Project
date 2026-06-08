@@ -26,6 +26,8 @@
 
 - 本仓库源码和文档按 UTF-8 处理。
 - 在 Windows PowerShell 5.1 中，读取中文文档要显式使用 `Get-Content -Raw -Encoding UTF8 <file>`。
+- 写入中文文档也要显式指定 UTF-8，例如 `Set-Content -Encoding UTF8` / `Out-File -Encoding UTF8`；否则 PowerShell 5.1 可能使用系统默认编码或写出不符合预期的 BOM。
+- 不要用 `>`、`>>`、未指定编码的 `Set-Content` 或 `Out-File` 生成中文 Markdown、prompt、配置样例等文件。
 - 如果终端输出出现乱码，先判断是不是读取编码错误，不要直接认定文件已损坏。
 - 不要基于乱码输出制作 patch；重新用 UTF-8 读取后再修改。
 
@@ -89,4 +91,3 @@ backend\.venv\Scripts\python.exe -m pytest backend\tests\test_langgraph_runtime.
 ```powershell
 backend\.venv\Scripts\python.exe -m pytest backend\tests\test_agentic_retrieval.py backend\tests\test_document_hybrid_retrieval.py backend\tests\test_chat_api.py -q -c backend\tests\pytest.ini
 ```
-

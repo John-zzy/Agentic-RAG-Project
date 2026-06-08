@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
 import json
 from typing import Any, Literal, Protocol
 
@@ -25,6 +24,7 @@ from backend.platform.agent_runtime.validation import (
     ToolInputValidationError,
 )
 from backend.platform.agent_runtime.graph_logging import log_llm_output
+from backend.platform.models.llm.guards import ModelSchemaValidationError
 
 
 class ReActActionContext(AgentRuntimeModel):
@@ -73,6 +73,10 @@ class ReActSelectorError(ValueError):
 class ReActSelectorOutputError(ReActSelectorError):
     """模型输出无法被解析为合法结构化 action。"""
 
+    def __init__(self, message: str, *, failure_payload: dict[str, Any] | None = None) -> None:
+        self.failure_payload = dict(failure_payload or {})
+        super().__init__(message)
+
 
 class ReActSelectorActionValidationError(ReActSelectorError):
     """模型动作违反工具 allowlist 或 input schema。"""
@@ -96,6 +100,19 @@ class ReActActionSelectionModel(Protocol):
 
     def invoke_runnable(self, runnable: Any, input: Any, *, config: Any | None = None) -> Any:
         """执行模型 runnable 并返回原始输出。"""
+
+    def invoke_json_schema(
+        self,
+        runnable: Any,
+        input: Any,
+        *,
+        schema_model: type[AgentRuntimeModel],
+        schema_source: str,
+        config: Any | None = None,
+        complexity: str = "unknown",
+        metadata: dict[str, Any] | None = None,
+    ) -> AgentRuntimeModel:
+        """执行模型 runnable 并返回通过 schema guard 校验后的结构。"""
 
 
 class ReActActionSelector(Protocol):
@@ -181,21 +198,43 @@ class LLMReActActionSelector:
             complexity=self._model_complexity,
             prompt_template=REACT_ACTION_SELECTION_PROMPT,
         )
-        raw_output = self._model_client.invoke_runnable(
-            runnable,
-            build_selector_prompt_variables(context),
-        )
+        prompt_variables = build_selector_prompt_variables(context)
+        action_output = self._invoke_selector_schema(runnable, prompt_variables, context)
+        raw_output = action_output.model_dump(mode="json")
         log_llm_output(
             source="react_selector",
             request_id=context.request_id,
             output=raw_output,
         )
-        payload = _load_selector_payload(raw_output)
-        try:
-            action_output = LLMReActActionOutput.model_validate(payload)
-        except ValidationError as exc:
-            raise ReActSelectorOutputError(_selector_output_validation_message(exc)) from exc
         return _to_react_action(action_output=action_output, scene_policy=context.scene_policy)
+
+    def _invoke_selector_schema(
+        self,
+        runnable: Any,
+        prompt_variables: dict[str, str],
+        context: ReActActionContext,
+    ) -> LLMReActActionOutput:
+        try:
+            validated = self._model_client.invoke_json_schema(
+                runnable,
+                prompt_variables,
+                schema_model=LLMReActActionOutput,
+                schema_source="react_selector",
+                complexity=self._model_complexity,
+                metadata={
+                    "request_id": context.request_id,
+                    "react_run_id": context.react_run_id,
+                    "round_index": context.round_index,
+                },
+            )
+        except ModelSchemaValidationError as exc:
+            raise ReActSelectorOutputError(
+                str(exc),
+                failure_payload=exc.failure_payload,
+            ) from exc
+        if not isinstance(validated, LLMReActActionOutput):
+            raise ReActSelectorOutputError("react_selector schema guard returned unexpected output.")
+        return validated
 
 
 class ReActActionValidator:
@@ -272,6 +311,7 @@ class ReActActionSelectionCoordinator:
                     selector_attempt=selector_attempt,
                     status="failed",
                     error=error,
+                    failure_payload=selector_failure_payload(exc),
                 )
                 if retryable and selector_attempt < max_attempts:
                     continue
@@ -366,21 +406,23 @@ def record_action_selection_audit(
     status: Literal["validated", "failed"],
     action: ReActAction | None = None,
     error: str | None = None,
+    failure_payload: dict[str, Any] | None = None,
 ) -> None:
     audits = list(run.metadata.get("action_selection_audits") or [])
-    audits.append(
-        {
-            "round_index": round_index,
-            "selector_attempt": selector_attempt,
-            "status": status,
-            "action_type": action.action_type if action is not None else None,
-            "tool_name": action.tool_name if action is not None else None,
-            "rationale_summary": action.rationale_summary if action is not None else None,
-            "error": error,
-        }
-    )
+    audit_entry = {
+        "round_index": round_index,
+        "selector_attempt": selector_attempt,
+        "status": status,
+        "action_type": action.action_type if action is not None else None,
+        "tool_name": action.tool_name if action is not None else None,
+        "rationale_summary": action.rationale_summary if action is not None else None,
+        "error": error,
+    }
+    if failure_payload:
+        audit_entry["failure"] = failure_payload
+    audits.append(audit_entry)
     run.metadata["action_selection_audits"] = audits
-    run.metadata["latest_action_selection"] = {
+    latest_action_selection = {
         "round_index": round_index,
         "selector_attempt": selector_attempt,
         "status": status,
@@ -390,7 +432,14 @@ def record_action_selection_audit(
         "validation_result": "passed" if status == "validated" else "failed",
         "error": error,
     }
+    if failure_payload:
+        latest_action_selection["failure"] = failure_payload
+    run.metadata["latest_action_selection"] = latest_action_selection
     run.metadata["attempted_tools"] = _attempted_tool_snapshot(run=run, action=action)
+    if failure_payload:
+        failures = list(run.metadata.get("failures") or [])
+        failures.append(failure_payload)
+        run.metadata["failures"] = failures
 
 
 def _attempted_tool_snapshot(*, run: ReActRun, action: ReActAction | None) -> list[str]:
@@ -436,21 +485,9 @@ def _to_json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True)
 
 
-def _load_selector_payload(raw_output: Any) -> dict[str, Any]:
-    if isinstance(raw_output, Mapping):
-        return dict(raw_output)
-    if hasattr(raw_output, "content"):
-        return _load_selector_payload(getattr(raw_output, "content"))
-    text = str(raw_output or "").strip()
-    if not text:
-        raise ReActSelectorOutputError("selector returned empty output.")
-    try:
-        payload = json.loads(text)
-    except json.JSONDecodeError as exc:
-        raise ReActSelectorOutputError("selector output must be a valid JSON object.") from exc
-    if not isinstance(payload, dict):
-        raise ReActSelectorOutputError("selector output must be a JSON object.")
-    return payload
+def selector_failure_payload(exc: Exception) -> dict[str, Any] | None:
+    payload = getattr(exc, "failure_payload", None)
+    return dict(payload) if isinstance(payload, dict) else None
 
 
 def _to_react_action(

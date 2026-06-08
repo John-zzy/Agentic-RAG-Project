@@ -7,18 +7,32 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import BasePromptTemplate, PromptTemplate
 from langchain_core.runnables import Runnable, RunnableSerializable
+from pydantic import BaseModel
 
 from backend.platform.models.base.router import TaskComplexity, RoutedModel, get_model_for_task
+from backend.platform.models.llm.guards import (
+    JsonSchemaGuard,
+    ModelGuardAdapter,
+    ModelGuardConfig,
+)
 
 
 class ModelClient:
     """封装基于复杂度路由的 LangChain 聊天模型与 runnable 入口。"""
 
-    def __init__(self, chat_model_factory: Callable[..., Any] | None = None) -> None:
+    def __init__(
+        self,
+        chat_model_factory: Callable[..., Any] | None = None,
+        *,
+        guard_adapter: ModelGuardAdapter | None = None,
+        schema_guard: JsonSchemaGuard | None = None,
+    ) -> None:
         """初始化模型客户端与默认提示词模板。"""
         self._chat_model_factory = chat_model_factory
         self._prompt_template = PromptTemplate.from_template("{prompt}")
         self._output_parser = StrOutputParser()
+        self._guard_adapter = guard_adapter or ModelGuardAdapter()
+        self._schema_guard = schema_guard or JsonSchemaGuard()
 
     def build_chat_model(self, routed_model: RoutedModel) -> BaseChatModel:
         """根据路由结果构造 LangChain `BaseChatModel` 实例。"""
@@ -85,14 +99,15 @@ class ModelClient:
         input: Any,
         *,
         config: Any | None = None,
+        complexity: TaskComplexity | str = "unknown",
+        metadata: dict[str, Any] | None = None,
     ) -> Any:
-        """执行 runnable，并对空结果应用统一保护。"""
-        content = runnable.invoke(input, config=config)
-        if not content:
-            raise ValueError("Model returned empty content")
-        if isinstance(content, str):
-            return content.strip()
-        return content
+        """执行 runnable，并通过共享模型 guard 处理重试、空输出和失败分类。"""
+        return self._guard_adapter.invoke(
+            lambda: runnable.invoke(input, config=config),
+            config=self._build_guard_config(complexity=complexity),
+            metadata=metadata,
+        )
 
     def stream_runnable(
         self,
@@ -100,20 +115,41 @@ class ModelClient:
         input: Any,
         *,
         config: Any | None = None,
+        complexity: TaskComplexity | str = "unknown",
+        metadata: dict[str, Any] | None = None,
     ) -> Iterator[Any]:
-        """流式执行 runnable，并过滤空 chunk。"""
-        yielded = False
-        for chunk in runnable.stream(input, config=config):
-            if not chunk:
-                continue
-            yielded = True
-            if isinstance(chunk, str):
-                yield chunk
-                continue
-            yield chunk
+        """流式执行 runnable，并通过共享模型 guard 过滤空 chunk。"""
+        yield from self._guard_adapter.stream(
+            lambda: runnable.stream(input, config=config),
+            config=self._build_guard_config(complexity=complexity),
+            metadata=metadata,
+        )
 
-        if not yielded:
-            raise ValueError("Model returned empty streaming content")
+    def invoke_json_schema(
+        self,
+        runnable: Runnable[Any, Any],
+        input: Any,
+        *,
+        schema_model: type[BaseModel],
+        schema_source: str,
+        config: Any | None = None,
+        complexity: TaskComplexity | str = "unknown",
+        metadata: dict[str, Any] | None = None,
+    ) -> BaseModel:
+        """执行模型并校验结构化 JSON 输出。"""
+        raw_output = self.invoke_runnable(
+            runnable,
+            input,
+            config=config,
+            complexity=complexity,
+            metadata={**dict(metadata or {}), "schema_source": schema_source},
+        )
+        return self._schema_guard.validate(
+            raw_output,
+            schema_model=schema_model,
+            source=schema_source,
+            metadata=metadata,
+        )
 
     def _resolve_chat_model_factory(self) -> Callable[..., Any]:
         """延迟解析 ChatOpenAI 工厂，支持依赖注入。"""
@@ -180,6 +216,9 @@ class ModelClient:
             complexity=complexity,
         )
 
+    def _build_guard_config(self, *, complexity: TaskComplexity | str) -> ModelGuardConfig:
+        return ModelGuardConfig(complexity=str(complexity))
+
 
 model_client = ModelClient()
 
@@ -203,9 +242,22 @@ def get_runnable(
     )
 
 
-def invoke_runnable(runnable: Runnable[Any, Any], input: Any, *, config: Any | None = None) -> Any:
+def invoke_runnable(
+    runnable: Runnable[Any, Any],
+    input: Any,
+    *,
+    config: Any | None = None,
+    complexity: TaskComplexity | str = "unknown",
+    metadata: dict[str, Any] | None = None,
+) -> Any:
     """模块级快捷入口，执行 runnable 并应用统一空结果保护。"""
-    return model_client.invoke_runnable(runnable, input, config=config)
+    return model_client.invoke_runnable(
+        runnable,
+        input,
+        config=config,
+        complexity=complexity,
+        metadata=metadata,
+    )
 
 
 def stream_runnable(
@@ -213,6 +265,14 @@ def stream_runnable(
     input: Any,
     *,
     config: Any | None = None,
+    complexity: TaskComplexity | str = "unknown",
+    metadata: dict[str, Any] | None = None,
 ) -> Iterator[Any]:
     """模块级快捷入口，流式执行 runnable 并过滤空 chunk。"""
-    yield from model_client.stream_runnable(runnable, input, config=config)
+    yield from model_client.stream_runnable(
+        runnable,
+        input,
+        config=config,
+        complexity=complexity,
+        metadata=metadata,
+    )

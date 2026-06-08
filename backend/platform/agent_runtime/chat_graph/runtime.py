@@ -16,6 +16,10 @@ from backend.platform.agent_runtime.chat_graph.runtime_parts.answer_graph import
     AnswerGraphMixin,
 )
 from backend.platform.agent_runtime.chat_graph.runtime_parts.hitl import HitlRuntimeMixin
+from backend.platform.agent_runtime.chat_graph.runtime_parts.recovery import (
+    RuntimeRecoveryMixin,
+)
+from backend.platform.agent_runtime.idempotency import ToolIdempotencyStore
 from backend.platform.agent_runtime.chat_graph.runtime_parts.state_store import (
     RuntimeStateStoreMixin,
 )
@@ -25,6 +29,7 @@ from backend.platform.agent_runtime.graph_logging import (
     log_graph_invoke_start,
 )
 from backend.platform.workflow.langgraph.checkpointer import SQLiteLangGraphCheckpointer
+from backend.platform.workflow.langgraph.guards import GuardedNodeFailureError
 from backend.platform.workflow.langgraph.lifecycle import GraphRunLifecycleRecorder
 
 
@@ -32,6 +37,7 @@ class ChatGraphRuntime(
     RuntimeStateStoreMixin,
     AnswerGraphMixin,
     HitlRuntimeMixin,
+    RuntimeRecoveryMixin,
     AgentRuntimeStateProjectionMixin,
 ):
     """平台层 ChatGraph 运行入口，负责 checkpoint、HITL 和 run lifecycle。"""
@@ -41,9 +47,11 @@ class ChatGraphRuntime(
         *,
         checkpointer: SQLiteLangGraphCheckpointer,
         lifecycle: GraphRunLifecycleRecorder | None = None,
+        tool_idempotency_store: ToolIdempotencyStore | None = None,
     ) -> None:
         self.checkpointer = checkpointer
         self.lifecycle = lifecycle or GraphRunLifecycleRecorder()
+        self.tool_idempotency_store = tool_idempotency_store
         # 同一等待点的 resume 可能带副作用，单进程内串行化避免重复执行。
         self._resume_lock = Lock()
 
@@ -93,11 +101,22 @@ class ChatGraphRuntime(
             log_graph_invoke_end(graph_name="chat_graph", payload=output)
         except Exception as exc:
             log_graph_invoke_error(graph_name="chat_graph", error=exc)
-            self.lifecycle.mark_failed(run, exc)
-            raise
+            public_error = _unwrap_guarded_node_error(exc)
+            self.lifecycle.mark_failed(run, public_error)
+            if public_error is exc:
+                raise
+            raise public_error
 
         if output.get("status") == "waiting_user":
             self.lifecycle.mark_waiting_user(run)
+        elif output.get("status") == "failed":
+            self.lifecycle.mark_failed(
+                run,
+                _self_check_failure_message(output)
+                or "ChatGraph finished with failed status.",
+            )
+        elif output.get("status") == "cancelled":
+            self.lifecycle.mark_cancelled(run)
         else:
             self.lifecycle.mark_succeeded(run)
 
@@ -108,3 +127,23 @@ class ChatGraphRuntime(
             config=config,
             run_id=run.run_id,
         )
+
+
+def _self_check_failure_message(output: dict[str, Any]) -> str | None:
+    metadata = output.get("metadata")
+    if not isinstance(metadata, dict):
+        return None
+    report = metadata.get("self_check")
+    if not isinstance(report, dict):
+        return None
+    reasons = report.get("failure_reasons")
+    if isinstance(reasons, list) and reasons:
+        return str(reasons[0])
+    return None
+
+
+def _unwrap_guarded_node_error(exc: Exception) -> Exception:
+    # API 边界继续使用业务异常映射，guard failure 只作为内部审计事实保留。
+    if isinstance(exc, GuardedNodeFailureError) and isinstance(exc.__cause__, Exception):
+        return exc.__cause__
+    return exc

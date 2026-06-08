@@ -9,6 +9,7 @@ from backend.platform.agent_runtime.contracts import (
     ToolObservation,
     collect_successful_tool_observations,
 )
+from backend.platform.agent_runtime.idempotency import ToolExecutionContext
 from backend.platform.agent_runtime.plan.synthesis import (
     PlanFinalSynthesizer,
     PlanSynthesisContext,
@@ -100,6 +101,11 @@ class PlanExecutor:
             input_payload=step.input,
             attempt=step.retry_metadata.attempt,
             max_attempts=step.retry_metadata.max_attempts,
+            execution_context=_build_step_execution_context(
+                plan_run=plan_run,
+                step=step,
+                node_name="plan.execute_step",
+            ),
         )
         observation = _prepare_observation_for_step(
             plan_run=plan_run,
@@ -284,6 +290,11 @@ class PlanExecutor:
         observation = self._tool_executor.execute(
             tool_name=tool_name,
             input_payload=input_payload,
+            execution_context=_build_step_execution_context(
+                plan_run=run,
+                step=step,
+                node_name="plan.resume_approve",
+            ),
         )
         _persist_step_observation(plan_run=run, step=step, observation=observation)
         step.status = "succeeded" if observation.success else "failed"
@@ -557,3 +568,19 @@ def _build_plan_hitl_metadata(
 
 def _observation_error(observation: ToolObservation) -> str:
     return observation.error or observation.result_summary
+
+
+def _build_step_execution_context(
+    *,
+    plan_run: PlanRun,
+    step: PlanStep,
+    node_name: str,
+) -> ToolExecutionContext:
+    return ToolExecutionContext(
+        session_id=plan_run.session_id,
+        request_id=plan_run.request_id,
+        run_id=plan_run.plan_run_id,
+        node_name=node_name,
+        step_id=step.step_id,
+        metadata={"mode": "plan"},
+    )

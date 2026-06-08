@@ -33,8 +33,15 @@ from backend.platform.agent_runtime.graph_logging import (
     wrap_graph_node,
     wrap_graph_route,
 )
+from backend.platform.workflow.langgraph.guards import register_guarded_node
 
 REACT_GRAPH_NAME = "react_graph"
+GUARDED_REACT_NODES = {
+    "select_action": "runtime",
+    EXECUTE_TOOL: "tool",
+    "record_observation": "runtime",
+    "synthesize_result": "runtime",
+}
 
 
 def build_react_graph(
@@ -46,17 +53,25 @@ def build_react_graph(
 
     builder = StateGraph(ReActGraphState)
     _add_logged_node(builder, "initialize_run", build_initialize_run_node(dependencies))
-    _add_logged_node(builder, "select_action", build_select_action_node(dependencies))
+    _add_guarded_logged_node(builder, "select_action", build_select_action_node(dependencies))
     _add_logged_node(builder, "validate_action", build_validate_action_node(dependencies))
     _add_logged_node(builder, "route_action", build_route_action_node(dependencies))
     _add_logged_node(builder, RESPOND, build_respond_node(dependencies))
-    _add_logged_node(builder, EXECUTE_TOOL, build_execute_tool_node(dependencies))
+    _add_guarded_logged_node(builder, EXECUTE_TOOL, build_execute_tool_node(dependencies))
     _add_logged_node(builder, ASK_USER, build_ask_user_node(dependencies))
     _add_logged_node(builder, FINAL_ANSWER, build_final_answer_node(dependencies))
-    _add_logged_node(builder, "record_observation", build_record_observation_node(dependencies))
+    _add_guarded_logged_node(
+        builder,
+        "record_observation",
+        build_record_observation_node(dependencies),
+    )
     _add_logged_node(builder, "waiting_user", build_waiting_user_node(dependencies))
     _add_logged_node(builder, LOOP_OR_FINISH, build_loop_or_finish_node(dependencies))
-    _add_logged_node(builder, "synthesize_result", build_synthesize_result_node(dependencies))
+    _add_guarded_logged_node(
+        builder,
+        "synthesize_result",
+        build_synthesize_result_node(dependencies),
+    )
 
     builder.add_edge(START, "initialize_run")
     builder.add_conditional_edges(
@@ -111,4 +126,20 @@ def _add_logged_node(builder: StateGraph, node_name: str, node: Any) -> None:
             node_name=node_name,
             node=node,
         ),
+    )
+
+
+def _add_guarded_logged_node(builder: StateGraph, node_name: str, node: Any) -> None:
+    # 保留 observation retry 语义，仅把节点抛出的框架异常交给统一 guard。
+    register_guarded_node(
+        builder,
+        node_name,
+        wrap_graph_node(
+            graph_name=REACT_GRAPH_NAME,
+            node_name=node_name,
+            node=node,
+        ),
+        graph_name=REACT_GRAPH_NAME,
+        source=GUARDED_REACT_NODES[node_name],
+        metadata={"guard_scope": "react_graph"},
     )

@@ -19,7 +19,18 @@ from backend.platform.agent_runtime.chat_graph.contracts import (
     _HITL_ALLOWED_ACTIONS,
     _HITL_PENDING_ACTIONS,
 )
-from backend.platform.agent_runtime.contracts import PlanRun, ReActRun
+from backend.platform.agent_runtime.contracts import (
+    PlanRun,
+    ReActRun,
+    ToolExecutionMetadata,
+    ToolObservation,
+)
+from backend.platform.agent_runtime.idempotency import (
+    ToolExecutionContext,
+    attach_idempotency_trace,
+    build_input_hash,
+    build_tool_idempotency_key,
+)
 from backend.platform.agent_runtime.plan.executor import PlanExecutor
 from backend.platform.agent_runtime.plan.graph import (
     PlanHitlResumeGraphDependencies,
@@ -251,6 +262,7 @@ class HitlRuntimeMixin:
                 )
                 tool_result = self._execute_approved_tool(
                     hitl=hitl,
+                    resume_payload=resume_payload,
                     approve_executor=approve_executor,
                 )
                 next_status = validate_transition(resumed_state, "success")
@@ -806,6 +818,7 @@ class HitlRuntimeMixin:
         self,
         *,
         hitl: RuntimeHitlState,
+        resume_payload: Mapping[str, Any],
         approve_executor: HitlApproveExecutor | None,
     ) -> dict[str, Any]:
         """执行用户已批准的工具调用；没有执行器时不允许继续。"""
@@ -814,8 +827,111 @@ class HitlRuntimeMixin:
             raise HitlResumeError("approve requires a proposed_tool_call.")
         if approve_executor is None:
             raise HitlResumeError("approve_executor is required for approve action.")
-        result = approve_executor(proposed_tool_call)
-        return dict(result or {})
+        idempotency = self._approved_tool_idempotency(
+            hitl=hitl,
+            resume_payload=resume_payload,
+            proposed_tool_call=proposed_tool_call,
+        )
+        if idempotency is None:
+            result = approve_executor(proposed_tool_call)
+            return dict(result or {})
+
+        key, context, tool_name = idempotency
+        existing = self.tool_idempotency_store.begin_invocation(
+            key=key,
+            tool_name=tool_name,
+            input_hash=build_input_hash(proposed_tool_call),
+            context=context,
+            compensation_status="unsupported",
+        )
+        if existing is not None and existing.observation is not None:
+            observation = attach_idempotency_trace(
+                observation=existing.observation,
+                key=key,
+                status=existing.status,
+                reused=True,
+                compensation_status=existing.compensation_status,
+            )
+            return observation.model_dump()
+        if existing is not None:
+            raise HitlResumeError("approved tool invocation is already pending.")
+
+        try:
+            result = dict(approve_executor(proposed_tool_call) or {})
+        except Exception as exc:
+            observation = _approved_tool_exception_to_observation(
+                tool_name=tool_name,
+                key=key,
+                exc=exc,
+            )
+            self.tool_idempotency_store.mark_failed(
+                key=key,
+                observation=observation,
+                compensation_status="unsupported",
+            )
+            raise
+        observation = _approved_tool_result_to_observation(
+            tool_name=tool_name,
+            result=result,
+        )
+        observation = attach_idempotency_trace(
+            observation=observation,
+            key=key,
+            status="succeeded" if observation.success else "failed",
+            reused=False,
+            compensation_status="unsupported",
+        )
+        if observation.success:
+            self.tool_idempotency_store.mark_succeeded(
+                key=key,
+                observation=observation,
+                compensation_status="unsupported",
+            )
+        else:
+            self.tool_idempotency_store.mark_failed(
+                key=key,
+                observation=observation,
+                compensation_status="unsupported",
+            )
+        return result
+
+    def _approved_tool_idempotency(
+        self,
+        *,
+        hitl: RuntimeHitlState,
+        resume_payload: Mapping[str, Any],
+        proposed_tool_call: Mapping[str, Any],
+    ) -> tuple[str, ToolExecutionContext, str] | None:
+        """为顶层 HITL approve 构造幂等上下文；没有 store 时保持纯执行。"""
+        if self.tool_idempotency_store is None:
+            return None
+        tool_name = str(proposed_tool_call.get("tool_name") or "").strip()
+        if not tool_name:
+            raise HitlResumeError("proposed_tool_call.tool_name is required.")
+        metadata = dict(hitl.get("metadata") or {})
+        context = ToolExecutionContext(
+            session_id=str(resume_payload.get("session_id") or hitl.get("thread_id") or ""),
+            request_id=str(resume_payload.get("request_id") or ""),
+            run_id=str(metadata.get("react_run_id") or metadata.get("plan_run_id") or resume_payload.get("run_id") or ""),
+            node_name=f"hitl.{hitl.get('pending_action') or 'approve'}",
+            turn_id=(
+                str(metadata.get("current_turn_id"))
+                if metadata.get("current_turn_id") is not None
+                else None
+            ),
+            step_id=(
+                str(metadata.get("current_step_id"))
+                if metadata.get("current_step_id") is not None
+                else None
+            ),
+            metadata={"mode": metadata.get("mode"), "interrupt_id": hitl.get("interrupt_id")},
+        )
+        key = build_tool_idempotency_key(
+            context=context,
+            tool_name=tool_name,
+            input_payload=proposed_tool_call,
+        )
+        return key, context, tool_name
 
     def _build_respond_state_update(
         self,
@@ -859,5 +975,47 @@ class HitlRuntimeMixin:
         return update
 
 
+def _approved_tool_result_to_observation(
+    *,
+    tool_name: str,
+    result: Mapping[str, Any],
+) -> ToolObservation:
+    """将 approve_executor 返回值收敛为可持久化的统一 observation。"""
+    try:
+        return ToolObservation.model_validate(dict(result))
+    except ValueError:
+        return ToolObservation(
+            tool_name=tool_name,
+            success=True,
+            output=dict(result),
+            result_summary=f"{tool_name} approved tool executed.",
+            metadata=dict(result),
+        )
 
 
+def _approved_tool_exception_to_observation(
+    *,
+    tool_name: str,
+    key: str,
+    exc: Exception,
+) -> ToolObservation:
+    """approve 执行异常也落幂等事实，避免 pending 记录阻塞后续恢复。"""
+    observation = ToolObservation(
+        tool_name=tool_name,
+        success=False,
+        result_summary=f"{tool_name} failed after approval: {exc}",
+        retryable=False,
+        error=str(exc),
+        execution=ToolExecutionMetadata(
+            tool_name=tool_name,
+            idempotency_key=key,
+            retryable=False,
+        ),
+    )
+    return attach_idempotency_trace(
+        observation=observation,
+        key=key,
+        status="failed",
+        reused=False,
+        compensation_status="unsupported",
+    )

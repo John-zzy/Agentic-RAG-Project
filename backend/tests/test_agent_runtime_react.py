@@ -23,6 +23,7 @@ from backend.platform.agent_runtime.react import (
     ReActSynthesisResult,
 )
 from backend.platform.agent_runtime.tool_executor import ToolExecutor
+from backend.platform.models.llm.guards import JsonSchemaGuard
 from backend.platform.tools.base import ToolResult
 
 
@@ -66,6 +67,25 @@ class _RecordingSelectionModel:
         if callable(self.response):
             return self.response(input)
         return self.response
+
+    def invoke_json_schema(
+        self,
+        runnable: Any,
+        input: Any,
+        *,
+        schema_model: type[BaseModel],
+        schema_source: str,
+        config: Any | None = None,
+        complexity: str = "unknown",
+        metadata: dict[str, Any] | None = None,
+    ) -> BaseModel:
+        del complexity, metadata
+        raw_output = self.invoke_runnable(runnable, input, config=config)
+        return JsonSchemaGuard().validate(
+            raw_output,
+            schema_model=schema_model,
+            source=schema_source,
+        )
 
 
 class _RecordingSynthesizer:
@@ -899,7 +919,7 @@ def test_react_runtime_retries_invalid_selector_output_then_waits_user() -> None
     assert run.turns[0].action.metadata["selector_failure"] == {
         "round_index": 1,
         "attempts": 2,
-        "error": "selector output must be a valid JSON object.",
+        "error": "react_selector output must be a valid JSON object.",
         "retry_budget": 1,
     }
     assert run.metadata["latest_selector_failure"] == run.turns[0].action.metadata["selector_failure"]
@@ -933,7 +953,7 @@ def test_react_runtime_fails_after_invalid_selector_output_when_ask_user_disable
     assert run.observations == []
     assert len(model.inputs) == 1
     assert run.error == (
-        "ReAct selector output is invalid: action_type: Input should be 'tool_call', "
+        "react_selector output is invalid: action_type: Input should be 'tool_call', "
         "'ask_user', 'final_answer' or 'stop'."
     )
 

@@ -25,6 +25,7 @@ from backend.platform.rag.retrieval.documents import DocumentChunkRetrievalResul
 from backend.platform.rag.retrieval.documents.service import DocumentRetrievalService
 from backend.platform.search_foundation import VectorSearchResult, VectorStoreDocument
 from backend.platform.workflow.langgraph.config import DEFAULT_RUNTIME_CHECKPOINT_NS
+from backend.platform.models.llm.guards import JsonSchemaGuard
 from backend.scenes.base import SceneDefinition, SceneFallbackPolicy, SceneRetrievalPolicy
 from backend.scenes.ecommerce.knowledge_service import create_knowledge_service
 from backend.tests.test_support import make_test_runtime_dir
@@ -193,6 +194,26 @@ class FakeModel:
         self.invoke_runnable_calls.append({"runnable": runnable, "input": input, "config": config})
         return runnable.invoke(input, config=config)
 
+    def invoke_json_schema(
+        self,
+        runnable: Any,
+        input: Any,
+        *,
+        schema_model: type[Any],
+        schema_source: str,
+        config: Any | None = None,
+        complexity: str = "unknown",
+        metadata: dict[str, Any] | None = None,
+    ) -> Any:
+        del complexity
+        raw_output = self.invoke_runnable(runnable, input, config=config)
+        return JsonSchemaGuard().validate(
+            raw_output,
+            schema_model=schema_model,
+            source=schema_source,
+            metadata=metadata,
+        )
+
     def stream_runnable(
         self,
         runnable: Any,
@@ -241,6 +262,26 @@ class FakeRewriteModel:
     def invoke_runnable(self, runnable: Any, input: Any, *, config: Any | None = None) -> str:
         self.invoke_runnable_calls.append({"runnable": runnable, "input": input, "config": config})
         return self.output
+
+    def invoke_json_schema(
+        self,
+        runnable: Any,
+        input: Any,
+        *,
+        schema_model: type[Any],
+        schema_source: str,
+        config: Any | None = None,
+        complexity: str = "unknown",
+        metadata: dict[str, Any] | None = None,
+    ) -> Any:
+        del complexity
+        raw_output = self.invoke_runnable(runnable, input, config=config)
+        return JsonSchemaGuard().validate(
+            raw_output,
+            schema_model=schema_model,
+            source=schema_source,
+            metadata=metadata,
+        )
 
 
 class FakeAnswerRunnable(RunnableSerializable[Any, str]):

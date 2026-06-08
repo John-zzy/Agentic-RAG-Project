@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-import json
 import re
 from typing import Any, Protocol, runtime_checkable
 
@@ -12,6 +11,7 @@ from pydantic import ConfigDict, Field
 from backend.platform.config.settings import AppSettings, settings
 from backend.platform.knowledge.repositories import VectorStoreFactory
 from backend.platform.models.llm.client import model_client as default_model_client
+from backend.platform.models.llm.guards import ModelSchemaValidationError
 from backend.platform.rag.orchestration.agentic import AgenticRetriever
 from backend.platform.rag.contracts import (
     RetrievalContext,
@@ -97,6 +97,20 @@ class QueryRewriteModelClient(Protocol):
             config: Any | None = None,
     ) -> Any:
         """同步执行模型 runnable。"""
+        ...
+
+    def invoke_json_schema(
+            self,
+            runnable: Any,
+            input: Any,
+            *,
+            schema_model: type[QueryRewrite],
+            schema_source: str,
+            config: Any | None = None,
+            complexity: str = "unknown",
+            metadata: dict[str, Any] | None = None,
+    ) -> QueryRewrite:
+        """同步执行模型 runnable，并校验 query rewrite schema。"""
         ...
 
 
@@ -282,29 +296,36 @@ class GenericAssistantQueryRewriter(QueryRewriter):
                 complexity="simple",
                 prompt_template=GENERIC_ASSISTANT_QUERY_REWRITE_PROMPT,
             )
-            raw_output = self.model_client.invoke_runnable(
+            parsed = self.model_client.invoke_json_schema(
                 runnable,
                 self._build_prompt_variables(input, original_query=original_query),
+                schema_model=QueryRewrite,
+                schema_source="query_rewrite",
                 config=config,
+                complexity="simple",
+                metadata={
+                    "selected_tool": input.plan.selected_tool,
+                    "round_index": input.plan.round_index,
+                },
             )
-            parsed = self._parse_model_output(raw_output)
+        except ModelSchemaValidationError as exc:
+            return self._fallback_rewrite(
+                original_query,
+                reason="LLM query rewrite returned invalid JSON; using normalized original query.",
+                fallback_reason=self._failure_category_or_type(exc),
+                preserved_tokens=preserved_tokens,
+                failure_payload=exc.failure_payload,
+            )
         except Exception as exc:
             return self._fallback_rewrite(
                 original_query,
                 reason="LLM query rewrite failed; using normalized original query.",
-                fallback_reason=type(exc).__name__,
+                fallback_reason=self._failure_category_or_type(exc),
                 preserved_tokens=preserved_tokens,
+                failure_payload=self._failure_payload(exc),
             )
 
-        if parsed is None:
-            return self._fallback_rewrite(
-                original_query,
-                reason="LLM query rewrite returned invalid JSON; using normalized original query.",
-                fallback_reason="invalid_json_or_empty_query",
-                preserved_tokens=preserved_tokens,
-            )
-
-        rewritten_query = self._normalize_rewritten_query(parsed["query"])
+        rewritten_query = self._normalize_rewritten_query(parsed.query)
         if not rewritten_query:
             return self._fallback_rewrite(
                 original_query,
@@ -328,7 +349,7 @@ class GenericAssistantQueryRewriter(QueryRewriter):
 
         return QueryRewrite(
             query=rewritten_query,
-            reason=parsed.get("reason") or "LLM generated a focused retrieval query.",
+            reason=parsed.reason or "LLM generated a focused retrieval query.",
             metadata={
                 **self._build_metadata(
                     original_query=original_query,
@@ -366,28 +387,6 @@ class GenericAssistantQueryRewriter(QueryRewriter):
             f"error={result.error or 'none'}"
         )
 
-    def _parse_model_output(self, raw_output: Any) -> dict[str, str] | None:
-        """只接受包含非空 query 的 JSON 对象。"""
-        text = str(raw_output).strip() if raw_output is not None else ""
-        if not text:
-            return None
-        try:
-            payload = json.loads(text)
-        except json.JSONDecodeError:
-            return None
-        if not isinstance(payload, dict):
-            return None
-
-        # 只允许结构化 JSON 进入后续流程，避免解释性文本被当作检索 query。
-        query = payload.get("query")
-        if not isinstance(query, str) or not query.strip():
-            return None
-        reason = payload.get("reason")
-        return {
-            "query": query,
-            "reason": reason.strip() if isinstance(reason, str) else "",
-        }
-
     def _fallback_rewrite(
             self,
             original_query: str,
@@ -395,6 +394,7 @@ class GenericAssistantQueryRewriter(QueryRewriter):
             reason: str,
             fallback_reason: str,
             preserved_tokens: tuple[str, ...],
+            failure_payload: dict[str, Any] | None = None,
     ) -> QueryRewrite:
         """构造保守 fallback，保证 query rewrite 失败不会中断聊天链路。"""
         return QueryRewrite(
@@ -405,6 +405,7 @@ class GenericAssistantQueryRewriter(QueryRewriter):
                 fallback=True,
                 fallback_reason=fallback_reason,
                 preserved_tokens=preserved_tokens,
+                failure_payload=failure_payload,
             ),
         )
 
@@ -415,15 +416,29 @@ class GenericAssistantQueryRewriter(QueryRewriter):
             fallback: bool,
             fallback_reason: str | None,
             preserved_tokens: tuple[str, ...],
+            failure_payload: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """统一输出 rewrite 诊断 metadata，保持 trace 可解释。"""
-        return {
+        metadata: dict[str, Any] = {
             "original_query": original_query,
             "strategy": "llm_json",
             "fallback": fallback,
             "fallback_reason": fallback_reason,
             "preserved_tokens": list(preserved_tokens),
         }
+        if failure_payload:
+            metadata["failure"] = failure_payload
+        return metadata
+
+    def _failure_payload(self, exc: Exception) -> dict[str, Any] | None:
+        payload = getattr(exc, "failure_payload", None)
+        return dict(payload) if isinstance(payload, dict) else None
+
+    def _failure_category_or_type(self, exc: Exception) -> str:
+        payload = self._failure_payload(exc)
+        if payload and payload.get("category"):
+            return str(payload["category"])
+        return type(exc).__name__
 
     def _normalize_original_query(self, query: str) -> str:
         """归一化原始 query，作为 LLM 失败或不安全输出时的唯一 fallback。"""

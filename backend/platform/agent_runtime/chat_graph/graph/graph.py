@@ -38,13 +38,24 @@ from backend.platform.agent_runtime.chat_graph.graph.nodes.route_mode import (
 from backend.platform.agent_runtime.chat_graph.graph.nodes.select_mode import (
     build_select_mode_node,
 )
+from backend.platform.agent_runtime.chat_graph.graph.nodes.self_check_guard import (
+    build_self_check_guard_node,
+)
 from backend.platform.agent_runtime.graph_logging import (
     wrap_graph_node,
     wrap_graph_route,
 )
+from backend.platform.workflow.langgraph.guards import register_guarded_node
 from backend.platform.workflow.langgraph.state import RuntimeGraphState
 
 CHAT_GRAPH_NAME = "chat_graph"
+GUARDED_CHAT_NODES = {
+    REACT_BRANCH: "runtime",
+    PLAN_BRANCH: "runtime",
+    "self_check_guard": "runtime",
+    "final_synthesis": "runtime",
+    "persist_turn": "checkpoint",
+}
 
 
 def build_chat_graph(
@@ -58,16 +69,17 @@ def build_chat_graph(
     _add_logged_node(builder, "prepare_turn", build_prepare_turn_node(dependencies))
     _add_logged_node(builder, "select_mode", build_select_mode_node(dependencies))
     _add_logged_node(builder, "route_mode", build_route_mode_node(dependencies))
-    _add_logged_node(builder, REACT_BRANCH, build_react_branch_node(dependencies))
-    _add_logged_node(builder, PLAN_BRANCH, build_plan_branch_node(dependencies))
+    _add_guarded_logged_node(builder, REACT_BRANCH, build_react_branch_node(dependencies))
+    _add_guarded_logged_node(builder, PLAN_BRANCH, build_plan_branch_node(dependencies))
     _add_logged_node(
         builder,
         RESOLVE_ANSWER_MODE,
         build_resolve_answer_mode_node(dependencies),
     )
     _add_logged_node(builder, "maybe_hitl_wait", build_maybe_hitl_wait_node(dependencies))
-    _add_logged_node(builder, "final_synthesis", build_final_synthesis_node(dependencies))
-    _add_logged_node(builder, "persist_turn", build_persist_turn_node(dependencies))
+    _add_guarded_logged_node(builder, "self_check_guard", build_self_check_guard_node(dependencies))
+    _add_guarded_logged_node(builder, "final_synthesis", build_final_synthesis_node(dependencies))
+    _add_guarded_logged_node(builder, "persist_turn", build_persist_turn_node(dependencies))
 
     builder.add_edge(START, "prepare_turn")
     builder.add_edge("prepare_turn", "select_mode")
@@ -90,6 +102,16 @@ def build_chat_graph(
             route_name="maybe_hitl_wait",
             route=lambda state: END
             if state.get("status") == "waiting_user"
+            else "self_check_guard",
+        ),
+    )
+    builder.add_conditional_edges(
+        "self_check_guard",
+        wrap_graph_route(
+            graph_name=CHAT_GRAPH_NAME,
+            route_name="self_check_guard",
+            route=lambda state: END
+            if state.get("status") in {"waiting_user", "failed", "cancelled"}
             else "final_synthesis",
         ),
     )
@@ -109,3 +131,18 @@ def _add_logged_node(builder: StateGraph, node_name: str, node: Any) -> None:
         ),
     )
 
+
+def _add_guarded_logged_node(builder: StateGraph, node_name: str, node: Any) -> None:
+    # 节点 guard 只处理框架级异常，业务状态流转仍由节点自身负责。
+    register_guarded_node(
+        builder,
+        node_name,
+        wrap_graph_node(
+            graph_name=CHAT_GRAPH_NAME,
+            node_name=node_name,
+            node=node,
+        ),
+        graph_name=CHAT_GRAPH_NAME,
+        source=GUARDED_CHAT_NODES[node_name],
+        metadata={"guard_scope": "chat_graph"},
+    )

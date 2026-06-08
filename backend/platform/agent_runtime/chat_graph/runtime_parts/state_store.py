@@ -177,5 +177,3 @@ class RuntimeStateStoreMixin:
         # 只有第一次进入 LangGraph 时才带入旧历史，避免后续重复塞历史消息。
         return list(history_loader(prepared))
 
-
-

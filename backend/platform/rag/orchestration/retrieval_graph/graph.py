@@ -31,6 +31,15 @@ from backend.platform.rag.orchestration.retrieval_graph.nodes import (
     build_tool_decision_node,
 )
 from backend.platform.rag.orchestration.retrieval_graph.state import AgenticRagGraphState
+from backend.platform.workflow.langgraph.guards import register_guarded_node
+
+AGENTIC_RAG_GRAPH_NAME = "agentic_rag_graph"
+GUARDED_AGENTIC_RAG_NODES = {
+    RETRIEVAL: "retrieval",
+    QUERY_REWRITE: "retrieval",
+    SUFFICIENCY_CHECK: "retrieval",
+    FINAL_EVIDENCE_SYNTHESIS: "retrieval",
+}
 
 
 def build_agentic_rag_graph(
@@ -42,13 +51,14 @@ def build_agentic_rag_graph(
     builder = StateGraph(AgenticRagGraphState)
     builder.add_node(INITIALIZE_PLAN, build_initialize_plan_node(dependencies))
     builder.add_node(TOOL_DECISION, build_tool_decision_node(dependencies))
-    builder.add_node(RETRIEVAL, build_retrieval_node(dependencies))
+    _add_guarded_node(builder, RETRIEVAL, build_retrieval_node(dependencies))
     builder.add_node(RERANK, build_rerank_node(dependencies))
-    builder.add_node(SUFFICIENCY_CHECK, build_sufficiency_check_node(dependencies))
+    _add_guarded_node(builder, SUFFICIENCY_CHECK, build_sufficiency_check_node(dependencies))
     builder.add_node(ROUTE_NEXT_ACTION, build_route_next_action_node(dependencies))
-    builder.add_node(QUERY_REWRITE, build_query_rewrite_node(dependencies))
+    _add_guarded_node(builder, QUERY_REWRITE, build_query_rewrite_node(dependencies))
     builder.add_node(NO_HIT_FALLBACK, build_no_hit_fallback_node(dependencies))
-    builder.add_node(
+    _add_guarded_node(
+        builder,
         FINAL_EVIDENCE_SYNTHESIS,
         build_final_evidence_synthesis_node(dependencies),
     )
@@ -66,3 +76,14 @@ def build_agentic_rag_graph(
 
     return builder.compile(checkpointer=checkpointer)
 
+
+def _add_guarded_node(builder: StateGraph, node_name: str, node: Any) -> None:
+    # Agentic RAG 暂无日志 wrapper，这里只接入统一 guard 参数。
+    register_guarded_node(
+        builder,
+        node_name,
+        node,
+        graph_name=AGENTIC_RAG_GRAPH_NAME,
+        source=GUARDED_AGENTIC_RAG_NODES[node_name],
+        metadata={"guard_scope": "agentic_rag_graph"},
+    )

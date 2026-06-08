@@ -61,5 +61,3 @@
 
 
 ---
-
-LangGraph编码硬性约束：严格分state/nodes/edges/graph/config五层目录，状态全在state、单个节点单独nodes文件、路由判断全在edges、图组装仅graph目录、配置放config；严禁多模块代码合并同一文件，输出代码标注文件路径，node只做业务、builder只做图装配，不跨职责写代码。

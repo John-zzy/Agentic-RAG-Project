@@ -296,6 +296,7 @@ class ChatAgentRuntimeMixin:
             mounted_knowledge_sources=mounted_knowledge_sources,
             candidate_retrieval_tools=candidate_tools,
             rag_tools=rag_tools,
+            idempotency_store=self.graph_runtime.tool_idempotency_store,
         )
 
     def _resolve_runtime_candidate_retrieval_tools(

@@ -8,6 +8,10 @@ from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field
 
 from backend.platform.agent_runtime.contracts import ToolObservation
+from backend.platform.agent_runtime.idempotency import (
+    SQLiteToolIdempotencyStore,
+    ToolExecutionContext,
+)
 from backend.platform.agent_runtime.rag_tools import (
     AgenticRagToolAdapter,
     NativeRagToolAdapter,
@@ -22,7 +26,8 @@ from backend.platform.rag.orchestration.agentic import (
     RetrievalRound,
 )
 from backend.platform.rag.orchestration.decisions import SufficiencyDecision
-from backend.platform.tools.base import ToolResult
+from backend.platform.tools.base import SceneTool, ToolResult
+from backend.tests.test_support import make_test_runtime_dir
 
 
 class _SearchArgs(BaseModel):
@@ -76,6 +81,24 @@ class _FakeSceneDefinition:
         if not mounted_knowledge_sources:
             return ()
         return self._candidate_tools
+
+
+class _ActionWriteTool(SceneTool):
+    name = "write_record"
+    description = "Write a record."
+    capability_type = "action"
+    args_schema = _LookupArgs
+
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+
+    def invoke(self, **kwargs: Any) -> ToolResult:
+        self.calls.append(dict(kwargs))
+        return ToolResult.ok(
+            tool_name=self.name,
+            records=[dict(kwargs)],
+            metadata={"side_effect": "local_write"},
+        )
 
 
 def test_native_rag_tool_success_preserves_evidence_metadata() -> None:
@@ -543,6 +566,78 @@ def test_tool_executor_preserves_hitl_required_observation() -> None:
     assert observation.requires_user is True
     assert observation.user_prompt == "是否批准查询外部系统？"
     assert observation.trace["hitl"]["pending_action"] == "tool_approval"
+
+
+def test_tool_executor_reuses_successful_side_effect_observation_by_idempotency_key() -> None:
+    runtime_dir = make_test_runtime_dir("tool-executor-idempotency-reuse")
+    store = SQLiteToolIdempotencyStore(runtime_dir / "langgraph.db")
+    tool = _ActionWriteTool()
+    executor = ToolExecutor(
+        tools={tool.name: tool},
+        allowed_tools={tool.name},
+        idempotency_store=store,
+    )
+    context = ToolExecutionContext(
+        session_id="session-1",
+        request_id="request-1",
+        run_id="react-run-1",
+        node_name="react.execute_tool",
+        turn_id="turn-1",
+    )
+
+    first = executor.execute(
+        tool_name=tool.name,
+        input_payload={"query": "订单", "limit": 1},
+        execution_context=context,
+    )
+    second = executor.execute(
+        tool_name=tool.name,
+        input_payload={"limit": 1, "query": "订单"},
+        execution_context=context,
+    )
+
+    assert len(tool.calls) == 1
+    assert first.success is True
+    assert second.success is True
+    assert second.metadata["idempotency"]["reused"] is True
+    assert second.execution is not None
+    assert second.execution.idempotency_key == first.execution.idempotency_key
+    facts = store.list_by_session("session-1")
+    assert len(facts) == 1
+    assert facts[0].status == "succeeded"
+    assert facts[0].compensation_status == "unsupported"
+
+
+def test_tool_idempotency_store_duplicate_begin_returns_existing_pending() -> None:
+    runtime_dir = make_test_runtime_dir("tool-idempotency-duplicate-begin")
+    store = SQLiteToolIdempotencyStore(runtime_dir / "langgraph.db")
+    context = ToolExecutionContext(
+        session_id="session-duplicate",
+        request_id="request-duplicate",
+        run_id="run-duplicate",
+        node_name="react.execute_tool",
+        turn_id="turn-1",
+    )
+
+    first = store.begin_invocation(
+        key="tool:duplicate",
+        tool_name="write_record",
+        input_hash="hash",
+        context=context,
+        compensation_status="unsupported",
+    )
+    second = store.begin_invocation(
+        key="tool:duplicate",
+        tool_name="write_record",
+        input_hash="hash",
+        context=context,
+        compensation_status="unsupported",
+    )
+
+    assert first is None
+    assert second is not None
+    assert second.status == "pending"
+    assert store.get("tool:duplicate").status == "pending"
 
 
 def _lookup_policy(query: str, limit: int = 1) -> ToolResult:

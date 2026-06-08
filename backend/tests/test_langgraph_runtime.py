@@ -4,9 +4,11 @@ from dataclasses import dataclass
 import json
 from typing import Any
 
+import pytest
 from langchain_core.documents import Document
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from langchain_core.runnables import RunnableLambda
+from pydantic import BaseModel
 
 from backend.application.runtime.api.chat.schemas import (
     ChatRequest,
@@ -27,6 +29,11 @@ from backend.platform.agent_runtime.chat_graph.contracts import (
     HitlWaitInput,
 )
 from backend.platform.agent_runtime.plan.executor import PlanExecutor
+from backend.platform.agent_runtime.contracts import ToolObservation
+from backend.platform.agent_runtime.idempotency import (
+    SQLiteToolIdempotencyStore,
+    ToolExecutionContext,
+)
 from backend.platform.agent_runtime.tool_executor import ToolExecutor
 from backend.platform.config.settings import AppSettings
 from backend.platform.memory.base.session_store import SQLiteSessionStore
@@ -44,6 +51,7 @@ from backend.platform.workflow.langgraph.state import (
     build_runtime_hitl_state,
     build_runtime_graph_state,
 )
+from backend.platform.models.llm.guards import JsonSchemaGuard
 from backend.platform.workflow.state_machine import (
     InvalidWorkflowTransitionError,
     UnknownWorkflowStateError,
@@ -74,6 +82,15 @@ class _PreparedGraphTurn:
     agent_mode: str = "react"
     agent_mode_reason: str | None = None
     agent_mode_signals: dict[str, Any] | None = None
+    react_run: dict[str, Any] | None = None
+    plan_run: dict[str, Any] | None = None
+    current_turn_id: str | None = None
+    current_step_id: str | None = None
+    current_tool_call: dict[str, Any] | None = None
+    documents: list[Any] | None = None
+    tool_event: dict[str, Any] | None = None
+    follow_up_question: str | None = None
+    tool_observation: dict[str, Any] | None = None
 
 
 class _SearchRetriever:
@@ -108,6 +125,25 @@ class _FakeModel:
     def invoke_runnable(self, runnable: Any, input: Any, *, config: Any | None = None) -> str:
         self.invoke_runnable_calls.append({"input": input, "config": config})
         return str(runnable.invoke(input, config=config))
+
+    def invoke_json_schema(
+        self,
+        runnable: Any,
+        input: Any,
+        *,
+        schema_model: type[BaseModel],
+        schema_source: str,
+        config: Any | None = None,
+        complexity: str = "unknown",
+        metadata: dict[str, Any] | None = None,
+    ) -> BaseModel:
+        del complexity, metadata
+        raw_output = self.invoke_runnable(runnable, input, config=config)
+        return JsonSchemaGuard().validate(
+            raw_output,
+            schema_model=schema_model,
+            source=schema_source,
+        )
 
 
 class _RecordingPlanTool:
@@ -598,6 +634,289 @@ def test_chat_graph_runtime_persists_plan_run_for_plan_mode() -> None:
     assert result.state["plan_run"]["steps"][0]["status"] == "succeeded"
     assert result.state["plan_run"]["steps"][0]["tool_name"] == "native_rag_search"
     assert result.state["react_run"] is None
+
+
+def test_chat_graph_runtime_recover_retrying_run_in_place_reads_recovery_facts() -> None:
+    runtime = _build_chat_graph_runtime("runtime-graph-recover-retrying")
+    state = build_runtime_graph_state(
+        session_id="session-recover-retrying",
+        request_id="req-recover-retrying",
+        status="retrying",
+        run_id="run-retry",
+        retry_metadata={"attempt": 1, "current_turn_id": "turn-1"},
+        current_turn_id="turn-1",
+        current_tool_call={"tool_name": "write_record", "idempotency_key": "tool:key"},
+        metadata={"failures": [{"category": "tool_timeout", "message": "timeout"}]},
+    )
+    config = build_runtime_graph_config(
+        session_id="session-recover-retrying",
+        request_id="req-recover-retrying",
+    )
+    runtime._persist_state_update(state=state, config=config, update={})
+    checkpoint = runtime.checkpointer.get_tuple(config)
+    assert checkpoint is not None
+    runtime.checkpointer.put_writes(
+        checkpoint.config,
+        [("recovery_marker", {"step": "turn-1"})],
+        task_id="task-retry",
+    )
+    observation = ToolObservation(
+        tool_name="write_record",
+        success=True,
+        result_summary="already done",
+    )
+    runtime.tool_idempotency_store.begin_invocation(
+        key="tool:key",
+        tool_name="write_record",
+        input_hash="hash",
+        context=_tool_execution_context_for_test(
+            "session-recover-retrying",
+            request_id="req-recover-retrying",
+        ),
+        compensation_status="unsupported",
+    )
+    runtime.tool_idempotency_store.mark_succeeded(
+        key="tool:key",
+        observation=observation,
+        compensation_status="unsupported",
+    )
+    runtime.tool_idempotency_store.begin_invocation(
+        key="tool:other-request",
+        tool_name="write_record",
+        input_hash="hash",
+        context=_tool_execution_context_for_test(
+            "session-recover-retrying",
+            request_id="req-other",
+        ),
+        compensation_status="unsupported",
+    )
+
+    result = runtime.recover_run(
+        session_id="session-recover-retrying",
+        request_id="req-recover-retrying",
+    )
+
+    assert result.mode == "in_place"
+    assert result.run_id == "run-retry"
+    assert result.state["status"] == "running"
+    assert result.state["current_turn_id"] == "turn-1"
+    assert result.pending_writes[0][0] == "task-retry"
+    assert result.failures == ({"category": "tool_timeout", "message": "timeout"},)
+    assert len(result.idempotency_facts) == 1
+    assert result.idempotency_facts[0]["idempotency_key"] == "tool:key"
+    assert result.state["metadata"]["recovery"]["mode"] == "in_place"
+
+
+def test_chat_graph_runtime_recover_failed_run_forks_new_run() -> None:
+    runtime = _build_chat_graph_runtime("runtime-graph-recover-failed")
+    state = build_runtime_graph_state(
+        session_id="session-recover-failed",
+        request_id="req-recover-failed",
+        status="failed",
+        run_id="run-failed",
+        metadata={"failures": [{"category": "runtime_error", "message": "boom"}]},
+    )
+    config = build_runtime_graph_config(
+        session_id="session-recover-failed",
+        request_id="req-recover-failed",
+    )
+    runtime._persist_state_update(state=state, config=config, update={})
+
+    result = runtime.recover_run(
+        session_id="session-recover-failed",
+        request_id="req-recover-failed",
+    )
+
+    assert result.mode == "fork"
+    assert result.recovered_from_run_id == "run-failed"
+    assert result.run_id != "run-failed"
+    assert result.state["status"] == "running"
+    assert result.state["run_id"] == result.run_id
+    assert result.state["metadata"]["recovery"]["recovered_from_run_id"] == "run-failed"
+
+
+def test_chat_graph_runtime_recover_rejects_terminal_and_failed_in_place() -> None:
+    runtime = _build_chat_graph_runtime("runtime-graph-recover-terminal")
+    config = build_runtime_graph_config(
+        session_id="session-recover-terminal",
+        request_id="req-recover-terminal",
+    )
+    runtime._persist_state_update(
+        state=build_runtime_graph_state(
+            session_id="session-recover-terminal",
+            request_id="req-recover-terminal",
+            status="succeeded",
+            run_id="run-succeeded",
+        ),
+        config=config,
+        update={},
+    )
+
+    try:
+        runtime.recover_run(
+            session_id="session-recover-terminal",
+            request_id="req-recover-terminal",
+        )
+    except ValueError as exc:
+        assert "terminal" in str(exc)
+    else:
+        raise AssertionError("terminal succeeded run should reject recovery")
+
+    runtime._persist_state_update(
+        state=build_runtime_graph_state(
+            session_id="session-recover-terminal",
+            request_id="req-recover-terminal",
+            status="failed",
+            run_id="run-failed",
+        ),
+        config=config,
+        update={},
+    )
+    try:
+        runtime.recover_run(
+            session_id="session-recover-terminal",
+            request_id="req-recover-terminal",
+            fork_failed=False,
+        )
+    except ValueError as exc:
+        assert "cannot recover in place" in str(exc)
+    else:
+        raise AssertionError("failed run should reject in-place recovery")
+
+
+def test_chat_graph_self_check_blocks_evidence_success_without_observation() -> None:
+    runtime = _build_chat_graph_runtime("runtime-graph-self-check-no-observation")
+    prepared = _prepared_graph_turn(
+        session_id="session-self-check-no-observation",
+        request_id="req-self-check-no-observation",
+        user_message="需要证据回答",
+    )
+    prepared = _PreparedGraphTurn(
+        session_id=prepared.session_id,
+        request_id=prepared.request_id,
+        user_message=prepared.user_message,
+        answer_mode=prepared.answer_mode,
+        final_decision=prepared.final_decision,
+        knowledge_used=prepared.knowledge_used,
+        citations=prepared.citations,
+        retrieval_trace=prepared.retrieval_trace,
+        react_run={
+            "react_run_id": "react-no-observation",
+            "session_id": "session-self-check-no-observation",
+            "request_id": "req-self-check-no-observation",
+            "mode": "react",
+            "user_goal": "需要证据回答",
+            "workflow_status": "succeeded",
+            "max_turns": 2,
+            "turns": [],
+            "observations": [],
+            "final_answer": "不应直接成功。",
+            "metadata": {},
+        },
+    )
+    answer_builder_called = False
+
+    def answer_builder(turn: _PreparedGraphTurn) -> tuple[str, list[Citation]]:
+        nonlocal answer_builder_called
+        answer_builder_called = True
+        return "should not synthesize", turn.citations
+
+    result = runtime.invoke(
+        prepared=prepared,
+        answer_builder=answer_builder,
+        history_loader=lambda _: [],
+    )
+    restored = runtime.checkpointer.get_tuple(
+        {
+            "configurable": {
+                "thread_id": "session-self-check-no-observation",
+                "checkpoint_ns": DEFAULT_RUNTIME_CHECKPOINT_NS,
+            }
+        }
+    )
+
+    assert answer_builder_called is False
+    assert result.state["status"] == "failed"
+    assert result.state["final_state"] == "failed"
+    assert result.state["answer"] == ""
+    assert result.state["metadata"]["self_check"]["passed"] is False
+    assert "missing_successful_observation" in result.state["metadata"]["self_check"]["categories"]
+    assert result.state["react_run"]["workflow_status"] == "failed"
+    assert result.state["react_run"]["metadata"]["self_check"]["passed"] is False
+    assert restored is not None
+    assert restored.checkpoint["channel_values"]["metadata"]["self_check"]["passed"] is False
+    assert runtime.lifecycle.events_for_request("req-self-check-no-observation")[-1].status == "failed"
+
+
+def test_chat_graph_self_check_routes_requires_user_to_waiting_user() -> None:
+    runtime = _build_chat_graph_runtime("runtime-graph-self-check-ask-user")
+    observation = {
+        "tool_name": "agentic_rag_search",
+        "success": False,
+        "requires_user": True,
+        "user_prompt": "请补充查询范围。",
+        "result_summary": "需要用户补充。",
+    }
+    prepared = _PreparedGraphTurn(
+        session_id="session-self-check-ask-user",
+        request_id="req-self-check-ask-user",
+        user_message="查询范围不明确",
+        answer_mode="fallback",
+        final_decision="no_evidence",
+        knowledge_used=False,
+        citations=[],
+        retrieval_trace=_retrieval_trace(citations=[]).model_copy(
+            update={
+                "final_decision": "no_evidence",
+                "success": False,
+                "citations": [],
+                "knowledge_used": False,
+            }
+        ),
+        react_run={
+            "react_run_id": "react-ask-user",
+            "session_id": "session-self-check-ask-user",
+            "request_id": "req-self-check-ask-user",
+            "mode": "react",
+            "user_goal": "查询范围不明确",
+            "workflow_status": "succeeded",
+            "max_turns": 2,
+            "turns": [
+                {
+                    "turn_id": "turn-1",
+                    "round_index": 1,
+                    "goal": "查询范围不明确",
+                    "action": {
+                        "action_type": "tool_call",
+                        "tool_name": "agentic_rag_search",
+                        "input": {},
+                        "metadata": {},
+                    },
+                    "status": "succeeded",
+                    "observation": observation,
+                    "metadata": {},
+                }
+            ],
+            "observations": [observation],
+            "final_answer": "不应直接成功。",
+            "metadata": {},
+        },
+    )
+
+    result = runtime.invoke(
+        prepared=prepared,
+        answer_builder=lambda turn: ("should not synthesize", turn.citations),
+        history_loader=lambda _: [],
+    )
+
+    assert result.state["status"] == "waiting_user"
+    assert result.state["final_state"] == "waiting_user"
+    assert result.state["answer_mode"] == "follow_up"
+    assert result.state["final_decision"] == "ask_user"
+    assert result.state["follow_up_question"] == "请补充查询范围。"
+    assert result.state["react_run"]["workflow_status"] == "waiting_user"
+    assert result.state["metadata"]["self_check"]["correction_action"] == "ask_user"
+    assert runtime.lifecycle.events_for_request("req-self-check-ask-user")[-1].status == "waiting_user"
 
 
 def test_chat_graph_runtime_tolerates_legacy_checkpoint_without_agent_fields() -> None:
@@ -1343,6 +1662,120 @@ def test_chat_graph_runtime_resume_consumes_wait_before_tool_side_effect() -> No
     assert executed_calls == [{"tool_name": "generic_external_webhook_call"}]
 
 
+def test_chat_graph_runtime_reuses_approved_side_effect_after_checkpoint_failure() -> None:
+    runtime = _build_chat_graph_runtime("runtime-graph-hitl-idempotent-checkpoint-failure")
+    runtime.create_hitl_wait(
+        wait=HitlWaitInput(
+            session_id="session-hitl-idempotent",
+            request_id="req-hitl-idempotent-wait",
+            reason="外部 API 调用需要审批。",
+            pending_action="external_api_approval",
+            proposed_tool_call={
+                "tool_name": "generic_external_webhook_call",
+                "args": {"payload": "create"},
+            },
+            allowed_actions=["approve", "reject"],
+        ),
+        interrupt_id="interrupt-idempotent",
+    )
+    state = runtime._load_or_build_thread_state(
+        session_id="session-hitl-idempotent",
+        request_id="req-hitl-idempotent-resume",
+        config=build_runtime_graph_config(
+            session_id="session-hitl-idempotent",
+            request_id="req-hitl-idempotent-resume",
+        ),
+        require_checkpoint=True,
+    )
+    hitl = state["hitl"]
+    resume_payload = {
+        "session_id": "session-hitl-idempotent",
+        "request_id": "req-hitl-idempotent-resume",
+        "interrupt_id": "interrupt-idempotent",
+        "action": "approve",
+    }
+    executed_calls: list[dict[str, Any]] = []
+
+    first = runtime._execute_approved_tool(
+        hitl=hitl,
+        resume_payload=resume_payload,
+        approve_executor=lambda tool_call: executed_calls.append(dict(tool_call))
+        or ToolObservation(
+            tool_name="generic_external_webhook_call",
+            success=True,
+            result_summary="created",
+        ).model_dump(),
+    )
+    second = runtime._execute_approved_tool(
+        hitl=hitl,
+        resume_payload=resume_payload,
+        approve_executor=lambda tool_call: executed_calls.append(dict(tool_call))
+        or ToolObservation(
+            tool_name="generic_external_webhook_call",
+            success=True,
+            result_summary="duplicated",
+        ).model_dump(),
+    )
+
+    assert len(executed_calls) == 1
+    assert first["result_summary"] == "created"
+    assert second["result_summary"] == "created"
+    assert second["metadata"]["idempotency"]["reused"] is True
+
+
+def test_chat_graph_runtime_hitl_approve_exception_records_failed_idempotency() -> None:
+    runtime = _build_chat_graph_runtime("runtime-graph-hitl-approve-exception-idempotency")
+    runtime.create_hitl_wait(
+        wait=HitlWaitInput(
+            session_id="session-hitl-exception",
+            request_id="req-hitl-exception-wait",
+            reason="外部 API 调用需要审批。",
+            pending_action="external_api_approval",
+            proposed_tool_call={
+                "tool_name": "generic_external_webhook_call",
+                "args": {"payload": "create"},
+            },
+            allowed_actions=["approve", "reject"],
+        ),
+        interrupt_id="interrupt-exception",
+    )
+    state = runtime._load_or_build_thread_state(
+        session_id="session-hitl-exception",
+        request_id="req-hitl-exception-resume",
+        config=build_runtime_graph_config(
+            session_id="session-hitl-exception",
+            request_id="req-hitl-exception-resume",
+        ),
+        require_checkpoint=True,
+    )
+    resume_payload = {
+        "session_id": "session-hitl-exception",
+        "request_id": "req-hitl-exception-resume",
+        "interrupt_id": "interrupt-exception",
+        "action": "approve",
+    }
+
+    def failing_executor(_: dict[str, Any]) -> dict[str, Any]:
+        raise RuntimeError("external system failed")
+
+    with pytest.raises(RuntimeError, match="external system failed"):
+        runtime._execute_approved_tool(
+            hitl=state["hitl"],
+            resume_payload=resume_payload,
+            approve_executor=failing_executor,
+        )
+    reused = runtime._execute_approved_tool(
+        hitl=state["hitl"],
+        resume_payload=resume_payload,
+        approve_executor=lambda _: {"result_summary": "should not execute"},
+    )
+
+    assert reused["success"] is False
+    assert reused["error"] == "external system failed"
+    assert reused["metadata"]["idempotency"]["status"] == "failed"
+    assert reused["metadata"]["idempotency"]["reused"] is True
+
+
 def test_chat_graph_runtime_resume_reject_skips_proposed_tool() -> None:
     runtime = _build_chat_graph_runtime("runtime-graph-hitl-reject")
     runtime.create_hitl_wait(
@@ -1675,7 +2108,21 @@ def test_graph_stream_event_mapper_converts_audit_events_to_safe_thinking_status
 def _build_chat_graph_runtime(test_name: str) -> ChatGraphRuntime:
     runtime_dir = make_test_runtime_dir(test_name)
     return ChatGraphRuntime(
-        checkpointer=SQLiteLangGraphCheckpointer(runtime_dir / "langgraph.db")
+        checkpointer=SQLiteLangGraphCheckpointer(runtime_dir / "langgraph.db"),
+        tool_idempotency_store=SQLiteToolIdempotencyStore(runtime_dir / "langgraph.db"),
+    )
+
+
+def _tool_execution_context_for_test(
+    session_id: str,
+    *,
+    request_id: str = "req-test",
+) -> ToolExecutionContext:
+    return ToolExecutionContext(
+        session_id=session_id,
+        request_id=request_id,
+        run_id="run-test",
+        node_name="test.tool",
     )
 
 
