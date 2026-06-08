@@ -1,9 +1,9 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from typing import Any
 
 from backend.platform.agent_runtime.chat_graph.graph.config import ChatGraphDependencies
-from backend.platform.agent_runtime.contracts import PlanRun
+from backend.platform.agent_runtime.core.contracts import PlanRun
 from backend.platform.agent_runtime.plan.graph import build_plan_graph
 from backend.platform.workflow.langgraph.state import RuntimeGraphState
 

@@ -486,17 +486,19 @@ class SQLiteLangGraphCheckpointer(BaseCheckpointSaver[int]):
         config: RunnableConfig,
     ) -> tuple[str, str, str | None]:
         configurable = config["configurable"]
+        metadata = dict(config.get("metadata") or {})
         return (
             str(configurable["thread_id"]),
-            str(configurable.get("checkpoint_ns", "")),
+            str(configurable.get("checkpoint_ns") or metadata.get("checkpoint_ns") or ""),
             str(configurable["checkpoint_id"]) if "checkpoint_id" in configurable else None,
         )
 
     def _write_scope(self, config: RunnableConfig) -> tuple[str, str, str]:
         configurable = config["configurable"]
+        metadata = dict(config.get("metadata") or {})
         return (
             str(configurable["thread_id"]),
-            str(configurable.get("checkpoint_ns", "")),
+            str(configurable.get("checkpoint_ns") or metadata.get("checkpoint_ns") or ""),
             str(configurable["checkpoint_id"]),
         )
 

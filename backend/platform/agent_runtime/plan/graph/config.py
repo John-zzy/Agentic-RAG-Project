@@ -1,14 +1,15 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from dataclasses import dataclass
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
-from backend.platform.agent_runtime.contracts import PlanRun
+from backend.platform.agent_runtime.core.contracts import PlanRun
+from backend.platform.agent_runtime.middleware.model_call import SharedModelCallGuard
 from backend.platform.agent_runtime.plan.executor import PlanExecutor
 from backend.platform.agent_runtime.plan.planner import MinimalPlanner
 from backend.platform.agent_runtime.plan.synthesis import PlanFinalSynthesizer, StepSummarySynthesizer
-from backend.platform.agent_runtime.tool_executor import ToolExecutor
+from backend.platform.agent_runtime.tooling.executor import ToolExecutor
 
 
 @dataclass(frozen=True)
@@ -25,14 +26,19 @@ class PlanGraphDependencies:
     planner: MinimalPlanner | None = None
     project_result: Callable[[PlanRun], Mapping[str, Any]] | None = None
     final_synthesizer: Any | None = None
+    model_call_guard: SharedModelCallGuard | None = None
 
     def build_planner(self) -> MinimalPlanner:
         """构建或复用 Planner，让 create_plan 节点拥有计划创建职责。"""
-        return self.planner or MinimalPlanner(tool_executor=self.tool_executor)
+        return self.planner or MinimalPlanner(
+            tool_executor=self.tool_executor,
+            model_call_guard=self.model_call_guard,
+        )
 
     def build_executor(self) -> PlanExecutor:
         """复用现有 PlanExecutor 作为图节点的业务执行器。"""
         return PlanExecutor(
             tool_executor=self.tool_executor,
             final_synthesizer=self.final_synthesizer or StepSummarySynthesizer(),
+            model_call_guard=self.model_call_guard,
         )

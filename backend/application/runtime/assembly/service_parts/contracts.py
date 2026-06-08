@@ -51,6 +51,10 @@ class RetrievalChainModel(Protocol):
         """流式执行 runnable。"""
         ...
 
+    def get_chat_model_provider(self) -> Any:
+        """返回按 complexity 解析 LangChain ChatModel 的 provider。"""
+        ...
+
 
 class ChatServiceError(RuntimeError):
     """封装可返回给 API 层的业务错误。"""

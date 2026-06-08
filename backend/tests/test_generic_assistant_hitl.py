@@ -4,6 +4,9 @@ import json
 from typing import Any
 
 from fastapi.testclient import TestClient
+from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_core.messages import AIMessage, BaseMessage
+from langchain_core.outputs import ChatGeneration, ChatResult
 from langchain_core.runnables import RunnableLambda
 
 from backend.application.runtime.api.app import create_app
@@ -104,6 +107,10 @@ class NoModelCalls:
         del runnable, input, config
         raise AssertionError("HITL waiting branch should not stream model.")
 
+    def get_chat_model_provider(self) -> Any:
+        """ReAct provider 使用 chat model；测试模型返回稳定直接回答。"""
+        return lambda complexity="simple": _HitlFakeChatModel(answer="unused")
+
 
 class FollowUpSafeModel(NoModelCalls):
     """测试默认 ask_user fallback 时使用的模型；非证据分支不会调用它。"""
@@ -118,6 +125,63 @@ class FollowUpSafeModel(NoModelCalls):
         """提供兜底 runnable；如果真的被调用也能返回稳定文本。"""
         del complexity, prompt_template, output_parser
         return RunnableLambda(lambda _: "unused")
+
+
+class _HitlFakeChatModel(BaseChatModel):
+    answer: str
+    bound_tool_names: list[str] = []
+    call_count: int = 0
+
+    @property
+    def _llm_type(self) -> str:
+        return "hitl-fake-chat-model"
+
+    def bind_tools(
+        self,
+        tools: Any,
+        *,
+        tool_choice: str | None = None,
+        **kwargs: Any,
+    ) -> BaseChatModel:
+        del tool_choice, kwargs
+        object.__setattr__(
+            self,
+            "bound_tool_names",
+            [str(getattr(tool, "name", tool)) for tool in tools],
+        )
+        return self
+
+    def _generate(
+        self,
+        messages: list[BaseMessage],
+        stop: list[str] | None = None,
+        run_manager: Any = None,
+        **kwargs: Any,
+    ) -> ChatResult:
+        del stop, run_manager, kwargs
+        next_count = self.call_count + 1
+        object.__setattr__(self, "call_count", next_count)
+        if self.bound_tool_names and next_count == 1:
+            message = AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": self.bound_tool_names[0],
+                        "args": {"query": _latest_user_message(messages)},
+                        "id": "call-hitl-fake-1",
+                    }
+                ],
+            )
+        else:
+            message = AIMessage(content=self.answer)
+        return ChatResult(generations=[ChatGeneration(message=message)])
+
+
+def _latest_user_message(messages: list[BaseMessage]) -> str:
+    for message in reversed(messages):
+        if message.type == "human":
+            return str(message.content)
+    return "test query"
 
 
 class FallbackSuggestionModel(FollowUpSafeModel):
@@ -454,7 +518,7 @@ def test_generic_assistant_chat_resume_respond_continues_retrieval_with_clarific
     assert response.resume_payload is not None
     assert response.resume_payload.response == "安全合规政策"
     assert response.resume_payload.source == "freeform"
-    assert [call["query"] for call in document_service.calls] == ["安全合规政策"]
+    assert [call["query"] for call in document_service.calls] == ["你好", "安全合规政策"]
     business_calls = [
         call
         for call in model.invoke_runnable_calls
@@ -595,12 +659,13 @@ def test_generic_assistant_sse_emits_waiting_user_for_clarification() -> None:
     events = _parse_sse_events(response.text)
     assert [event["event"] for event in events] == [
         "start",
-        "history",
-        "tool",
+        "thinking",
+        "thinking",
         "waiting_user",
     ]
-    tool_payload = events[2]["data"]
-    assert '"turn_status": "waiting_user"' in tool_payload
+    thinking_payload = events[2]["data"]
+    assert '"state": "waiting_user"' in thinking_payload
+    assert '"retrieval_trace"' not in thinking_payload
     waiting_payload = events[-1]["data"]
     assert '"status": "waiting_user"' in waiting_payload
     assert '"pending_action": "clarification"' in waiting_payload

@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -51,7 +51,7 @@ class ChatGraphDependencies(Protocol):
         dict[str, Any],
     ]
     select_agent_mode: Callable[[PreparedChatTurn], dict[str, Any]] | None
-    build_react_graph_deps: Callable[[PreparedChatTurn, RuntimeGraphState], Any] | None
+    build_react_deps: Callable[[PreparedChatTurn, RuntimeGraphState], Any] | None
     build_plan_graph_deps: Callable[[PreparedChatTurn, RuntimeGraphState], Any] | None
     build_prepared_from_state: Callable[
         [PreparedChatTurn, RuntimeGraphState],

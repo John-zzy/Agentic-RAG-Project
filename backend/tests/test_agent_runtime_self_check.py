@@ -1,6 +1,6 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
-from backend.platform.agent_runtime.contracts import (
+from backend.platform.agent_runtime.core.contracts import (
     PlanRun,
     PlanStep,
     ReActAction,
@@ -8,7 +8,7 @@ from backend.platform.agent_runtime.contracts import (
     ReActTurn,
     ToolObservation,
 )
-from backend.platform.agent_runtime.self_check import (
+from backend.platform.agent_runtime.quality.self_check import (
     CorrectionAction,
     ResultValidator,
     build_result_validation_context,

@@ -1,6 +1,6 @@
 ﻿from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 from langchain_core.messages import BaseMessage, HumanMessage
@@ -13,7 +13,12 @@ from backend.platform.agent_runtime.chat_graph.contracts import (
 )
 from backend.platform.workflow.langgraph.config import build_runtime_graph_config
 from backend.platform.workflow.langgraph.lifecycle import GraphRunRef
-from backend.platform.workflow.langgraph.state import RuntimeGraphState, build_runtime_graph_state
+from backend.platform.workflow.langgraph.state import (
+    RuntimeGraphContext,
+    RuntimeGraphState,
+    build_runtime_graph_context,
+    build_runtime_graph_state,
+)
 
 
 class RuntimeStateStoreMixin:
@@ -30,6 +35,26 @@ class RuntimeStateStoreMixin:
                 "answer_mode": prepared.answer_mode,
                 "final_decision": prepared.final_decision,
             },
+        )
+
+    def build_context(
+        self,
+        *,
+        prepared: PreparedGraphTurn,
+        config: Mapping[str, Any],
+    ) -> RuntimeGraphContext:
+        scene = getattr(prepared.scene_metadata, "scene", None)
+        agent = getattr(prepared.scene_metadata, "agent", None)
+        configurable = dict(config.get("configurable") or {})
+        return build_runtime_graph_context(
+            session_id=prepared.session_id,
+            request_id=prepared.request_id,
+            scene=scene,
+            agent=agent,
+            agent_mode=str(getattr(prepared, "agent_mode", "react")),
+            answer_mode=prepared.answer_mode,
+            checkpoint_ns=str(configurable.get("checkpoint_ns") or ""),
+            metadata=dict(config.get("metadata") or {}),
         )
 
     def _mark_agent_run_started(
@@ -55,7 +80,7 @@ class RuntimeStateStoreMixin:
         config: dict[str, Any],
         run_id: str,
     ) -> RuntimeGraphState:
-        history_messages = self._history_seed(
+        seeded_messages = self._message_seed(
             prepared=prepared,
             history_loader=history_loader,
             config=config,
@@ -65,7 +90,7 @@ class RuntimeStateStoreMixin:
             request_id=prepared.request_id,
             scene=getattr(prepared.scene_metadata, "scene", None),
             messages=[
-                *history_messages,
+                *seeded_messages,
                 HumanMessage(content=prepared.user_message),
             ],
             knowledge_used=prepared.knowledge_used,
@@ -99,7 +124,7 @@ class RuntimeStateStoreMixin:
         update: Mapping[str, Any],
     ) -> RuntimeGraphState:
         """用一个很小的 graph 写状态，确保仍走 LangGraph 的 checkpoint 保存流程。"""
-        builder = StateGraph(RuntimeGraphState)
+        builder = StateGraph(RuntimeGraphState, context_schema=RuntimeGraphContext)
 
         def update_node(current_state: RuntimeGraphState) -> dict[str, Any]:
             del current_state
@@ -164,7 +189,7 @@ class RuntimeStateStoreMixin:
             follow_up_question=values.get("follow_up_question"),
             tool_observation=values.get("tool_observation"),
         )
-    def _history_seed(
+    def _message_seed(
         self,
         *,
         prepared: PreparedGraphTurn,
@@ -173,7 +198,8 @@ class RuntimeStateStoreMixin:
     ) -> list[BaseMessage]:
         checkpoint = self.checkpointer.get_tuple(config)
         if checkpoint is not None:
-            return []
-        # 只有第一次进入 LangGraph 时才带入旧历史，避免后续重复塞历史消息。
+            values = dict(checkpoint.checkpoint.get("channel_values") or {})
+            return list(values.get("messages") or ())
+        # 只有第一次进入 LangGraph 时才带入会话历史，避免后续重复塞历史消息。
         return list(history_loader(prepared))
 

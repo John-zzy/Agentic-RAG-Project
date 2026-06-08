@@ -1,4 +1,8 @@
-from backend.platform.agent_runtime.contracts import (
+﻿from __future__ import annotations
+
+from typing import Any
+
+from backend.platform.agent_runtime.core.contracts import (
     AgentMode,
     AgentRun,
     PlanRun,
@@ -14,52 +18,7 @@ from backend.platform.agent_runtime.contracts import (
     ToolObservation,
     collect_successful_tool_observations,
 )
-from backend.platform.agent_runtime.mode_selector import (
-    MinimalModeSelector,
-    ModeSelectionContext,
-    ModeSelection,
-    ModeSelector,
-)
-from backend.platform.agent_runtime.plan.executor import (
-    PlanExecutor,
-    PlanFinalSynthesizer,
-    PlanSynthesisContext,
-    PlanSynthesisResult,
-    StepSummarySynthesizer,
-)
-from backend.platform.agent_runtime.plan.planner import (
-    MinimalPlanStepSelector,
-    MinimalPlanner,
-    PlanStepSelector,
-    PlannerContext,
-)
-from backend.platform.agent_runtime.rag_tools import (
-    AGENTIC_RAG_TOOL_NAME,
-    NATIVE_RAG_TOOL_NAME,
-    AgenticRAGToolAdapter,
-    AgenticRagToolAdapter,
-    NativeRAGToolAdapter,
-    NativeRagToolAdapter,
-    RAGToolAdapter,
-    RAGToolInput,
-    agentic_outcome_to_observation,
-    build_rag_tool_adapters,
-    retrieval_result_to_observation,
-)
-from backend.platform.agent_runtime.react import (
-    LLMReActActionOutput,
-    LLMReActActionSelector,
-    ObservationSummarySynthesizer,
-    ReActActionContext,
-    ReActActionSelector,
-    ReActFinalSynthesizer,
-    ReActRuntime,
-    ReActScenePolicy,
-    ReActSynthesisContext,
-    ReActSynthesisResult,
-)
-from backend.platform.agent_runtime.tool_executor import ToolExecutor
-from backend.platform.agent_runtime.validation import (
+from backend.platform.agent_runtime.core.validation import (
     AgentRuntimeValidationError,
     PlanDependencyValidationError,
     ToolAccessValidationError,
@@ -71,9 +30,107 @@ from backend.platform.agent_runtime.validation import (
     validate_tool_input,
 )
 
-Planner = MinimalPlanner
-PlanContext = PlannerContext
-PlanSummarySynthesizer = StepSummarySynthesizer
+_LAZY_EXPORTS: dict[str, tuple[str, str]] = {
+    "LangChainToolFactory": (
+        "backend.platform.agent_runtime.tooling.langchain",
+        "LangChainToolFactory",
+    ),
+    "build_langchain_tools_from_executor": (
+        "backend.platform.agent_runtime.tooling.langchain",
+        "build_langchain_tools_from_executor",
+    ),
+    "observation_from_langchain_artifact": (
+        "backend.platform.agent_runtime.tooling.langchain",
+        "observation_from_langchain_artifact",
+    ),
+    "MinimalModeSelector": ("backend.platform.agent_runtime.core.mode_selector", "MinimalModeSelector"),
+    "ModeSelection": ("backend.platform.agent_runtime.core.mode_selector", "ModeSelection"),
+    "ModeSelectionContext": ("backend.platform.agent_runtime.core.mode_selector", "ModeSelectionContext"),
+    "ModeSelector": ("backend.platform.agent_runtime.core.mode_selector", "ModeSelector"),
+    "PlanExecutor": ("backend.platform.agent_runtime.plan.executor", "PlanExecutor"),
+    "PlanFinalSynthesizer": (
+        "backend.platform.agent_runtime.plan.executor",
+        "PlanFinalSynthesizer",
+    ),
+    "PlanSynthesisContext": (
+        "backend.platform.agent_runtime.plan.executor",
+        "PlanSynthesisContext",
+    ),
+    "PlanSynthesisResult": (
+        "backend.platform.agent_runtime.plan.executor",
+        "PlanSynthesisResult",
+    ),
+    "StepSummarySynthesizer": (
+        "backend.platform.agent_runtime.plan.executor",
+        "StepSummarySynthesizer",
+    ),
+    "MinimalPlanStepSelector": (
+        "backend.platform.agent_runtime.plan.planner",
+        "MinimalPlanStepSelector",
+    ),
+    "MinimalPlanner": ("backend.platform.agent_runtime.plan.planner", "MinimalPlanner"),
+    "PlanStepSelector": ("backend.platform.agent_runtime.plan.planner", "PlanStepSelector"),
+    "PlannerContext": ("backend.platform.agent_runtime.plan.planner", "PlannerContext"),
+    "AGENTIC_RAG_TOOL_NAME": (
+        "backend.platform.agent_runtime.tooling.rag",
+        "AGENTIC_RAG_TOOL_NAME",
+    ),
+    "NATIVE_RAG_TOOL_NAME": ("backend.platform.agent_runtime.tooling.rag", "NATIVE_RAG_TOOL_NAME"),
+    "AgenticRAGToolAdapter": (
+        "backend.platform.agent_runtime.tooling.rag",
+        "AgenticRAGToolAdapter",
+    ),
+    "AgenticRagToolAdapter": (
+        "backend.platform.agent_runtime.tooling.rag",
+        "AgenticRagToolAdapter",
+    ),
+    "NativeRAGToolAdapter": (
+        "backend.platform.agent_runtime.tooling.rag",
+        "NativeRAGToolAdapter",
+    ),
+    "NativeRagToolAdapter": (
+        "backend.platform.agent_runtime.tooling.rag",
+        "NativeRagToolAdapter",
+    ),
+    "RAGToolAdapter": ("backend.platform.agent_runtime.tooling.rag", "RAGToolAdapter"),
+    "RAGToolInput": ("backend.platform.agent_runtime.tooling.rag", "RAGToolInput"),
+    "agentic_outcome_to_observation": (
+        "backend.platform.agent_runtime.tooling.rag",
+        "agentic_outcome_to_observation",
+    ),
+    "build_rag_tool_adapters": (
+        "backend.platform.agent_runtime.tooling.rag",
+        "build_rag_tool_adapters",
+    ),
+    "retrieval_result_to_observation": (
+        "backend.platform.agent_runtime.tooling.rag",
+        "retrieval_result_to_observation",
+    ),
+    "ReActRuntime": ("backend.platform.agent_runtime.react", "ReActRuntime"),
+    "ReActScenePolicy": ("backend.platform.agent_runtime.react", "ReActScenePolicy"),
+    "ToolExecutor": ("backend.platform.agent_runtime.tooling.executor", "ToolExecutor"),
+}
+
+_ALIASES: dict[str, str] = {
+    "Planner": "MinimalPlanner",
+    "PlanContext": "PlannerContext",
+    "PlanSummarySynthesizer": "StepSummarySynthesizer",
+}
+
+
+def __getattr__(name: str) -> Any:
+    target_name = _ALIASES.get(name, name)
+    if target_name not in _LAZY_EXPORTS:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    module_name, attribute_name = _LAZY_EXPORTS[target_name]
+
+    # 包初始化保持轻量，只有调用方显式需要重对象时才加载对应子模块。
+    from importlib import import_module
+
+    value = getattr(import_module(module_name), attribute_name)
+    globals()[name] = value
+    return value
+
 
 __all__ = [
     "AGENTIC_RAG_TOOL_NAME",
@@ -82,10 +139,10 @@ __all__ = [
     "AgentRuntimeValidationError",
     "AgenticRAGToolAdapter",
     "AgenticRagToolAdapter",
+    "LangChainToolFactory",
     "NATIVE_RAG_TOOL_NAME",
     "NativeRAGToolAdapter",
     "NativeRagToolAdapter",
-    "ObservationSummarySynthesizer",
     "MinimalPlanStepSelector",
     "MinimalPlanner",
     "MinimalModeSelector",
@@ -108,17 +165,10 @@ __all__ = [
     "RAGToolAdapter",
     "RAGToolInput",
     "ReActAction",
-    "ReActActionContext",
-    "ReActActionSelector",
-    "ReActFinalSynthesizer",
     "ReActActionType",
-    "LLMReActActionOutput",
-    "LLMReActActionSelector",
     "ReActRuntime",
     "ReActRun",
     "ReActScenePolicy",
-    "ReActSynthesisContext",
-    "ReActSynthesisResult",
     "ReActTurn",
     "ReActTurnStatus",
     "RetryMetadata",
@@ -129,10 +179,12 @@ __all__ = [
     "ToolInputValidationError",
     "ToolObservation",
     "agentic_outcome_to_observation",
+    "build_langchain_tools_from_executor",
     "build_rag_tool_adapters",
     "build_retry_metadata",
     "collect_successful_tool_observations",
     "ensure_tool_allowed",
+    "observation_from_langchain_artifact",
     "retrieval_result_to_observation",
     "validate_plan_dependencies",
     "validate_plan_tool_allowlist",

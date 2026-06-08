@@ -26,7 +26,6 @@ from backend.application.runtime.assembly.service_parts.contracts import (
     RuntimeFinalDecision,
     SceneMetadata,
 )
-from backend.application.runtime.assembly.service_parts.events import ChatStreamEventMixin
 from backend.application.runtime.assembly.service_parts.hitl import ChatHitlMixin
 from backend.application.runtime.assembly.service_parts.responses import ChatResponseMixin
 from backend.application.runtime.assembly.service_parts.turn_preparation import ChatTurnPreparationMixin
@@ -39,7 +38,7 @@ from backend.platform.knowledge.sources import (
 )
 from backend.platform.memory.base.session_store import SQLiteSessionStore, SessionRecord
 from backend.platform.memory.chat.prompt_context import PromptContextBuilder
-from backend.platform.agent_runtime.mode_selector import MinimalModeSelector
+from backend.platform.agent_runtime.core.mode_selector import MinimalModeSelector
 from backend.platform.models.base.router import TaskComplexity
 from backend.platform.models.llm.client import ModelClient, model_client
 from backend.platform.rag.retrieval.documents import DocumentRetrievalService
@@ -88,7 +87,6 @@ class ChatService(
     ChatAgentRuntimeMixin,
     ChatHitlMixin,
     ChatAnsweringMixin,
-    ChatStreamEventMixin,
     ChatResponseMixin,
 ):
     """执行单个场景下的检索、生成和会话持久化流程。"""
@@ -170,12 +168,16 @@ class ChatService(
         # ── 第2步：通过 ChatGraph 执行完整的编排流程 ──
         # 图内依次完成：模式选择 → ReAct/Plan 分支执行 → 回答模式判定 → HITL 判断 → 生成最终回答
         prepared, answer, citations, run_id, graph_state = self._generate_answer(prepared)
+        observability = self._build_stream_observability_metadata(
+            prepared=prepared,
+            graph_state=graph_state,
+        )
 
         # ── 第3步：依次产出 SSE 事件 ──
 
         # 通知前端：graph run 已创建，附带本轮元信息（session、场景、agent 模式等）
         yield self._map_graph_stream_event(
-            "graph_run_created",
+            "graph_start",
             {
                 "session_id": prepared.session_id,
                 "request_id": prepared.request_id,
@@ -186,6 +188,7 @@ class ChatService(
                 "state": "running",
                 "state_event": "run_start",
                 "run_id": run_id,
+                "observability": observability,
             },
         )
 
@@ -197,14 +200,33 @@ class ChatService(
                 result_state=graph_state,
             )
             yield self._map_graph_stream_event(
-                "human_waiting",
-                self._build_hitl_wait_event(hitl_response),
+                "safe_thinking",
+                {
+                    "session_id": prepared.session_id,
+                    "request_id": prepared.request_id,
+                    "state": "running",
+                },
+            )
+            yield self._map_graph_stream_event(
+                "safe_thinking",
+                {
+                    "session_id": prepared.session_id,
+                    "request_id": prepared.request_id,
+                    "state": "waiting_user",
+                },
+            )
+            yield self._map_graph_stream_event(
+                "interrupt",
+                {
+                    **self._build_hitl_wait_event(hitl_response),
+                    "observability": observability,
+                },
             )
             return
 
         # 当前模型链路没有稳定 token 级 graph stream 时，按显示块模拟打字机输出。
         for chunk in _chunk_stream_answer(answer):
-            yield self._map_graph_stream_event("answer_chunk", {"delta": chunk})
+            yield self._map_graph_stream_event("model_chunk", {"delta": chunk})
 
         # 持久化本轮对话记录（会话记忆，非 graph checkpoint）
         self._persist_turn(prepared=prepared, answer=answer, citations=citations)
@@ -216,7 +238,13 @@ class ChatService(
             citations=citations,
             run_id=run_id,
         )
-        yield self._map_graph_stream_event("graph_run_succeeded", response.model_dump())
+        yield self._map_graph_stream_event(
+            "graph_output",
+            {
+                **response.model_dump(),
+                "observability": observability,
+            },
+        )
 
     def resume_stream(self, payload: ChatResumeRequest) -> Iterator[ChatStreamEvent]:
         """流式恢复 HITL 等待点；只有恢复被接受后才发送 resume 事件。"""
@@ -225,18 +253,24 @@ class ChatService(
             result = self._run_hitl_resume(payload=payload, request_id=request_id)
         except ChatServiceError as exc:
             yield self._map_graph_stream_event(
-                "graph_run_failed",
+                "graph_error",
                 {
                     "code": exc.code,
                     "message": exc.message,
                     "request_id": exc.request_id,
                     "final_state": "failed",
+                    "observability": {
+                        "provider": self._stream_provider_name(),
+                        "retry_count": 0,
+                        "tools": [],
+                        "error_classification": self._stream_error_classification(exc.code),
+                    },
                 },
             )
             return
 
         yield self._map_graph_stream_event(
-            "human_resume",
+            "resume",
             {
                 "session_id": payload.session_id,
                 "request_id": request_id,
@@ -250,7 +284,7 @@ class ChatService(
             request_id=request_id,
             result_state=result.state,
         )
-        yield self._map_graph_stream_event("graph_run_succeeded", response.model_dump())
+        yield self._map_graph_stream_event("graph_output", response.model_dump())
 
     def delete_session(self, session_id: str) -> int:
         """清理 graph thread 后删除会话读模型，避免 memory 层依赖 workflow。"""

@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from collections.abc import Mapping
 import json
@@ -55,7 +55,7 @@ class JsonSchemaGuard:
         source: str,
         metadata: Mapping[str, Any] | None,
     ) -> ModelSchemaValidationError:
-        from backend.platform.agent_runtime.failures import FailureCategory, FailureRecord
+        from backend.platform.agent_runtime.quality.failures import FailureCategory, FailureRecord
 
         record = FailureRecord(
             category=FailureCategory.MODEL_SCHEMA_ERROR,

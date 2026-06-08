@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from dataclasses import dataclass
 from collections.abc import Callable, Mapping, Sequence
@@ -7,13 +7,17 @@ from uuid import uuid4
 
 from pydantic import Field
 
-from backend.platform.agent_runtime.contracts import AgentRuntimeModel, PlanRun, PlanStep
-from backend.platform.agent_runtime.rag_tools import (
+from backend.platform.agent_runtime.core.contracts import AgentRuntimeModel, PlanRun, PlanStep
+from backend.platform.agent_runtime.middleware.model_call import (
+    SharedModelCallGuard,
+    default_model_call_context,
+)
+from backend.platform.agent_runtime.tooling.rag import (
     AGENTIC_RAG_TOOL_NAME,
     NATIVE_RAG_TOOL_NAME,
 )
-from backend.platform.agent_runtime.tool_executor import ToolExecutor
-from backend.platform.agent_runtime.validation import (
+from backend.platform.agent_runtime.tooling.executor import ToolExecutor
+from backend.platform.agent_runtime.core.validation import (
     validate_plan_dependencies,
     validate_plan_tool_allowlist,
 )
@@ -74,6 +78,8 @@ class MinimalPlanner:
         self,
         *,
         tool_executor: ToolExecutor,
+        step_selector: PlanStepSelector | None = None,
+        model_call_guard: SharedModelCallGuard | None = None,
         max_steps: int = 3,
         plan_run_id_factory: Callable[[], str] | None = None,
         step_id_factory: Callable[[int], str] | None = None,
@@ -81,6 +87,8 @@ class MinimalPlanner:
         if max_steps < 1 or max_steps > 3:
             raise ValueError("max_steps must be between 1 and 3.")
         self._tool_executor = tool_executor
+        self._step_selector = step_selector
+        self._model_call_guard = model_call_guard
         self._max_steps = max_steps
         self._plan_run_id_factory = plan_run_id_factory
         self._step_id_factory = step_id_factory
@@ -149,6 +157,13 @@ class MinimalPlanner:
             return _PlanDraft(
                 steps=self._coerce_steps(proposed_steps),
                 source="proposed_steps",
+            )
+
+        if self._step_selector is not None:
+            selected_steps = self._guarded_select_steps(context)
+            return _PlanDraft(
+                steps=self._coerce_steps(selected_steps),
+                source=self._step_selector.__class__.__name__,
             )
 
         policy_steps = _extract_policy_steps(context.scene_policy)
@@ -243,6 +258,37 @@ class MinimalPlanner:
                 "for current scene and mounted sources."
             )
         return sorted(allowed)[0]
+
+    def _guarded_select_steps(
+        self,
+        context: PlannerContext,
+    ) -> Sequence[PlanStep | Mapping[str, Any]]:
+        if self._step_selector is None:
+            return ()
+        if self._model_call_guard is None:
+            return self._step_selector.select_steps(context)
+        runtime_context = default_model_call_context(
+            session_id=context.session_id,
+            request_id=context.request_id,
+            scene=str(context.scene_policy.get("scene") or "platform.plan"),
+            mounted_knowledge_sources=tuple(context.mounted_knowledge_sources),
+            complexity=str(context.metadata.get("complexity") or "moderate"),
+            workflow_metadata={
+                "run_id": context.metadata.get("plan_run_id"),
+                "checkpoint_ns": "plan_graph",
+                "metadata": {"node": "create_plan"},
+            },
+            request_metadata={
+                "operation": "plan.step_selection",
+                "candidate_tools": context.candidate_tools,
+                "allowed_tools": context.allowed_tools,
+            },
+        )
+        return self._model_call_guard.invoke(
+            lambda: self._step_selector.select_steps(context),
+            context=runtime_context,
+            metadata={"operation": "plan.step_selection"},
+        )
 
     def _new_plan_run_id(self) -> str:
         if self._plan_run_id_factory is not None:

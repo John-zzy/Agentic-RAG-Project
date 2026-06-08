@@ -2,6 +2,7 @@
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from types import SimpleNamespace
 from typing import Any
 
 from langchain_core.messages import AIMessage, HumanMessage
@@ -19,13 +20,13 @@ from backend.platform.agent_runtime.chat_graph.contracts import (
     _HITL_ALLOWED_ACTIONS,
     _HITL_PENDING_ACTIONS,
 )
-from backend.platform.agent_runtime.contracts import (
+from backend.platform.agent_runtime.core.contracts import (
     PlanRun,
     ReActRun,
     ToolExecutionMetadata,
     ToolObservation,
 )
-from backend.platform.agent_runtime.idempotency import (
+from backend.platform.agent_runtime.tooling.idempotency import (
     ToolExecutionContext,
     attach_idempotency_trace,
     build_input_hash,
@@ -36,11 +37,8 @@ from backend.platform.agent_runtime.plan.graph import (
     PlanHitlResumeGraphDependencies,
     build_plan_hitl_resume_graph,
 )
-from backend.platform.agent_runtime.react.graph import (
-    ReActHitlResumeGraphDependencies,
-    build_react_hitl_resume_graph,
-)
 from backend.platform.workflow.langgraph.config import build_runtime_graph_config
+from backend.platform.workflow.langgraph.resume import build_validated_resume_command
 from backend.platform.workflow.langgraph.state import RuntimeGraphState, RuntimeHitlState, build_runtime_hitl_state
 from backend.platform.workflow.state_machine import (
     WorkflowRunEvent,
@@ -111,7 +109,7 @@ class HitlRuntimeMixin:
         state: RuntimeGraphState,
         run_id: str,
     ) -> dict[str, Any]:
-        """构造 waiting_user checkpoint 更新，供 graph interrupt 和兼容入口复用。"""
+        """构造 waiting_user checkpoint 更新，供 graph interrupt 与显式等待入口复用。"""
         self._validate_hitl_wait(wait)
         hitl = build_runtime_hitl_state(
             interrupt_id=interrupt_id,
@@ -205,52 +203,61 @@ class HitlRuntimeMixin:
             agent_resume_update: dict[str, Any] = {}
 
             if orchestration_mode is not None:
-                accepted_state = self._persist_resume_acceptance(
-                    state=state,
-                    config=config,
-                    run_id=run.run_id,
-                    resume_payload=resume_payload,
-                    resumed_state=resumed_state,
-                    resume_event=resume_event,
-                    update_agent_runtime=False,
+                use_agent_graph_resume = (
+                    orchestration_mode == "plan"
+                    or _is_langchain_react_hitl(hitl)
                 )
-                graph_result = self._resume_agent_runtime_graph(
-                    mode=orchestration_mode,
-                    state=state,
-                    accepted_state=accepted_state,
-                    hitl=hitl,
-                    resume_payload=resume_payload,
-                    approve_executor=approve_executor,
-                    respond_handler=respond_handler,
-                    plan_executor=plan_executor,
-                )
-                tool_result = graph_result.tool_result
-                response_result = graph_result.response_result
-                next_answer = graph_result.answer or next_answer
-                next_status, state_event = self._resolve_graph_resume_state(
-                    current_state=resumed_state,
-                    requested_state=graph_result.status,
-                    action=resume.action,
-                )
-                accepted_state = self._persist_state_update(
-                    state=accepted_state,
-                    config=config,
-                    update={
-                        **graph_result.state_update,
-                        "status": next_status,
-                        "state_event": state_event,
-                        "final_state": next_status if is_terminal(next_status) else None,
-                        "hitl": None,
-                        "hitl_resume": resume_payload,
-                        "metadata": {
-                            **dict(accepted_state.get("metadata") or {}),
+                if not use_agent_graph_resume:
+                    orchestration_mode = None
+                else:
+                    accepted_state = self._persist_resume_acceptance(
+                        state=state,
+                        config=config,
+                        run_id=run.run_id,
+                        resume_payload=resume_payload,
+                        resumed_state=resumed_state,
+                        resume_event=resume_event,
+                        update_agent_runtime=False,
+                    )
+                    graph_result = self._resume_agent_runtime_graph(
+                        mode=orchestration_mode,
+                        state=state,
+                        accepted_state=accepted_state,
+                        hitl=hitl,
+                        resume_payload=resume_payload,
+                        approve_executor=approve_executor,
+                        respond_handler=respond_handler,
+                        plan_executor=plan_executor,
+                    )
+                    tool_result = graph_result.tool_result
+                    response_result = graph_result.response_result
+                    next_answer = graph_result.answer or next_answer
+                    next_status, state_event = self._resolve_graph_resume_state(
+                        current_state=resumed_state,
+                        requested_state=graph_result.status,
+                        action=resume.action,
+                    )
+                    accepted_state = self._persist_state_update(
+                        state=accepted_state,
+                        config=config,
+                        update={
+                            **graph_result.state_update,
+                            "status": next_status,
+                            "state_event": state_event,
+                            "final_state": next_status if is_terminal(next_status) else None,
+                            "hitl": None,
                             "hitl_resume": resume_payload,
-                            "hitl_tool_result": tool_result,
+                            "metadata": {
+                                **dict(accepted_state.get("metadata") or {}),
+                                "hitl_resume": resume_payload,
+                                "hitl_tool_result": tool_result,
+                            },
                         },
-                    },
-                )
-                agent_resume_update = graph_result.state_update
+                    )
+                    agent_resume_update = graph_result.state_update
 
+            if orchestration_mode is not None:
+                pass
             elif resume.action == "approve":
                 accepted_state = self._persist_resume_acceptance(
                     state=state,
@@ -283,7 +290,7 @@ class HitlRuntimeMixin:
                     resumed_state=resumed_state,
                     resume_event=resume_event,
                 )
-                # 先消费等待点后，把已恢复的 running state 交给 handler，避免继续使用旧的 waiting_user 快照。
+                # 先消费等待点后，把已恢复的 running state 交给 handler，避免继续使用等待快照。
                 response_result = dict(respond_handler(resume_payload, accepted_state) or {})
                 next_status, state_event = self._resolve_running_result_state(
                     current_state=resumed_state,
@@ -340,6 +347,9 @@ class HitlRuntimeMixin:
                     run_id=run.run_id,
                     error=exc,
                 )
+                if self._accepted_resume_action(accepted_state) == "reject":
+                    self.lifecycle.mark_cancelled(run)
+                    raise
             self.lifecycle.mark_failed(run, exc)
             raise
 
@@ -383,42 +393,11 @@ class HitlRuntimeMixin:
             react_run = state.get("react_run")
             if not isinstance(react_run, Mapping):
                 raise HitlResumeError("react_run checkpoint is required for ReAct HITL resume.")
-            graph = build_react_hitl_resume_graph(
-                ReActHitlResumeGraphDependencies(
-                    approve_executor=approve_executor,
-                    respond_handler=respond_handler,
-                )
-            )
-            result = graph.invoke(
-                {
-                    **base_input,
-                    "run": ReActRun.model_validate(dict(react_run)),
-                }
-            )
-            run = result.get("run")
-            run_payload = run.model_dump() if hasattr(run, "model_dump") else run
-            response_result = dict(result.get("response_result") or {})
-            return _AgentGraphResumeResult(
-                answer=str(result.get("answer") or ""),
-                status=str(result.get("status") or "running"),
-                tool_result=(
-                    dict(result.get("tool_result"))
-                    if isinstance(result.get("tool_result"), Mapping)
-                    else None
-                ),
-                response_result=response_result,
-                state_update={
-                    "agent_mode": "react",
-                    "react_run": run_payload,
-                    "plan_run": None,
-                    "current_turn_id": getattr(run, "current_turn_id", None),
-                    "current_step_id": None,
-                    "current_tool_call": (
-                        run.current_tool_call.model_dump()
-                        if getattr(run, "current_tool_call", None) is not None
-                        else None
-                    ),
-                },
+            return self._resume_react_agent(
+                state=state,
+                accepted_state=accepted_state,
+                resume_payload=resume_payload,
+                react_run=ReActRun.model_validate(dict(react_run)),
             )
 
         plan_run = state.get("plan_run")
@@ -429,11 +408,16 @@ class HitlRuntimeMixin:
                 executor=self._require_plan_resume_executor(plan_executor),
             )
         )
-        result = graph.invoke(
+        resume_command = build_validated_resume_command(
             {
                 **base_input,
                 "plan_run": PlanRun.model_validate(dict(plan_run)),
+                "interrupt_id": resume_payload.get("interrupt_id"),
+                "action": resume_payload.get("action"),
             }
+        )
+        result = graph.invoke(
+            {"resume_command": resume_command}
         )
         run = result.get("plan_run")
         run_payload = run.model_dump() if hasattr(run, "model_dump") else run
@@ -469,6 +453,107 @@ class HitlRuntimeMixin:
         if plan_executor is None:
             raise HitlResumeError("plan_executor is required for Plan HITL resume.")
         return plan_executor
+
+    def _resume_react_agent(
+        self,
+        *,
+        state: RuntimeGraphState,
+        accepted_state: RuntimeGraphState,
+        resume_payload: Mapping[str, Any],
+        react_run: ReActRun,
+    ) -> _AgentGraphResumeResult:
+        """Resume ReAct through LangChain HumanInTheLoopMiddleware Command decisions."""
+        build_deps = getattr(self, "_build_react_deps", None)
+        if build_deps is None:
+            raise HitlResumeError("ReAct dependency builder is required for HITL resume.")
+        deps = build_deps(_prepared_turn_from_state(state), accepted_state)
+        resume_command = self._build_langchain_react_resume_command(
+            resume_payload=resume_payload,
+            react_run=react_run,
+        )
+        run = deps.build_runtime().run(
+            session_id=deps.session_id,
+            request_id=deps.request_id,
+            user_goal=deps.user_goal,
+            react_run_id=deps.react_run_id or react_run.react_run_id,
+            metadata={"hitl_resume": dict(resume_payload)},
+            resume_command=resume_command,
+        )
+        result_update = dict(deps.project_result(run)) if deps.project_result else {}
+        run_payload = run.model_dump()
+        tool_result = (
+            run.observations[-1].model_dump()
+            if run.observations
+            else None
+        )
+        answer = (
+            run.final_answer
+            or run.result_summary
+            or result_update.get("answer")
+            or ""
+        )
+        return _AgentGraphResumeResult(
+            answer=str(answer),
+            status=str(run.workflow_status),
+            tool_result=tool_result,
+            response_result={
+                **result_update,
+                "status": run.workflow_status,
+                "answer": str(answer),
+                "react_run": run_payload,
+            },
+            state_update={
+                **result_update,
+                "agent_mode": "react",
+                "react_run": run_payload,
+                "plan_run": None,
+                "current_turn_id": run.current_turn_id,
+                "current_step_id": None,
+                "current_tool_call": (
+                    run.current_tool_call.model_dump()
+                    if run.current_tool_call is not None
+                    else None
+                ),
+            },
+        )
+
+    def _build_langchain_react_resume_command(
+        self,
+        *,
+        resume_payload: Mapping[str, Any],
+        react_run: ReActRun,
+    ):
+        action = str(resume_payload.get("action") or "")
+        decision: dict[str, Any]
+        if action == "approve":
+            decision = {"type": "approve"}
+        elif action == "reject":
+            decision = {
+                "type": "reject",
+                "message": str(
+                    resume_payload.get("reason")
+                    or "User rejected the tool call."
+                ),
+            }
+        elif action == "respond":
+            decision = {
+                "type": "respond",
+                "message": str(resume_payload.get("response") or ""),
+            }
+        else:
+            raise HitlResumeError("Unsupported ReAct HITL resume action.")
+
+        metadata = dict(react_run.metadata or {})
+        hitl = dict(metadata.get("hitl") or {})
+        langchain_payload = dict(hitl.get("langchain") or {})
+        decision_count = len(list(langchain_payload.get("action_requests") or ())) or 1
+        return build_validated_resume_command(
+            {
+                "interrupt_id": resume_payload.get("interrupt_id"),
+                "action": action,
+                "decisions": [dict(decision) for _ in range(decision_count)],
+            }
+        )
 
     def _resolve_graph_resume_state(
         self,
@@ -693,16 +778,17 @@ class HitlRuntimeMixin:
         run_id: str,
         error: BaseException,
     ) -> None:
-        """已接受 resume 后发生错误时，尽量把 checkpoint 收敛到 failed 终态。"""
+        """已接受 resume 后发生错误时，尽量把 checkpoint 收敛到可审计终态。"""
+        status, event, final_state = self._failure_state_after_accepted_resume(state)
         try:
             self._persist_state_update(
                 state=state,
                 config=config,
                 update={
-                    "status": "failed",
+                    "status": status,
                     "run_id": run_id,
-                    "state_event": "fail",
-                    "final_state": "failed",
+                    "state_event": event,
+                    "final_state": final_state,
                     "metadata": {
                         **dict(state.get("metadata") or {}),
                         "error": self._summarize_resume_error(error),
@@ -712,6 +798,20 @@ class HitlRuntimeMixin:
         except Exception:
             # checkpoint 失败不能覆盖原始副作用或 handler 错误，调用方仍按原错误返回。
             return
+
+    def _failure_state_after_accepted_resume(
+        self,
+        state: RuntimeGraphState,
+    ) -> tuple[WorkflowRunState, WorkflowRunEvent, WorkflowRunState]:
+        """reject 已经被接受时保持 cancelled，不把用户拒绝误归类成工具失败。"""
+        if self._accepted_resume_action(state) == "reject":
+            return "cancelled", "resume_reject", "cancelled"
+        return "failed", "fail", "failed"
+
+    def _accepted_resume_action(self, state: RuntimeGraphState) -> str:
+        """读取已消费等待点的动作，供异常收口和 lifecycle 使用。"""
+        resume = dict(state.get("hitl_resume") or {})
+        return str(resume.get("action") or "")
 
     def _summarize_resume_error(self, error: BaseException) -> str:
         """把 resume 副作用错误压缩成可写入 checkpoint metadata 的短文本。"""
@@ -765,6 +865,7 @@ class HitlRuntimeMixin:
             payload.setdefault("source", "freeform")
             payload.setdefault("suggestion_id", None)
             self._validate_respond_payload(payload=payload, hitl=hitl)
+        build_validated_resume_command(payload)
         return payload
 
     def _validate_respond_payload(
@@ -1019,3 +1120,54 @@ def _approved_tool_exception_to_observation(
         reused=False,
         compensation_status="unsupported",
     )
+
+
+def _prepared_turn_from_state(state: RuntimeGraphState) -> Any:
+    """Rebuild the minimal PreparedChatTurn protocol shape from checkpoint state."""
+    metadata = dict(state.get("metadata") or {})
+    scene_metadata = SimpleNamespace(
+        scene=state.get("scene") or metadata.get("scene") or "generic_assistant",
+        agent=metadata.get("agent"),
+    )
+    return SimpleNamespace(
+        session_id=state["session_id"],
+        request_id=state["request_id"],
+        timestamp=str(metadata.get("timestamp") or ""),
+        user_message=_last_human_message(state),
+        documents=list(state.get("documents") or []),
+        tool_event=dict(state.get("tool_event") or {}),
+        retrieval_trace=dict(state.get("retrieval_trace") or {}),
+        citations=list(state.get("citations") or []),
+        knowledge_used=bool(state.get("knowledge_used", False)),
+        scene_metadata=scene_metadata,
+        complexity=metadata.get("complexity") or "simple",
+        final_decision=state.get("final_decision"),
+        follow_up_question=state.get("follow_up_question"),
+        answer_mode=str(state.get("answer_mode") or "fallback"),
+        hitl_clarification_enabled=False,
+        agent_mode=str(state.get("agent_mode") or "react"),
+        agent_mode_reason=str(state.get("agent_mode_reason") or ""),
+        agent_mode_signals=dict(state.get("agent_mode_signals") or {}),
+        react_run=state.get("react_run"),
+        plan_run=state.get("plan_run"),
+        current_turn_id=state.get("current_turn_id"),
+        current_step_id=state.get("current_step_id"),
+        current_tool_call=state.get("current_tool_call"),
+        tool_observation=state.get("tool_observation"),
+    )
+
+
+def _last_human_message(state: RuntimeGraphState) -> str:
+    for message in reversed(list(state.get("messages") or ())):
+        if getattr(message, "type", None) == "human":
+            content = getattr(message, "content", "")
+            return content if isinstance(content, str) else str(content)
+    return ""
+
+
+def _is_langchain_react_hitl(hitl: RuntimeHitlState) -> bool:
+    metadata = dict(hitl.get("metadata") or {})
+    if metadata.get("source") == "langchain_human_in_the_loop":
+        return True
+    nested = metadata.get("langchain")
+    return isinstance(nested, Mapping) and bool(nested.get("action_requests"))

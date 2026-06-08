@@ -21,9 +21,9 @@ from backend.platform.agent_runtime.chat_graph.contracts import (
     HitlResumeInput,
     HitlWaitInput,
 )
-from backend.platform.agent_runtime.contracts import ReActAction, ReActRun, ReActTurn
+from backend.platform.agent_runtime.core.contracts import ReActAction, ReActRun, ReActTurn
 from backend.platform.agent_runtime.plan.executor import PlanExecutor
-from backend.platform.agent_runtime.tool_executor import ToolExecutor
+from backend.platform.agent_runtime.tooling.executor import ToolExecutor
 from backend.platform.workflow.langgraph.state import RuntimeGraphState
 from backend.scenes.generic_assistant.hitl import (
     GenericAssistantHitlOptions,
@@ -118,6 +118,67 @@ class ChatHitlMixin:
             },
         )
 
+    def _build_agent_hitl_metadata(self, prepared: PreparedChatTurn) -> dict[str, Any]:
+        """为 HITL wait 标识顶层 Agent 恢复点。"""
+        if prepared.agent_mode == "plan":
+            plan_run = dict(prepared.plan_run or {})
+            return {
+                "mode": "plan",
+                "plan_run_id": str(plan_run.get("plan_run_id") or f"plan-{prepared.request_id}"),
+                "current_step_id": prepared.current_step_id or self._event_step_id_from_payload(prepared),
+                "user_goal": prepared.user_message,
+            }
+        react_run = dict(prepared.react_run or {})
+        return {
+            "mode": "react",
+            "react_run_id": str(react_run.get("react_run_id") or f"react-{prepared.request_id}"),
+            "current_turn_id": prepared.current_turn_id or self._event_turn_id_from_payload(prepared),
+            "user_prompt": prepared.follow_up_question or prepared.user_message,
+            "source": "chat_hitl_clarification",
+            "user_goal": prepared.user_message,
+            "continuation": {
+                "type": "waiting_user",
+                "request_id": prepared.request_id,
+            },
+        }
+
+    def _event_turn_id_from_payload(self, prepared: PreparedChatTurn) -> str:
+        react_run = prepared.react_run
+        if not isinstance(react_run, Mapping):
+            return ""
+        turns = [
+            dict(turn)
+            for turn in react_run.get("turns", [])
+            if isinstance(turn, Mapping)
+        ]
+        if not turns:
+            return ""
+        for turn in reversed(turns):
+            if turn.get("observation") is not None:
+                return str(turn.get("turn_id") or "")
+        return str(turns[-1].get("turn_id") or "")
+
+    def _event_step_id_from_payload(self, prepared: PreparedChatTurn) -> str:
+        plan_run = prepared.plan_run
+        if not isinstance(plan_run, Mapping):
+            return ""
+        steps = [
+            dict(step)
+            for step in plan_run.get("steps", [])
+            if isinstance(step, Mapping)
+        ]
+        if not steps:
+            return ""
+        current_step_id = prepared.current_step_id
+        if current_step_id:
+            for step in steps:
+                if step.get("step_id") == current_step_id:
+                    return str(step.get("step_id") or "")
+        for step in reversed(steps):
+            if step.get("observation") is not None:
+                return str(step.get("step_id") or "")
+        return str(steps[-1].get("step_id") or "")
+
     def _build_hitl_wait_response(
             self,
             *,
@@ -135,6 +196,7 @@ class ChatHitlMixin:
             agent=prepared.scene_metadata.agent,
             status="waiting_user",
             state="waiting_user",
+            final_state="waiting_user",
             run_id=str(result_state.get("run_id") or "") or None,
             state_event="interrupt",
             hitl=hitl,
@@ -165,9 +227,15 @@ class ChatHitlMixin:
             "request_id": response.request_id,
             "status": response.status,
             "state": response.state,
+            "final_state": response.final_state,
             "run_id": response.run_id,
             "state_event": response.state_event,
             "hitl": hitl,
+            "retrieval_trace": (
+                response.retrieval_trace.model_dump()
+                if response.retrieval_trace is not None
+                else None
+            ),
         }
 
     def _run_hitl_resume(

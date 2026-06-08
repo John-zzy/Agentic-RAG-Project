@@ -1,9 +1,9 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from collections.abc import Mapping
 from typing import Any
 
-from backend.platform.agent_runtime.failures import FailureRecord
+from backend.platform.agent_runtime.quality.failures import FailureRecord
 
 GUARD_FAILURES_METADATA_KEY = "failures"
 GUARD_LAST_FAILURE_METADATA_KEY = "_guard_last_failure"

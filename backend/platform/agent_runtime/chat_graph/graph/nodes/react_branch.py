@@ -1,10 +1,9 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from typing import Any
 
 from backend.platform.agent_runtime.chat_graph.graph.config import ChatGraphDependencies
-from backend.platform.agent_runtime.contracts import ReActRun
-from backend.platform.agent_runtime.react.graph import build_react_graph
+from backend.platform.agent_runtime.core.contracts import ReActRun
 from backend.platform.workflow.langgraph.state import RuntimeGraphState
 
 
@@ -16,13 +15,19 @@ def build_react_branch_node(dependencies: ChatGraphDependencies):
     def react_branch(state: RuntimeGraphState) -> dict[str, Any]:
         if str(state.get("agent_mode") or prepared.agent_mode) != "react":
             return {}
-        if dependencies.build_react_graph_deps is None:
+        if dependencies.build_react_deps is None:
             return {}
 
-        graph_deps = dependencies.build_react_graph_deps(prepared, state)
-        graph = build_react_graph(graph_deps)
-        result = graph.invoke(_react_graph_input(prepared=prepared, state=state))
-        run = result.get("run")
+        provider_deps = dependencies.build_react_deps(prepared, state)
+        run = provider_deps.build_runtime().run(
+            session_id=provider_deps.session_id,
+            request_id=provider_deps.request_id,
+            user_goal=provider_deps.user_goal,
+            react_run_id=provider_deps.react_run_id or f"react-{provider_deps.request_id}",
+            initial_run=provider_deps.initial_run
+            or _react_run(prepared=prepared, state=state),
+        )
+        result = dict(provider_deps.project_result(run)) if provider_deps.project_result else {}
         return {
             **_chat_graph_result_fields(result),
             "react_run": run.model_dump() if hasattr(run, "model_dump") else run,
@@ -31,19 +36,15 @@ def build_react_branch_node(dependencies: ChatGraphDependencies):
     return react_branch
 
 
-def _react_graph_input(
+def _react_run(
     *,
     prepared: Any,
     state: RuntimeGraphState,
-) -> dict[str, Any]:
+) -> ReActRun | None:
     react_run = state.get("react_run") or getattr(prepared, "react_run", None)
     if react_run is None:
-        return {}
-    return {
-        "run": react_run
-        if isinstance(react_run, ReActRun)
-        else ReActRun.model_validate(react_run)
-    }
+        return None
+    return react_run if isinstance(react_run, ReActRun) else ReActRun.model_validate(react_run)
 
 
 def _chat_graph_result_fields(result: dict[str, Any]) -> dict[str, Any]:

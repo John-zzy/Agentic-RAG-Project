@@ -27,10 +27,18 @@ from backend.platform.rag.post_retrieval.rerank import (
     disabled_rerank_trace,
     remove_rerank_scores,
 )
+from backend.platform.agent_runtime.middleware.model_call import (
+    SharedModelCallGuard,
+    default_model_call_context,
+)
+from backend.platform.agent_runtime.middleware.trace import RuntimeTraceMiddleware
 from backend.platform.rag.orchestration.retrieval_graph import build_agentic_rag_graph
 from backend.platform.rag.orchestration.retrieval_graph.config import (
     AgenticRagGraphDependencies,
+    build_agentic_rag_graph_context,
+    build_agentic_rag_graph_config,
 )
+from backend.platform.rag.orchestration.retrieval_graph.projection import AgenticRagOutcomeProjector
 from backend.platform.rag.orchestration.retrieval_graph.state import build_agentic_rag_graph_state
 from backend.platform.rag.pre_retrieval.query_rewrite import QueryRewrite, QueryRewriter
 
@@ -67,6 +75,8 @@ class AgenticRetriever(BaseRetriever):
     default_tool: str | None = None
     max_rounds: int = Field(default=3, ge=1)
     attach_trace: bool = True
+    model_call_guard: SharedModelCallGuard | None = Field(default=None, exclude=True)
+    trace_middleware: RuntimeTraceMiddleware | None = Field(default=None, exclude=True)
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
@@ -120,10 +130,40 @@ class AgenticRetriever(BaseRetriever):
             AgenticRagGraphDependencies(
                 retriever=self,
                 run_manager=run_manager,
+                model_call_guard=self._model_call_guard(),
+                trace=self._trace_middleware(),
             ),
+        )
+        graph_config = build_agentic_rag_graph_config(
+            retriever=self,
+            run_manager=run_manager,
+        )
+        graph_context = build_agentic_rag_graph_context(
+            retriever=self,
+            run_manager=run_manager,
+            runtime_context=default_model_call_context(
+                session_id="agentic-rag",
+                request_id=f"agentic-rag:{query[:64]}",
+                scene="platform.rag",
+                complexity="simple",
+                workflow_metadata={
+                    "run_id": f"agentic-rag:{query[:64]}",
+                    "checkpoint_ns": "agentic_rag",
+                    "metadata": {"graph": "agentic_rag_graph"},
+                },
+                request_metadata={
+                    "operation": "agentic_retrieval",
+                    "candidate_tools": resolved_candidate_tools,
+                    "selected_tool": initial_tool,
+                },
+            ),
+            model_call_guard=self._model_call_guard(),
+            trace=self._trace_middleware(),
         )
         final_state = graph.invoke(
             graph_state,
+            graph_config,
+            context=graph_context,
         )
         logger.info(
             "Agentic retrieval finished: exit_reason=%s, rounds=%s, total_documents=%s",
@@ -131,95 +171,25 @@ class AgenticRetriever(BaseRetriever):
             len(final_state.get("rounds") or []),
             len(final_state.get("documents") or []),
         )
-        return self._build_outcome_from_graph_state(final_state)
+        return self._outcome_projector().project(final_state)
 
-    def _build_outcome_from_graph_state(
-        self,
-        state: Mapping[str, Any],
-    ) -> AgenticRetrievalOutcome:
-        """把 LangGraph state 还原成现有的 outcome 结构。"""
-        plan = self._coerce_plan(state.get("final_plan") or state.get("plan"))
-        results = [self._coerce_result(result) for result in list(state.get("results") or [])]
-        documents = [self._coerce_document(document) for document in list(state.get("documents") or [])]
-        rounds = [self._round_from_snapshot(snapshot) for snapshot in list(state.get("rounds") or [])]
-        decision_log = [
-            self._coerce_decision_log_entry(entry)
-            for entry in list(state.get("decision_log") or [])
-        ]
-        final_decision = self._coerce_decision(
-            state.get("final_decision"),
-            fallback=rounds[-1].decision if rounds else None,
-        )
-        exit_reason = str(state.get("exit_reason") or "ask_user")
-        success = bool(state.get("success", False))
-        return AgenticRetrievalOutcome(
-            plan=plan,
-            results=results,
-            documents=documents,
-            success=success,
-            rounds=rounds,
-            decision_log=decision_log,
-            final_plan=plan,
-            final_decision=final_decision,
-            exit_reason=exit_reason,
-            follow_up_question=state.get("follow_up_question"),
+    def _outcome_projector(self) -> AgenticRagOutcomeProjector:
+        return AgenticRagOutcomeProjector(
+            outcome_factory=AgenticRetrievalOutcome,
+            round_factory=RetrievalRound,
         )
 
-    def _round_from_snapshot(self, snapshot: Mapping[str, Any]) -> RetrievalRound:
-        plan = self._coerce_plan(snapshot["plan"])
-        results = [self._coerce_result(result) for result in list(snapshot.get("results") or [])]
-        documents = [
-            self._coerce_document(document)
-            for document in list(snapshot.get("documents") or [])
-        ]
-        result = self._coerce_result(snapshot["result"])
-        decision = self._coerce_decision(snapshot["decision"])
-        rewrite = snapshot.get("rewrite")
-        return RetrievalRound(
-            plan=plan,
-            results=results,
-            documents=documents,
-            result=result,
-            decision=decision,
-            rewrite=QueryRewrite.model_validate(rewrite) if rewrite else None,
-        )
+    def _model_call_guard(self) -> SharedModelCallGuard:
+        if self.model_call_guard is not None:
+            return self.model_call_guard
+        return SharedModelCallGuard(trace=self._trace_middleware())
 
-    def _coerce_plan(self, value: Any) -> RetrievalPlan:
-        if isinstance(value, RetrievalPlan):
-            return value
-        if isinstance(value, Mapping):
-            return RetrievalPlan.model_validate(value)
-        raise TypeError("Invalid retrieval plan payload.")
-
-    def _coerce_result(self, value: Any) -> RetrievalResult:
-        if isinstance(value, RetrievalResult):
-            return value
-        if isinstance(value, Mapping):
-            return RetrievalResult.model_validate(value)
-        raise TypeError("Invalid retrieval result payload.")
-
-    def _coerce_document(self, value: Any) -> Document:
-        if isinstance(value, Document):
-            return value
-        if isinstance(value, Mapping):
-            return Document.model_validate(value)
-        raise TypeError("Invalid retrieval document payload.")
-
-    def _coerce_decision(self, value: Any, *, fallback: SufficiencyDecision | None = None) -> SufficiencyDecision:
-        if isinstance(value, SufficiencyDecision):
-            return value
-        if isinstance(value, Mapping):
-            return SufficiencyDecision.model_validate(value)
-        if fallback is not None:
-            return fallback
-        raise TypeError("Invalid retrieval decision payload.")
-
-    def _coerce_decision_log_entry(self, value: Any) -> RetrievalDecisionLogEntry:
-        if isinstance(value, RetrievalDecisionLogEntry):
-            return value
-        if isinstance(value, Mapping):
-            return RetrievalDecisionLogEntry.model_validate(value)
-        raise TypeError("Invalid retrieval decision log payload.")
+    def _trace_middleware(self) -> RuntimeTraceMiddleware:
+        if self.trace_middleware is not None:
+            return self.trace_middleware
+        trace = RuntimeTraceMiddleware()
+        self.trace_middleware = trace
+        return trace
 
     def _run_tool(
         self,

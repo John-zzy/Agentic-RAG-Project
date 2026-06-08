@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from typing import Any
 
@@ -24,11 +24,11 @@ from backend.platform.agent_runtime.plan.graph.nodes import (
     build_synthesize_result_node,
 )
 from backend.platform.agent_runtime.plan.graph.state import PlanGraphState
-from backend.platform.agent_runtime.graph_logging import (
-    wrap_graph_node,
-    wrap_graph_route,
+from backend.platform.agent_runtime.graph.support import (
+    add_guarded_logged_node,
+    add_logged_node,
 )
-from backend.platform.workflow.langgraph.guards import register_guarded_node
+from backend.platform.agent_runtime.observability.graph_logging import wrap_graph_route
 
 PLAN_GRAPH_NAME = "plan_graph"
 GUARDED_PLAN_NODES = {
@@ -79,27 +79,20 @@ def build_plan_graph(
 
 
 def _add_logged_node(builder: StateGraph, node_name: str, node: Any) -> None:
-    builder.add_node(
-        node_name,
-        wrap_graph_node(
-            graph_name=PLAN_GRAPH_NAME,
-            node_name=node_name,
-            node=node,
-        ),
+    add_logged_node(
+        builder,
+        graph_name=PLAN_GRAPH_NAME,
+        node_name=node_name,
+        node=node,
     )
 
 
 def _add_guarded_logged_node(builder: StateGraph, node_name: str, node: Any) -> None:
-    # step 级业务重试仍归 PlanExecutor，guard 只记录节点异常事实。
-    register_guarded_node(
+    add_guarded_logged_node(
         builder,
-        node_name,
-        wrap_graph_node(
-            graph_name=PLAN_GRAPH_NAME,
-            node_name=node_name,
-            node=node,
-        ),
         graph_name=PLAN_GRAPH_NAME,
+        node_name=node_name,
+        node=node,
         source=GUARDED_PLAN_NODES[node_name],
-        metadata={"guard_scope": "plan_graph"},
+        guard_scope="plan_graph",
     )

@@ -1,13 +1,14 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+import inspect
 from typing import Any
 
 from langgraph.graph import StateGraph
 from langgraph.types import RetryPolicy, TimeoutPolicy
 
-from backend.platform.agent_runtime.failures import build_failure_record
+from backend.platform.agent_runtime.quality.failures import build_failure_record
 from backend.platform.workflow.langgraph.guards.config import (
     GuardTimeoutConfig,
     RetryPolicyConfig,
@@ -110,9 +111,9 @@ def wrap_guarded_node(
 ) -> Callable[[Any], Any]:
     """捕获异常并写入 state，随后交回 LangGraph retry/error_handler。"""
 
-    def guarded_node(state: Any) -> Any:
+    def guarded_node(state: Any, runtime: Any = None) -> Any:
         try:
-            result = node(state)
+            result = _invoke_node(node=node, state=state, runtime=runtime)
         except Exception as exc:
             store_last_failure(
                 state,
@@ -137,6 +138,12 @@ def wrap_guarded_node(
         return result
 
     return guarded_node
+
+
+def _invoke_node(*, node: Callable[..., Any], state: Any, runtime: Any) -> Any:
+    if runtime is None or len(inspect.signature(node).parameters) < 2:
+        return node(state)
+    return node(state, runtime)
 
 
 def _state_value(state: Any, key: str) -> str | None:

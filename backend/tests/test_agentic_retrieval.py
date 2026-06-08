@@ -9,6 +9,7 @@ from backend.platform.config.settings import AppSettings
 from backend.platform.rag.retrieval.documents.filters import DOCUMENT_MINIMUM_RELEVANCE
 from backend.platform.rag.contracts import RetrievalContext, RetrievalPlan, RetrievalResult
 from backend.platform.rag.orchestration.decisions import SufficiencyDecision
+from backend.platform.agent_runtime.middleware import RuntimeTraceMiddleware, SharedModelCallGuard
 from backend.platform.rag.post_retrieval import DashScopeRetrievalReranker, IdentityRetrievalReranker
 from backend.platform.models.llm.guards import JsonSchemaGuard
 from backend.platform.search_foundation import VectorSearchResult, VectorStoreDocument
@@ -552,6 +553,34 @@ def test_agentic_retriever_uses_accepted_llm_rewritten_query_for_next_round() ->
     assert outcome.decision_log[0].rewritten_query == "session 表字段"
     assert outcome.rounds[0].rewrite is not None
     assert outcome.rounds[0].rewrite.metadata["fallback"] is False
+
+
+def test_agentic_retriever_guarded_graph_keeps_citations_and_retrieval_trace() -> None:
+    app_settings, knowledge_service = _build_knowledge_service("agentic-guarded-citation-trace")
+    trace = RuntimeTraceMiddleware()
+    definition = build_generic_assistant_scene_definition(
+        app_settings=app_settings,
+        document_retrieval_service=FakeDocumentRetrievalService(knowledge_service),
+    )
+    retriever = definition.build_retriever()
+    retriever.model_call_guard = SharedModelCallGuard(trace=trace)
+
+    outcome = retriever.retrieve_with_trace(
+        "请根据产品手册说明 AeroPhone X 的价格和电池参数",
+        candidate_tools=("knowledge_document_search",),
+    )
+
+    assert outcome.success is True
+    assert [citation.citation_id for citation in outcome.results[0].citations] == [
+        "DOC-001",
+        "DOC-002",
+    ]
+    assert outcome.decision_log[0].decision == "finish"
+    assert any(
+        event.event_type == "model_call"
+        and event.metadata["operation"] == "agentic_rag.sufficiency_judge"
+        for event in trace.events
+    )
 
 
 def test_generic_query_rewriter_falls_back_for_invalid_json_empty_query_and_model_error() -> None:

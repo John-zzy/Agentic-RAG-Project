@@ -1,14 +1,16 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
 from langgraph.graph import END, START, StateGraph
+from langgraph.types import Command
 
-from backend.platform.agent_runtime.contracts import PlanRun, PlanStep
+from backend.platform.agent_runtime.core.contracts import PlanRun, PlanStep
 from backend.platform.agent_runtime.plan.executor import PlanExecutor
 from backend.platform.agent_runtime.plan.graph.state import PlanGraphState
+from backend.platform.workflow.langgraph.resume import extract_resume_payload_from_command
 
 
 @dataclass(frozen=True)
@@ -32,8 +34,10 @@ def build_plan_hitl_resume_graph(
 
 def _build_resume_waiting_step_node(dependencies: PlanHitlResumeGraphDependencies):
     def resume_waiting_step(state: PlanGraphState) -> dict[str, Any]:
-        plan_run = _coerce_run(state.get("plan_run"))
-        payload = dict(state.get("resume_payload") or {})
+        command = _coerce_resume_command(state.get("resume_command"))
+        command_payload = extract_resume_payload_from_command(command)
+        plan_run = _coerce_run(command_payload.get("plan_run"))
+        payload = dict(command_payload.get("resume_payload") or {})
         action = str(payload.get("action") or "")
         waiting_step = _waiting_step(plan_run)
 
@@ -43,7 +47,7 @@ def _build_resume_waiting_step_node(dependencies: PlanHitlResumeGraphDependencie
                 run=plan_run,
                 reason=reason,
                 pending_tool_call=_pending_tool_call(
-                    state=state,
+                    command_payload=command_payload,
                     payload=payload,
                 ),
             )
@@ -56,7 +60,7 @@ def _build_resume_waiting_step_node(dependencies: PlanHitlResumeGraphDependencie
 
         if action == "approve":
             proposed_tool_call = dict(
-                state.get("proposed_tool_call")
+                command_payload.get("proposed_tool_call")
                 or payload.get("proposed_tool_call")
                 or {}
             )
@@ -109,6 +113,12 @@ def _build_resume_waiting_step_node(dependencies: PlanHitlResumeGraphDependencie
     return resume_waiting_step
 
 
+def _coerce_resume_command(value: Any) -> Command:
+    if isinstance(value, Command):
+        return value
+    raise ValueError("Command(resume=...) is required for Plan HITL resume.")
+
+
 def _coerce_run(value: Any) -> PlanRun:
     if isinstance(value, PlanRun):
         return value
@@ -132,11 +142,11 @@ def _waiting_step(plan_run: PlanRun) -> PlanStep:
 
 def _pending_tool_call(
     *,
-    state: PlanGraphState,
+    command_payload: Mapping[str, Any],
     payload: Mapping[str, Any],
 ) -> dict[str, Any]:
     return dict(
-        state.get("proposed_tool_call")
+        command_payload.get("proposed_tool_call")
         or payload.get("proposed_tool_call")
         or {}
     )

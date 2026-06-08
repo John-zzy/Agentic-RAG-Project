@@ -1,10 +1,10 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from collections.abc import Mapping
 from typing import Any
 
 from backend.platform.agent_runtime.chat_graph.graph.config import ChatGraphDependencies
-from backend.platform.agent_runtime.self_check import (
+from backend.platform.agent_runtime.quality.self_check import (
     CorrectionAction,
     ResultValidationReport,
     ResultValidator,

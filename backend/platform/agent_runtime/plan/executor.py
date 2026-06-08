@@ -1,23 +1,27 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from typing import Any, Protocol
 
-from backend.platform.agent_runtime.contracts import (
+from backend.platform.agent_runtime.core.contracts import (
     PlanRun,
     PlanStep,
     ToolObservation,
     collect_successful_tool_observations,
 )
-from backend.platform.agent_runtime.idempotency import ToolExecutionContext
+from backend.platform.agent_runtime.tooling.idempotency import ToolExecutionContext
+from backend.platform.agent_runtime.middleware.model_call import (
+    SharedModelCallGuard,
+    default_model_call_context,
+)
 from backend.platform.agent_runtime.plan.synthesis import (
     PlanFinalSynthesizer,
     PlanSynthesisContext,
     PlanSynthesisResult,
     StepSummarySynthesizer,
 )
-from backend.platform.agent_runtime.tool_executor import ToolExecutor
-from backend.platform.agent_runtime.validation import (
+from backend.platform.agent_runtime.tooling.executor import ToolExecutor
+from backend.platform.agent_runtime.core.validation import (
     validate_plan_dependencies,
     validate_plan_tool_allowlist,
 )
@@ -32,9 +36,11 @@ class PlanExecutor:
         *,
         tool_executor: ToolExecutor,
         final_synthesizer: PlanFinalSynthesizer | None = None,
+        model_call_guard: SharedModelCallGuard | None = None,
     ) -> None:
         self._tool_executor = tool_executor
         self._final_synthesizer = final_synthesizer or StepSummarySynthesizer()
+        self._model_call_guard = model_call_guard
 
     def run(self, plan_run: PlanRun) -> PlanRun:
         self.validate_plan(plan_run.steps)
@@ -168,23 +174,22 @@ class PlanExecutor:
     def synthesize_plan_result(self, plan_run: PlanRun) -> PlanRun:
         observations = collect_successful_tool_observations(plan_run)
         citations = _collect_citations(observations)
-        result = self._final_synthesizer.synthesize(
-            PlanSynthesisContext(
-                plan_run_id=plan_run.plan_run_id,
-                session_id=plan_run.session_id,
-                request_id=plan_run.request_id,
-                user_goal=plan_run.user_goal,
-                context_summary=plan_run.context_summary,
-                steps=list(plan_run.steps),
-                observations=observations,
-                citations=citations,
-                execution_order=list(plan_run.metadata.get("execution_order") or []),
-                metadata={
-                    "planner": dict(plan_run.metadata.get("planner") or {}),
-                    "context_summary": plan_run.context_summary,
-                },
-            )
+        synthesis_context = PlanSynthesisContext(
+            plan_run_id=plan_run.plan_run_id,
+            session_id=plan_run.session_id,
+            request_id=plan_run.request_id,
+            user_goal=plan_run.user_goal,
+            context_summary=plan_run.context_summary,
+            steps=list(plan_run.steps),
+            observations=observations,
+            citations=citations,
+            execution_order=list(plan_run.metadata.get("execution_order") or []),
+            metadata={
+                "planner": dict(plan_run.metadata.get("planner") or {}),
+                "context_summary": plan_run.context_summary,
+            },
         )
+        result = self._synthesize_with_guard(plan_run=plan_run, context=synthesis_context)
         _transition(plan_run, "success")
         plan_run.final_answer = result.final_answer
         plan_run.result_summary = result.result_summary
@@ -195,6 +200,35 @@ class PlanExecutor:
         plan_run.metadata["knowledge_used"] = result.knowledge_used
         plan_run.metadata["final_synthesis"] = result.metadata
         return plan_run
+
+    def _synthesize_with_guard(
+        self,
+        *,
+        plan_run: PlanRun,
+        context: PlanSynthesisContext,
+    ) -> PlanSynthesisResult:
+        if self._model_call_guard is None:
+            return self._final_synthesizer.synthesize(context)
+        runtime_context = default_model_call_context(
+            session_id=plan_run.session_id,
+            request_id=plan_run.request_id,
+            scene="platform.plan",
+            complexity=str(plan_run.metadata.get("complexity") or "moderate"),
+            workflow_metadata={
+                "run_id": plan_run.plan_run_id,
+                "checkpoint_ns": "plan_graph",
+                "metadata": {"node": "synthesize_plan_result"},
+            },
+            request_metadata={
+                "operation": "plan.final_synthesis",
+                "step_count": len(plan_run.steps),
+            },
+        )
+        return self._model_call_guard.invoke(
+            lambda: self._final_synthesizer.synthesize(context),
+            context=runtime_context,
+            metadata={"operation": "plan.final_synthesis"},
+        )
 
     def mark_failed(self, *, plan_run: PlanRun, error: str) -> PlanRun:
         if plan_run.workflow_status == "retrying":

@@ -1,11 +1,11 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from pathlib import Path
 
 from backend.platform.agent_runtime.chat_graph.runtime import (
     ChatGraphRuntime as PlatformChatGraphRuntime,
 )
-from backend.platform.agent_runtime.idempotency import SQLiteToolIdempotencyStore
+from backend.platform.agent_runtime.tooling.idempotency import SQLiteToolIdempotencyStore
 from backend.platform.config.settings import AppSettings
 from backend.platform.workflow.langgraph.checkpointer import SQLiteLangGraphCheckpointer
 

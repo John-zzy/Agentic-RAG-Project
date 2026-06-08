@@ -1,11 +1,11 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from collections.abc import Mapping
 from typing import Any, Literal
 
 from pydantic import Field
 
-from backend.platform.agent_runtime.contracts import AgentRuntimeModel
+from backend.platform.agent_runtime.core.contracts import AgentRuntimeModel
 
 
 ReActNoEvidenceAction = Literal["ask_user", "final_answer", "stop"]

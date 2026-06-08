@@ -4,8 +4,8 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from backend.platform.agent_runtime.chat_graph.contracts import HitlWaitInput
-from backend.platform.agent_runtime.contracts import AgentMode
-from backend.platform.agent_runtime.rag_tools import AGENTIC_RAG_TOOL_NAME, NATIVE_RAG_TOOL_NAME
+from backend.platform.agent_runtime.core.contracts import AgentMode
+from backend.platform.agent_runtime.tooling.rag import AGENTIC_RAG_TOOL_NAME, NATIVE_RAG_TOOL_NAME
 from backend.platform.workflow.langgraph.state import RuntimeGraphState, RuntimeHitlState
 from backend.platform.workflow.state_machine import WorkflowRunState, is_terminal
 

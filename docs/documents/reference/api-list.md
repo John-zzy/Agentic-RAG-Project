@@ -95,6 +95,7 @@
 - `pending_action=tool_approval` 或 `external_api_approval` 时，`allowed_actions` 通常为 `["approve", "reject"]`，会返回 `proposed_tool_call`，但不会返回澄清建议。
 - `respond` 会使用用户补充内容恢复同一个 ReAct run，并把补充内容传回 LLM ReAct selector；如果仍无证据，会沿用原有 no-hit / ask_user fallback 边界，不伪造 citations。
 - ReAct resume 会校验当前 checkpoint 中的 `session_id`、`interrupt_id`、`react_run_id` 和 `current_turn_id`，避免恢复过期等待点。
+- ReAct 主路径内部使用 LangChain `create_agent` provider 与项目 middleware；API 响应只暴露项目稳定 projection，不暴露 LangChain raw state、raw tool arguments 或 checkpoint payload。
 
 ### `GET /scenes`
 

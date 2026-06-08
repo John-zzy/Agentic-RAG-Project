@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from typing import Any
 
@@ -16,10 +16,11 @@ from backend.platform.agent_runtime import (
     ToolExecutionMetadata,
     ToolObservation,
 )
+from backend.platform.agent_runtime.middleware import RuntimeTraceMiddleware, SharedModelCallGuard
 from backend.platform.agent_runtime.plan.graph import build_plan_graph
 from backend.platform.agent_runtime.plan.graph.config import PlanGraphDependencies
-from backend.platform.agent_runtime.tool_executor import ToolExecutor
-from backend.platform.agent_runtime.validation import ToolAccessValidationError
+from backend.platform.agent_runtime.tooling.executor import ToolExecutor
+from backend.platform.agent_runtime.core.validation import ToolAccessValidationError
 from backend.platform.tools.base import ToolResult
 
 
@@ -42,6 +43,16 @@ class _RecordingPlanSynthesizer:
             knowledge_used=bool(context.citations),
             metadata={"step_ids": [step.step_id for step in context.steps]},
         )
+
+
+class _RecordingStepSelector:
+    def __init__(self, steps: list[dict[str, Any]]) -> None:
+        self.steps = steps
+        self.contexts: list[Any] = []
+
+    def select_steps(self, context: Any):
+        self.contexts.append(context)
+        return self.steps
 
 
 def test_minimal_planner_creates_single_step_and_executor_succeeds() -> None:
@@ -241,6 +252,58 @@ def test_plan_executor_runs_multi_step_plan_in_dependency_order() -> None:
     ]
     assert policy_calls == [{"query": "return", "limit": 1}]
     assert inventory_calls == [{"query": "sku-1", "limit": 1}]
+
+
+def test_plan_tool_execution_records_middleware_trace_in_dependency_order() -> None:
+    trace = RuntimeTraceMiddleware()
+    policy_calls: list[dict[str, Any]] = []
+    inventory_calls: list[dict[str, Any]] = []
+    executor = ToolExecutor(
+        tools={
+            "lookup_policy": _structured_tool(
+                name="lookup_policy",
+                calls=policy_calls,
+                records=[{"policy": "return"}],
+            ),
+            "lookup_inventory": _structured_tool(
+                name="lookup_inventory",
+                calls=inventory_calls,
+                records=[{"sku": "sku-1", "available": True}],
+            ),
+        },
+        allowed_tools={"lookup_policy", "lookup_inventory"},
+        trace_middleware=trace,
+    )
+    plan = PlanRun(
+        plan_run_id="plan-trace",
+        session_id="session-trace",
+        request_id="request-trace",
+        user_goal="先查退货规则，再查库存",
+        steps=[
+            PlanStep(
+                step_id="step-1",
+                goal="查退货规则",
+                tool_name="lookup_policy",
+                input={"query": "return"},
+            ),
+            PlanStep(
+                step_id="step-2",
+                goal="查库存",
+                tool_name="lookup_inventory",
+                input={"query": "sku-1"},
+                depends_on=["step-1"],
+            ),
+        ],
+    )
+
+    result = PlanExecutor(tool_executor=executor).execute(plan)
+
+    assert result.metadata["execution_order"] == ["step-1", "step-2"]
+    assert [event.metadata["tool_name"] for event in trace.events] == [
+        "lookup_policy",
+        "lookup_inventory",
+    ]
+    assert all(event.metadata["tool_status"] == "succeeded" for event in trace.events)
 
 
 def test_planner_rejects_invalid_tool_before_execution() -> None:
@@ -469,6 +532,58 @@ def test_plan_final_synthesis_uses_successful_step_summaries_and_citations() -> 
     assert synthesizer.contexts[0].citations == [{"citation_id": "policy-1"}]
     assert synthesizer.contexts[0].context_summary == result.context_summary
     assert synthesizer.contexts[0].execution_order == ["step-1"]
+
+
+def test_plan_model_calls_reuse_shared_guard_without_changing_plan_semantics() -> None:
+    calls: list[dict[str, Any]] = []
+    trace = RuntimeTraceMiddleware()
+    guard = SharedModelCallGuard(trace=trace)
+    selector = _RecordingStepSelector(
+        [
+            {
+                "step_id": "guarded-step",
+                "goal": "查制度",
+                "tool_name": "lookup_policy",
+                "input": {"query": "expense"},
+            }
+        ]
+    )
+    synthesizer = _RecordingPlanSynthesizer()
+    tool_executor = ToolExecutor(
+        tools={
+            "lookup_policy": _structured_tool(
+                name="lookup_policy",
+                calls=calls,
+                records=[{"policy": "expense"}],
+                citations=[{"citation_id": "policy-1"}],
+            )
+        },
+        allowed_tools={"lookup_policy"},
+    )
+
+    plan = MinimalPlanner(
+        tool_executor=tool_executor,
+        step_selector=selector,
+        model_call_guard=guard,
+    ).create_plan(
+        session_id="session-guard",
+        request_id="request-guard",
+        user_goal="查报销制度",
+    )
+    result = PlanExecutor(
+        tool_executor=tool_executor,
+        final_synthesizer=synthesizer,
+        model_call_guard=guard,
+    ).execute(plan)
+
+    assert [step.step_id for step in result.steps] == ["guarded-step"]
+    assert result.workflow_status == "succeeded"
+    assert result.metadata["execution_order"] == ["guarded-step"]
+    assert result.metadata["citations"] == [{"citation_id": "policy-1"}]
+    assert [event.metadata["operation"] for event in trace.events] == [
+        "plan.step_selection",
+        "plan.final_synthesis",
+    ]
 
 
 def test_plan_executor_tool_observation_requires_user_creates_wait_metadata() -> None:

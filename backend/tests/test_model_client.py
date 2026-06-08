@@ -207,14 +207,13 @@ def test_stream_runnable_raises_when_no_effective_chunks() -> None:
         list(client.stream_runnable(runnable, {"name": "alice"}))
 
 
-def test_invoke_template_delegates_to_runnable(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_invoke_delegates_to_default_prompt_runnable(monkeypatch: pytest.MonkeyPatch) -> None:
     client = _build_client()
-    prompt = PromptTemplate.from_template("say {topic}")
     observed: dict[str, Any] = {}
 
     def _fake_get_runnable(*args: Any, **kwargs: Any) -> RunnableLambda:
         observed["get_runnable"] = kwargs
-        return RunnableLambda(lambda payload: f" delegated:{payload['topic']} ")
+        return RunnableLambda(lambda payload: f" delegated:{payload['prompt']} ")
 
     def _fake_invoke_runnable(runnable: Any, payload: dict[str, Any]) -> str:
         observed["invoke_runnable"] = {"runnable": runnable, "payload": payload}
@@ -223,16 +222,15 @@ def test_invoke_template_delegates_to_runnable(monkeypatch: pytest.MonkeyPatch) 
     monkeypatch.setattr(client, "get_runnable", _fake_get_runnable)
     monkeypatch.setattr(client, "invoke_runnable", _fake_invoke_runnable)
 
-    result = client.invoke_template(prompt, {"topic": "hi"}, complexity="simple")
+    result = client.invoke("hi", complexity="simple")
 
     assert result == "delegated:hi"
-    assert observed["get_runnable"]["prompt_template"] == prompt
-    assert observed["invoke_runnable"]["payload"] == {"topic": "hi"}
+    assert observed["get_runnable"]["prompt_template"] is client._prompt_template
+    assert observed["invoke_runnable"]["payload"] == {"prompt": "hi"}
 
 
-def test_stream_template_delegates_to_runnable(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_stream_delegates_to_default_prompt_runnable(monkeypatch: pytest.MonkeyPatch) -> None:
     client = _build_client()
-    prompt = PromptTemplate.from_template("say {topic}")
     observed: dict[str, Any] = {}
 
     monkeypatch.setattr(
@@ -249,7 +247,7 @@ def test_stream_template_delegates_to_runnable(monkeypatch: pytest.MonkeyPatch) 
 
     def _fake_get_runnable(*args: Any, **kwargs: Any) -> RunnableLambda:
         observed["get_runnable"] = kwargs
-        return RunnableLambda(lambda payload: payload["topic"])
+        return RunnableLambda(lambda payload: payload["prompt"])
 
     def _fake_stream_runnable(runnable: Any, payload: dict[str, Any]) -> Iterator[str]:
         observed["stream_runnable"] = {"runnable": runnable, "payload": payload}
@@ -260,16 +258,15 @@ def test_stream_template_delegates_to_runnable(monkeypatch: pytest.MonkeyPatch) 
     monkeypatch.setattr(client, "get_runnable", _fake_get_runnable)
     monkeypatch.setattr(client, "stream_runnable", _fake_stream_runnable)
 
-    chunks = list(client.stream_template(prompt, {"topic": "hi"}, complexity="simple"))
+    chunks = list(client.stream("hi", complexity="simple"))
 
     assert chunks == ["", "x", "y"]
-    assert observed["get_runnable"]["prompt_template"] == prompt
-    assert observed["stream_runnable"]["payload"] == {"topic": "hi"}
+    assert observed["get_runnable"]["prompt_template"] is client._prompt_template
+    assert observed["stream_runnable"]["payload"] == {"prompt": "hi"}
 
 
-def test_stream_template_rejects_unsupported_streaming(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_stream_rejects_unsupported_streaming(monkeypatch: pytest.MonkeyPatch) -> None:
     client = _build_client()
-    prompt = PromptTemplate.from_template("say {topic}")
     monkeypatch.setattr(
         "backend.platform.models.llm.client.get_model_for_task",
         lambda complexity: type(
@@ -283,4 +280,4 @@ def test_stream_template_rejects_unsupported_streaming(monkeypatch: pytest.Monke
     )
 
     with pytest.raises(ValueError, match="Streaming is not supported for model complexity: simple"):
-        list(client.stream_template(prompt, {"topic": "hi"}, complexity="simple"))
+        list(client.stream("hi", complexity="simple"))

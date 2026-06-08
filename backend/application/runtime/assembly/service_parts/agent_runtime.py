@@ -17,31 +17,35 @@ from backend.application.runtime.assembly.service_parts.contracts import (
     RuntimeFinalDecision,
     PreparedChatTurn,
 )
-from backend.platform.agent_runtime.contracts import (
+from backend.platform.agent_runtime.core.contracts import (
     PlanRun,
     ReActRun,
     ToolObservation,
 )
-from backend.platform.agent_runtime.mode_selector import ModeSelection
+from backend.platform.agent_runtime.middleware.context import AgentRuntimeContext
+from backend.platform.agent_runtime.middleware.factory import build_agent_middleware
+from backend.platform.agent_runtime.core.mode_selector import ModeSelection
 from backend.platform.agent_runtime.plan.graph.config import PlanGraphDependencies
 from backend.platform.agent_runtime.plan.planner import MinimalPlanner
-from backend.platform.agent_runtime.projection import (
+from backend.platform.agent_runtime.core.projection import (
     RuntimeRunProjection,
     project_runtime_run,
     raw_retrieval_trace,
 )
-from backend.platform.agent_runtime.rag_tools import (
+from backend.platform.agent_runtime.tooling.rag import (
     AGENTIC_RAG_TOOL_NAME,
     NATIVE_RAG_TOOL_NAME,
     build_rag_tool_adapters,
 )
-from backend.platform.agent_runtime.react import (
-    LLMReActActionSelector,
-    ReActScenePolicy,
+from backend.platform.agent_runtime.react import ReActScenePolicy
+from backend.platform.agent_runtime.react.config import (
+    ReActDependencies,
 )
-from backend.platform.agent_runtime.react.graph.config import ReActGraphDependencies
-from backend.platform.agent_runtime.tool_executor import ToolExecutor
-from backend.platform.agent_runtime.tool_policy import RuntimeToolPolicy
+from backend.platform.agent_runtime.react.factory import (
+    ReActProviderFactory,
+)
+from backend.platform.agent_runtime.tooling.executor import ToolExecutor
+from backend.platform.agent_runtime.tooling.policy import RuntimeToolPolicy
 from backend.platform.knowledge.sources import DEFAULT_MOUNTED_KNOWLEDGE_SOURCES
 from backend.platform.models.base.router import TaskComplexity
 from backend.scenes.base import SceneRetrievalPolicy
@@ -74,11 +78,11 @@ class ChatAgentRuntimeMixin:
             signals=dict(state.get("agent_mode_signals") or prepared.agent_mode_signals or {}),
         )
 
-    def _build_react_graph_deps(
+    def _build_react_deps(
             self,
             prepared: PreparedChatTurn,
             state: Mapping[str, Any],
-    ) -> ReActGraphDependencies:
+    ) -> ReActDependencies:
         mounted_knowledge_sources = self._mounted_knowledge_sources_for_session(
             prepared.session_id
         )
@@ -96,18 +100,52 @@ class ChatAgentRuntimeMixin:
         scene_policy = self._build_react_scene_policy(
             tool_policy=tool_policy,
         )
-        return ReActGraphDependencies(
+        runtime_context = AgentRuntimeContext.build(
+            session_id=prepared.session_id,
+            request_id=prepared.request_id,
+            scene=prepared.scene_metadata.scene,
+            mounted_knowledge_sources=mounted_knowledge_sources,
+            complexity=prepared.complexity or "simple",
+            provider_name="configured_chat_model",
+            workflow={
+                "thread_id": prepared.session_id,
+                "checkpoint_ns": f"react:{prepared.request_id}",
+                "node_name": "chat_graph.react_branch",
+                "status": "running",
+            },
+            scene_metadata={
+                "agent": prepared.scene_metadata.agent,
+                "max_turns": scene_policy.max_turns,
+            },
+        )
+        middleware_bundle = build_agent_middleware(
+            context=runtime_context,
+            allowed_tools=sorted(tool_executor.allowed_tools),
+            high_risk_tools=tool_policy.high_risk_tools,
+            max_calls_per_tool=scene_policy.max_turns,
+        )
+        provider_factory = ReActProviderFactory(
+            model_provider=self.model.get_chat_model_provider(),
+            middleware_bundle=middleware_bundle,
+            checkpointer=self.graph_runtime.checkpointer,
+        )
+        return ReActDependencies(
             tool_executor=tool_executor,
-            action_selector=LLMReActActionSelector(
-                model_client=self.model,
-                model_complexity=prepared.complexity or "simple",
-            ),
+            provider_factory=provider_factory,
+            middleware_bundle=middleware_bundle,
+            runtime_context=runtime_context,
             session_id=prepared.session_id,
             request_id=prepared.request_id,
             user_goal=prepared.user_message,
+            system_prompt=self.scene_definition.system_prompt,
+            complexity=prepared.complexity or "simple",
+            default_tool_inputs=tool_policy.default_inputs,
             react_run_id=f"react-{prepared.request_id}",
-            scene_policy=scene_policy,
-            turn_id_factory=lambda index: f"turn-{index}",
+            initial_run=(
+                ReActRun.model_validate(state["react_run"])
+                if isinstance(state.get("react_run"), Mapping)
+                else None
+            ),
             max_turns=scene_policy.max_turns,
             project_result=lambda run: self._project_react_graph_result(
                 run=run,
@@ -272,6 +310,62 @@ class ChatAgentRuntimeMixin:
             "current_step_id": agent_result.current_step_id,
             "current_tool_call": agent_result.current_tool_call,
             "tool_observation": agent_result.tool_observation,
+            **self._hitl_state_update_from_react_run(agent_result.react_run),
+        }
+
+    def _hitl_state_update_from_react_run(
+            self,
+            react_run: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        if not isinstance(react_run, Mapping):
+            return {}
+        if react_run.get("workflow_status") != "waiting_user":
+            return {}
+        metadata = dict(react_run.get("metadata") or {})
+        hitl_metadata = dict(metadata.get("hitl") or {})
+        langchain_payload = dict(hitl_metadata.get("langchain") or {})
+        action_requests = list(langchain_payload.get("action_requests") or [])
+        review_configs = list(langchain_payload.get("review_configs") or [])
+        action_request = action_requests[0] if action_requests else {}
+        review_config = review_configs[0] if review_configs else {}
+        if not isinstance(action_request, Mapping):
+            action_request = {}
+        if not isinstance(review_config, Mapping):
+            review_config = {}
+        tool_name = str(action_request.get("name") or "")
+        tool_args = dict(action_request.get("args") or {})
+        interrupt_id = str(langchain_payload.get("interrupt_id") or "")
+        if not interrupt_id:
+            interrupt_id = f"hitl:{react_run.get('request_id')}:{tool_name}:1"
+        allowed_actions = [
+            str(action)
+            for action in list(review_config.get("allowed_decisions") or ["approve", "reject"])
+        ]
+        reason = str(
+            action_request.get("description")
+            or react_run.get("result_summary")
+            or "Tool execution requires approval."
+        )
+        return {
+            "status": "waiting_user",
+            "state_event": "interrupt",
+            "hitl": {
+                "interrupt_id": interrupt_id,
+                "thread_id": str(react_run.get("session_id") or ""),
+                "reason": reason,
+                "pending_action": "tool_approval",
+                "allowed_actions": allowed_actions,
+                "proposed_tool_call": {
+                    "tool_name": tool_name,
+                    "tool_call_id": str(action_request.get("id") or ""),
+                    "input_payload": tool_args,
+                },
+                "suggested_responses": [],
+                "allow_freeform_response": "respond" in allowed_actions,
+                "resume_payload": None,
+                "metadata": hitl_metadata,
+            },
+            "answer": reason,
         }
 
     def _build_agent_tool_executor(

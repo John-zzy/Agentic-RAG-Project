@@ -17,6 +17,7 @@ from backend.platform.rag.orchestration.retrieval_graph.edges import (
     build_route_next_action_edge,
 )
 from backend.platform.rag.orchestration.retrieval_graph.config import (
+    AgenticRagGraphContext,
     AgenticRagGraphDependencies,
 )
 from backend.platform.rag.orchestration.retrieval_graph.nodes import (
@@ -48,7 +49,7 @@ def build_agentic_rag_graph(
     checkpointer: Any | None = None,
 ) -> Any:
     """编排 Agentic RAG retrieval graph 拓扑。"""
-    builder = StateGraph(AgenticRagGraphState)
+    builder = StateGraph(AgenticRagGraphState, context_schema=AgenticRagGraphContext)
     builder.add_node(INITIALIZE_PLAN, build_initialize_plan_node(dependencies))
     builder.add_node(TOOL_DECISION, build_tool_decision_node(dependencies))
     _add_guarded_node(builder, RETRIEVAL, build_retrieval_node(dependencies))

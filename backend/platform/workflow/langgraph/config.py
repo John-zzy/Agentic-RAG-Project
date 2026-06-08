@@ -5,9 +5,26 @@ from typing import Any
 
 from langchain_core.runnables import RunnableConfig
 
+CHAT_GRAPH_CHECKPOINT_NS = "chat_graph"
+REACT_PROVIDER_CHECKPOINT_NS = "react_provider"
+PLAN_GRAPH_CHECKPOINT_NS = "plan_graph"
+AGENTIC_RAG_CHECKPOINT_NS = "agentic_rag"
 
-# StateGraph 1.2 当前会以默认空 namespace 写入 checkpoint，runtime 查询需保持一致。
-DEFAULT_RUNTIME_CHECKPOINT_NS = ""
+DEFAULT_RUNTIME_CHECKPOINT_NS = CHAT_GRAPH_CHECKPOINT_NS
+RUNTIME_CHECKPOINT_NAMESPACES = {
+    "chat_graph": CHAT_GRAPH_CHECKPOINT_NS,
+    "react_provider": REACT_PROVIDER_CHECKPOINT_NS,
+    "plan_graph": PLAN_GRAPH_CHECKPOINT_NS,
+    "agentic_rag": AGENTIC_RAG_CHECKPOINT_NS,
+}
+
+
+def checkpoint_namespace_for(graph_name: str) -> str:
+    """返回项目约定的确定性 checkpoint namespace。"""
+    try:
+        return RUNTIME_CHECKPOINT_NAMESPACES[graph_name]
+    except KeyError as exc:
+        raise ValueError(f"Unknown runtime graph checkpoint namespace: {graph_name}") from exc
 
 
 def build_runtime_graph_config(
@@ -35,6 +52,7 @@ def build_runtime_graph_config(
     resolved_metadata = dict(metadata or {})
     resolved_metadata["request_id"] = request_id
     resolved_metadata["session_id"] = session_id
+    resolved_metadata["checkpoint_ns"] = checkpoint_ns
 
     return {
         "configurable": configurable,

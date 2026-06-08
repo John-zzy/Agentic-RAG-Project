@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from typing import Any
 
@@ -6,7 +6,7 @@ import pytest
 from langchain_core.runnables import RunnableLambda
 from pydantic import BaseModel, Field
 
-from backend.platform.agent_runtime.failures import FailureCategory
+from backend.platform.agent_runtime.quality.failures import FailureCategory
 from backend.platform.models.llm.client import ModelClient
 from backend.platform.models.llm.guards import ModelGuardFailureError, ModelSchemaValidationError
 

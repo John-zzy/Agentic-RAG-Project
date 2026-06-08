@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from dataclasses import dataclass
 import json
@@ -6,7 +6,9 @@ from typing import Any
 
 import pytest
 from langchain_core.documents import Document
+from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
+from langchain_core.outputs import ChatGeneration, ChatResult
 from langchain_core.runnables import RunnableLambda
 from pydantic import BaseModel
 
@@ -20,8 +22,11 @@ from backend.application.runtime.api.chat.schemas import (
 from backend.application.runtime.assembly.runtime_factory import ChatGraphRuntime
 from backend.application.runtime.service import ChatService
 from backend.application.runtime.stream_events import (
-    GraphRuntimeStreamEvent,
     GraphStreamEventMapper,
+    TypedGraphStreamEvent,
+)
+from backend.platform.agent_runtime.chat_graph.projection import (
+    project_runtime_graph_state,
 )
 from backend.platform.agent_runtime.chat_graph.contracts import (
     HitlResumeError,
@@ -29,25 +34,32 @@ from backend.platform.agent_runtime.chat_graph.contracts import (
     HitlWaitInput,
 )
 from backend.platform.agent_runtime.plan.executor import PlanExecutor
-from backend.platform.agent_runtime.contracts import ToolObservation
-from backend.platform.agent_runtime.idempotency import (
+from backend.platform.agent_runtime.core.contracts import ToolObservation
+from backend.platform.agent_runtime.tooling.idempotency import (
     SQLiteToolIdempotencyStore,
     ToolExecutionContext,
 )
-from backend.platform.agent_runtime.tool_executor import ToolExecutor
+from backend.platform.agent_runtime.tooling.executor import ToolExecutor
 from backend.platform.config.settings import AppSettings
 from backend.platform.memory.base.session_store import SQLiteSessionStore
 from backend.platform.memory.chat.prompt_context import PromptContextBuilder
 from backend.platform.workflow.langgraph.checkpointer import SQLiteLangGraphCheckpointer
 from backend.platform.workflow.langgraph.config import (
+    AGENTIC_RAG_CHECKPOINT_NS,
+    CHAT_GRAPH_CHECKPOINT_NS,
     DEFAULT_RUNTIME_CHECKPOINT_NS,
+    PLAN_GRAPH_CHECKPOINT_NS,
+    REACT_PROVIDER_CHECKPOINT_NS,
     build_runtime_graph_config,
+    checkpoint_namespace_for,
 )
 from backend.platform.workflow.langgraph.lifecycle import (
     GraphRunLifecycleRecorder,
 )
 from backend.platform.workflow.langgraph.state import (
+    RuntimeGraphContext,
     RuntimeGraphState,
+    build_runtime_graph_context,
     build_runtime_hitl_state,
     build_runtime_graph_state,
 )
@@ -144,6 +156,37 @@ class _FakeModel:
             schema_model=schema_model,
             source=schema_source,
         )
+
+    def get_chat_model_provider(self) -> Any:
+        return lambda complexity="simple": _FakeChatModel(answer=self.answer)
+
+
+class _FakeChatModel(BaseChatModel):
+    answer: str
+
+    @property
+    def _llm_type(self) -> str:
+        return "fake-chat-model"
+
+    def bind_tools(
+        self,
+        tools: Any,
+        *,
+        tool_choice: str | None = None,
+        **kwargs: Any,
+    ) -> BaseChatModel:
+        del tools, tool_choice, kwargs
+        return self
+
+    def _generate(
+        self,
+        messages: list[BaseMessage],
+        stop: list[str] | None = None,
+        run_manager: Any = None,
+        **kwargs: Any,
+    ) -> ChatResult:
+        del messages, stop, run_manager, kwargs
+        return ChatResult(generations=[ChatGeneration(message=AIMessage(content=self.answer))])
 
 
 class _RecordingPlanTool:
@@ -286,6 +329,35 @@ def test_runtime_graph_state_exposes_minimal_chat_execution_fields() -> None:
     assert state["final_decision"] is None
     assert state["follow_up_question"] is None
     assert state["tool_observation"] is None
+
+
+def test_runtime_graph_context_is_typed_and_explicit() -> None:
+    assert set(RuntimeGraphContext.__annotations__) == {
+        "session_id",
+        "request_id",
+        "scene",
+        "agent",
+        "agent_mode",
+        "answer_mode",
+        "checkpoint_ns",
+        "metadata",
+    }
+
+    context = build_runtime_graph_context(
+        session_id="session-context",
+        request_id="req-context",
+        scene="generic_assistant",
+        agent="generic",
+        agent_mode="react",
+        answer_mode="evidence_answer",
+        checkpoint_ns=CHAT_GRAPH_CHECKPOINT_NS,
+        metadata={"trace": "safe"},
+    )
+
+    assert context["session_id"] == "session-context"
+    assert context["request_id"] == "req-context"
+    assert context["checkpoint_ns"] == CHAT_GRAPH_CHECKPOINT_NS
+    assert context["metadata"] == {"trace": "safe"}
 
 
 def test_runtime_graph_state_defaults_keep_non_evidence_branches_representable() -> None:
@@ -470,10 +542,27 @@ def test_runtime_graph_config_binds_thread_id_to_session_id_and_metadata_to_requ
     assert config["configurable"]["thread_id"] == "session-config"
     assert config["configurable"]["checkpoint_ns"] == DEFAULT_RUNTIME_CHECKPOINT_NS
     assert config["metadata"] == {
+        "checkpoint_ns": CHAT_GRAPH_CHECKPOINT_NS,
         "request_id": "req-config",
         "session_id": "session-config",
         "scene": "generic_assistant",
     }
+
+
+def test_runtime_checkpoint_namespaces_are_deterministic_per_graph() -> None:
+    assert DEFAULT_RUNTIME_CHECKPOINT_NS == CHAT_GRAPH_CHECKPOINT_NS
+    assert checkpoint_namespace_for("chat_graph") == CHAT_GRAPH_CHECKPOINT_NS
+    assert checkpoint_namespace_for("react_provider") == REACT_PROVIDER_CHECKPOINT_NS
+    assert checkpoint_namespace_for("plan_graph") == PLAN_GRAPH_CHECKPOINT_NS
+    assert checkpoint_namespace_for("agentic_rag") == AGENTIC_RAG_CHECKPOINT_NS
+
+    namespaces = {
+        CHAT_GRAPH_CHECKPOINT_NS,
+        REACT_PROVIDER_CHECKPOINT_NS,
+        PLAN_GRAPH_CHECKPOINT_NS,
+        AGENTIC_RAG_CHECKPOINT_NS,
+    }
+    assert len(namespaces) == 4
 
 
 def test_graph_run_lifecycle_records_success_path_with_thread_and_request() -> None:
@@ -556,6 +645,25 @@ def test_graph_run_lifecycle_records_waiting_cancelled_and_retrying_paths() -> N
         "running",
         "failed",
     )
+
+
+def test_runtime_graph_projection_requires_typed_state() -> None:
+    state = build_runtime_graph_state(
+        session_id="session-projection",
+        request_id="req-projection",
+        answer="typed answer",
+        citations=[{"citation_id": "c1"}],
+        status="succeeded",
+    )
+
+    projection = project_runtime_graph_state(state)
+
+    assert projection.answer == "typed answer"
+    assert projection.status == "succeeded"
+    assert projection.citations == [{"citation_id": "c1"}]
+
+    with pytest.raises(ValueError, match="session_id"):
+        project_runtime_graph_state({"request_id": "req", "answer": "", "citations": []})
 
 
 def test_chat_graph_runtime_invokes_answer_graph_and_persists_checkpoint_metadata() -> None:
@@ -919,50 +1027,6 @@ def test_chat_graph_self_check_routes_requires_user_to_waiting_user() -> None:
     assert runtime.lifecycle.events_for_request("req-self-check-ask-user")[-1].status == "waiting_user"
 
 
-def test_chat_graph_runtime_tolerates_legacy_checkpoint_without_agent_fields() -> None:
-    runtime = _build_chat_graph_runtime("runtime-graph-legacy-agent-fields")
-    config = build_runtime_graph_config(
-        session_id="session-legacy-agent",
-        request_id="req-legacy-agent",
-    )
-    state = build_runtime_graph_state(
-        session_id="session-legacy-agent",
-        request_id="req-legacy-agent",
-        answer="legacy answer",
-    )
-    # 模拟旧 checkpoint：channel values 不包含 orchestration 字段。
-    legacy_values = {
-        key: value
-        for key, value in state.items()
-        if key
-        not in {
-            "agent_mode",
-            "react_run",
-            "plan_run",
-            "current_turn_id",
-            "current_step_id",
-            "current_tool_call",
-        }
-    }
-    runtime._persist_state_update(  # noqa: SLF001 - 测试旧 checkpoint 读取边界。
-        state=state,
-        config=config,
-        update=legacy_values,
-    )
-
-    loaded = runtime._load_or_build_thread_state(  # noqa: SLF001 - 验证容忍旧字段缺失。
-        session_id="session-legacy-agent",
-        request_id="req-legacy-agent",
-        config=config,
-        require_checkpoint=True,
-    )
-
-    assert loaded["answer"] == "legacy answer"
-    assert loaded["agent_mode"] is None
-    assert loaded["react_run"] is None
-    assert loaded["plan_run"] is None
-
-
 def test_chat_graph_runtime_reload_preserves_extended_agent_state_fields() -> None:
     runtime = _build_chat_graph_runtime("runtime-graph-extended-agent-state")
     config = build_runtime_graph_config(
@@ -1008,14 +1072,14 @@ def test_chat_graph_runtime_reload_preserves_extended_agent_state_fields() -> No
     }
 
 
-def test_chat_graph_runtime_seeds_legacy_history_only_without_checkpoint() -> None:
+def test_chat_graph_runtime_seeds_session_history_only_without_checkpoint() -> None:
     runtime = _build_chat_graph_runtime("runtime-graph-history-seed")
     loader_calls = 0
 
     def history_loader(_: _PreparedGraphTurn) -> list[BaseMessage]:
         nonlocal loader_calls
         loader_calls += 1
-        return [HumanMessage(content="legacy question")]
+        return [HumanMessage(content="previous question")]
 
     first = _prepared_graph_turn(
         session_id="session-seed",
@@ -1041,7 +1105,7 @@ def test_chat_graph_runtime_seeds_legacy_history_only_without_checkpoint() -> No
 
     assert loader_calls == 1
     assert [message.content for message in result.state["messages"]] == [
-        "legacy question",
+        "previous question",
         "first graph question",
         "first answer",
         "second graph question",
@@ -1158,6 +1222,9 @@ def test_chat_graph_runtime_plan_reject_cancels_waiting_step() -> None:
     assert result.state["status"] == "cancelled"
     assert result.state["plan_run"]["workflow_status"] == "cancelled"
     assert result.state["plan_run"]["steps"][0]["status"] == "cancelled"
+    assert result.state["plan_run"]["metadata"]["resume"]["action"] == "reject"
+    assert result.state["plan_run"]["metadata"]["resume"]["side_effect_executed"] is False
+    assert result.state["plan_run"]["steps"][0]["metadata"]["continuation"]["action"] == "reject"
     assert result.state["current_step_id"] is None
     assert result.state["current_tool_call"] is None
 
@@ -1277,6 +1344,9 @@ def test_chat_graph_runtime_plan_respond_settles_nested_run_result() -> None:
     assert result.state["status"] == "succeeded"
     assert result.state["plan_run"]["workflow_status"] == "succeeded"
     assert result.state["plan_run"]["steps"][0]["status"] == "succeeded"
+    assert result.state["plan_run"]["metadata"]["resume"]["action"] == "respond"
+    assert result.state["plan_run"]["metadata"]["resume"]["response"] == "补充范围"
+    assert result.state["plan_run"]["steps"][0]["metadata"]["continuation"]["source"] == "freeform"
     assert result.state["plan_run"]["final_answer"] == "native_rag_search succeeded."
     assert result.state["plan_run"]["result_summary"] == "Synthesized 1 successful plan step(s)."
     assert result.state["final_state"] == "succeeded"
@@ -1328,6 +1398,9 @@ def test_chat_graph_runtime_react_respond_settles_nested_run_result() -> None:
     assert result.state["status"] == "succeeded"
     assert result.state["react_run"]["workflow_status"] == "succeeded"
     assert result.state["react_run"]["turns"][0]["status"] == "succeeded"
+    assert result.state["react_run"]["metadata"]["resume"]["action"] == "respond"
+    assert result.state["react_run"]["metadata"]["resume"]["response"] == "安全制度"
+    assert result.state["react_run"]["turns"][0]["metadata"]["continuation"]["source"] == "freeform"
     assert result.state["react_run"]["final_answer"] == "继续检索：安全制度"
     assert result.state["react_run"]["result_summary"] == "继续检索：安全制度"
     assert result.state["final_state"] == "succeeded"
@@ -1660,6 +1733,65 @@ def test_chat_graph_runtime_resume_consumes_wait_before_tool_side_effect() -> No
     else:
         raise AssertionError("failed terminal checkpoint should reject duplicate resume")
     assert executed_calls == [{"tool_name": "generic_external_webhook_call"}]
+
+
+def test_chat_graph_runtime_reject_stays_cancelled_after_graph_failure() -> None:
+    runtime = _build_chat_graph_runtime("runtime-graph-hitl-reject-graph-failure")
+    runtime.create_hitl_wait(
+        wait=HitlWaitInput(
+            session_id="session-hitl-reject-failure",
+            request_id="req-hitl-reject-failure-wait",
+            reason="计划步骤需要人工审批。",
+            pending_action="tool_approval",
+            proposed_tool_call={"tool_name": "generic_write", "args": {"query": "publish"}},
+            allowed_actions=["approve", "reject"],
+            metadata={
+                "mode": "plan",
+                "plan_run_id": "plan-reject-failure",
+                "current_step_id": "step-reject-failure",
+            },
+        ),
+        interrupt_id="interrupt-reject-failure",
+    )
+
+    class _FailingPlanExecutor:
+        def continue_after_reject(self, **_: Any) -> None:
+            raise RuntimeError("nested reject graph failed")
+
+    with pytest.raises(RuntimeError, match="nested reject graph failed"):
+        runtime.resume_hitl(
+            resume=HitlResumeInput(
+                session_id="session-hitl-reject-failure",
+                request_id="req-hitl-reject-failure-resume",
+                interrupt_id="interrupt-reject-failure",
+                action="reject",
+            ),
+            plan_executor=_FailingPlanExecutor(),  # type: ignore[arg-type]
+        )
+
+    restored = runtime.checkpointer.get_tuple(
+        {
+            "configurable": {
+                "thread_id": "session-hitl-reject-failure",
+                "checkpoint_ns": DEFAULT_RUNTIME_CHECKPOINT_NS,
+            }
+        }
+    )
+    assert restored is not None
+    values = restored.checkpoint["channel_values"]
+    assert values["status"] == "cancelled"
+    assert values["state_event"] == "resume_reject"
+    assert values["final_state"] == "cancelled"
+    assert values["hitl"] is None
+    assert values["hitl_resume"]["action"] == "reject"
+
+    statuses = tuple(
+        event.status
+        for event in runtime.lifecycle.events_for_thread(
+            thread_id="session-hitl-reject-failure"
+        )
+    )
+    assert statuses[-1] == "cancelled"
 
 
 def test_chat_graph_runtime_reuses_approved_side_effect_after_checkpoint_failure() -> None:
@@ -2011,16 +2143,17 @@ def test_chat_service_non_streaming_answer_runs_through_graph_runtime() -> None:
         }
     )
 
-    assert response.answer == "这是 graph runtime 生成的回答。\n\n参考来源：[1]"
-    assert response.knowledge_used is True
-    assert len(response.citations) == 1
+    assert response.answer == "这是 graph runtime 生成的回答。"
+    assert response.knowledge_used is False
+    assert response.citations == []
     assert restored is not None
     assert restored.metadata["request_id"] == response.request_id
     assert restored.metadata["session_id"] == response.session_id
     assert restored.checkpoint["channel_values"]["answer"] == response.answer
-    assert restored.checkpoint["channel_values"]["retrieval_trace"]["final_decision"] == (
-        "answer_with_evidence"
-    )
+    checkpoint_values = restored.checkpoint["channel_values"]
+    assert checkpoint_values["react_run"]["workflow_status"] == "succeeded"
+    assert checkpoint_values["react_run"]["final_answer"] == response.answer
+    assert checkpoint_values["retrieval_trace"]["final_decision"] == "direct_answer"
     assert service.session_store.count_turns(response.session_id) == 1
     assert service.session_store.count_messages(response.session_id) == 2
     messages, total_messages = service.session_store.get_session_messages(
@@ -2030,7 +2163,7 @@ def test_chat_service_non_streaming_answer_runs_through_graph_runtime() -> None:
     assert total_messages == 2
     assert [message.message_type for message in messages] == ["human", "ai"]
     assert messages[1].content == response.answer
-    assert messages[1].citations[0]["citation_id"] == "chunk-graph"
+    assert messages[1].citations == []
 
 
 def test_graph_stream_event_mapper_keeps_business_event_protocol() -> None:
@@ -2039,27 +2172,33 @@ def test_graph_stream_event_mapper_keeps_business_event_protocol() -> None:
     events = list(
         mapper.map_events(
             [
-                GraphRuntimeStreamEvent("graph_run_created", {"request_id": "req-stream"}),
-                GraphRuntimeStreamEvent("history_snapshot", {"messages": []}),
-                GraphRuntimeStreamEvent(
-                    "retrieval_tool_result",
-                    {"retrieval_trace": {"final_decision": "answer_with_evidence"}},
+                TypedGraphStreamEvent("graph_start", {"request_id": "req-stream"}),
+                TypedGraphStreamEvent(
+                    "safe_thinking",
+                    {"stage": "history", "messages": []},
                 ),
-                GraphRuntimeStreamEvent("answer_chunk", {"delta": "hello"}),
-                GraphRuntimeStreamEvent(
-                    "human_waiting",
+                TypedGraphStreamEvent(
+                    "safe_thinking",
+                    {
+                        "stage": "tool",
+                        "retrieval_trace": {"final_decision": "answer_with_evidence"},
+                    },
+                ),
+                TypedGraphStreamEvent("model_chunk", {"delta": "hello"}),
+                TypedGraphStreamEvent(
+                    "interrupt",
                     {"hitl": {"interrupt_id": "interrupt-stream"}},
                 ),
-                GraphRuntimeStreamEvent(
-                    "human_resume",
+                TypedGraphStreamEvent(
+                    "resume",
                     {"interrupt_id": "interrupt-stream", "action": "respond"},
                 ),
-                GraphRuntimeStreamEvent(
-                    "graph_run_succeeded",
+                TypedGraphStreamEvent(
+                    "graph_output",
                     {"retrieval_trace": {"final_decision": "answer_with_evidence"}},
                 ),
-                GraphRuntimeStreamEvent(
-                    "graph_run_failed",
+                TypedGraphStreamEvent(
+                    "graph_error",
                     {"code": "MODEL_INVOCATION_FAILED", "request_id": "req-stream"},
                 ),
             ]
@@ -2077,7 +2216,6 @@ def test_graph_stream_event_mapper_keeps_business_event_protocol() -> None:
         "error",
     ]
     assert all(not event.event.startswith("graph_") for event in events)
-    assert all("graph_run_created" not in event.data for event in events)
     thinking_payloads = [event.data for event in events if event.event == "thinking"]
     assert thinking_payloads
     assert all("messages" not in payload for payload in thinking_payloads)
@@ -2090,9 +2228,12 @@ def test_graph_stream_event_mapper_converts_audit_events_to_safe_thinking_status
     events = list(
         mapper.map_events(
             [
-                GraphRuntimeStreamEvent("history_snapshot", {"messages": [{"content": "old"}]}),
-                GraphRuntimeStreamEvent(
-                    "retrieval_tool_result",
+                TypedGraphStreamEvent(
+                    "safe_thinking",
+                    {"stage": "history", "messages": [{"content": "old"}]},
+                ),
+                TypedGraphStreamEvent(
+                    "safe_thinking",
                     {"retrieval_trace": {"final_decision": "answer_with_evidence"}},
                 ),
             ]
@@ -2103,6 +2244,122 @@ def test_graph_stream_event_mapper_converts_audit_events_to_safe_thinking_status
     assert all("messages" not in event.data for event in events)
     assert all("retrieval_trace" not in event.data for event in events)
     assert all("status" in event.data or "message" in event.data for event in events)
+
+
+def test_graph_stream_event_mapper_maps_typed_stream_events_safely() -> None:
+    mapper = GraphStreamEventMapper()
+
+    events = list(
+        mapper.map_events(
+            [
+                TypedGraphStreamEvent("graph_start", {"request_id": "req-typed"}),
+                TypedGraphStreamEvent(
+                    "safe_thinking",
+                    {
+                        "stage": "model",
+                        "messages": [{"content": "hidden history"}],
+                        "checkpoint": {"raw": "hidden"},
+                    },
+                ),
+                TypedGraphStreamEvent("model_chunk", {"delta": "hello"}),
+                TypedGraphStreamEvent(
+                    "interrupt",
+                    {
+                        "hitl": {"interrupt_id": "interrupt-typed"},
+                        "workflow_state": "waiting_user",
+                        "tool_args": {"secret": "hidden"},
+                    },
+                ),
+                TypedGraphStreamEvent("graph_output", {"answer": "hello"}),
+                TypedGraphStreamEvent("graph_error", {"code": "GRAPH_FAILED"}),
+            ]
+        )
+    )
+
+    assert [event.event for event in events] == [
+        "start",
+        "thinking",
+        "chunk",
+        "waiting_user",
+        "done",
+        "error",
+    ]
+    assert events[1].data == {
+        "state": "running",
+        "stage": "model",
+        "message": "正在处理图运行状态。",
+    }
+    assert events[3].data["hitl"]["interrupt_id"] == "interrupt-typed"
+    assert "tool_args" not in events[3].data
+
+
+def test_graph_stream_event_mapper_filters_unsafe_nested_payloads_and_keeps_safe_observability() -> None:
+    mapper = GraphStreamEventMapper()
+
+    event = mapper.map_event(
+        TypedGraphStreamEvent(
+            "graph_output",
+            {
+                "answer": "safe answer",
+                "prompt": "hidden prompt",
+                "full_history": [{"content": "hidden history"}],
+                "checkpoint": {"raw": "hidden checkpoint"},
+                "retrieval_trace": {
+                    "final_decision": "answer_with_evidence",
+                    "raw_tool_arguments": {"query": "secret query"},
+                    "top_k_chunks": [{"citation_id": "doc-1"}],
+                },
+                "observability": {
+                    "provider": "fake-provider",
+                    "complexity": "simple",
+                    "model_latency_ms": 12.5,
+                    "retry_count": 1,
+                    "tools": [
+                        {
+                            "tool_name": "agentic_rag",
+                            "tool_status": "succeeded",
+                            "arguments": {"query": "secret query"},
+                        }
+                    ],
+                    "messages": [{"content": "hidden"}],
+                    "raw_provider_payload": {"token": "secret"},
+                    "error_classification": "provider_error",
+                },
+                "metadata": {"hidden_cot": "never expose", "safe_flag": True},
+            },
+        )
+    )
+
+    assert event.event == "done"
+    assert event.data["answer"] == "safe answer"
+    assert event.data["retrieval_trace"]["final_decision"] == "answer_with_evidence"
+    assert event.data["retrieval_trace"]["top_k_chunks"] == [{"citation_id": "doc-1"}]
+    assert "prompt" not in event.data
+    assert "full_history" not in event.data
+    assert "checkpoint" not in event.data
+    assert "raw_tool_arguments" not in event.data["retrieval_trace"]
+    assert event.data["metadata"] == {"safe_flag": True}
+    assert event.data["observability"] == {
+        "provider": "fake-provider",
+        "complexity": "simple",
+        "model_latency_ms": 12.5,
+        "retry_count": 1,
+        "tools": [{"tool_name": "agentic_rag", "tool_status": "succeeded"}],
+        "error_classification": "provider_error",
+    }
+
+
+def test_graph_stream_event_mapper_maps_langgraph_interrupt_part() -> None:
+    mapper = GraphStreamEventMapper()
+
+    event = mapper.map_typed_stream_part(
+        ("updates", {"__interrupt__": [{"value": {"hitl": {"interrupt_id": "i1"}}}]})
+    )
+
+    assert event is not None
+    assert event.event == "waiting_user"
+    assert event.data["hitl"]["interrupt_id"] == "i1"
+    assert event.data["workflow_state"] == "waiting_user"
 
 
 def _build_chat_graph_runtime(test_name: str) -> ChatGraphRuntime:

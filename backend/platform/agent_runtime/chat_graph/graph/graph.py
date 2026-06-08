@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from typing import Any
 
@@ -13,6 +13,9 @@ from backend.platform.agent_runtime.chat_graph.graph.edges import (
 )
 from backend.platform.agent_runtime.chat_graph.graph.nodes.final_synthesis import (
     build_final_synthesis_node,
+)
+from backend.platform.agent_runtime.chat_graph.graph.nodes.interrupt_wait import (
+    build_interrupt_wait_node,
 )
 from backend.platform.agent_runtime.chat_graph.graph.nodes.maybe_hitl_wait import (
     build_maybe_hitl_wait_node,
@@ -41,12 +44,12 @@ from backend.platform.agent_runtime.chat_graph.graph.nodes.select_mode import (
 from backend.platform.agent_runtime.chat_graph.graph.nodes.self_check_guard import (
     build_self_check_guard_node,
 )
-from backend.platform.agent_runtime.graph_logging import (
-    wrap_graph_node,
-    wrap_graph_route,
+from backend.platform.agent_runtime.graph.support import (
+    add_guarded_logged_node,
+    add_logged_node,
 )
-from backend.platform.workflow.langgraph.guards import register_guarded_node
-from backend.platform.workflow.langgraph.state import RuntimeGraphState
+from backend.platform.agent_runtime.observability.graph_logging import wrap_graph_route
+from backend.platform.workflow.langgraph.state import RuntimeGraphContext, RuntimeGraphState
 
 CHAT_GRAPH_NAME = "chat_graph"
 GUARDED_CHAT_NODES = {
@@ -64,7 +67,7 @@ def build_chat_graph(
     checkpointer: Any | None = None,
 ) -> Any:
     """编排顶层 ChatGraph 拓扑。"""
-    builder = StateGraph(RuntimeGraphState)
+    builder = StateGraph(RuntimeGraphState, context_schema=RuntimeGraphContext)
 
     _add_logged_node(builder, "prepare_turn", build_prepare_turn_node(dependencies))
     _add_logged_node(builder, "select_mode", build_select_mode_node(dependencies))
@@ -77,6 +80,7 @@ def build_chat_graph(
         build_resolve_answer_mode_node(dependencies),
     )
     _add_logged_node(builder, "maybe_hitl_wait", build_maybe_hitl_wait_node(dependencies))
+    _add_logged_node(builder, "interrupt_wait", build_interrupt_wait_node())
     _add_guarded_logged_node(builder, "self_check_guard", build_self_check_guard_node(dependencies))
     _add_guarded_logged_node(builder, "final_synthesis", build_final_synthesis_node(dependencies))
     _add_guarded_logged_node(builder, "persist_turn", build_persist_turn_node(dependencies))
@@ -100,11 +104,12 @@ def build_chat_graph(
         wrap_graph_route(
             graph_name=CHAT_GRAPH_NAME,
             route_name="maybe_hitl_wait",
-            route=lambda state: END
+            route=lambda state: "interrupt_wait"
             if state.get("status") == "waiting_user"
             else "self_check_guard",
         ),
     )
+    builder.add_edge("interrupt_wait", END)
     builder.add_conditional_edges(
         "self_check_guard",
         wrap_graph_route(
@@ -122,27 +127,20 @@ def build_chat_graph(
 
 
 def _add_logged_node(builder: StateGraph, node_name: str, node: Any) -> None:
-    builder.add_node(
-        node_name,
-        wrap_graph_node(
-            graph_name=CHAT_GRAPH_NAME,
-            node_name=node_name,
-            node=node,
-        ),
+    add_logged_node(
+        builder,
+        graph_name=CHAT_GRAPH_NAME,
+        node_name=node_name,
+        node=node,
     )
 
 
 def _add_guarded_logged_node(builder: StateGraph, node_name: str, node: Any) -> None:
-    # 节点 guard 只处理框架级异常，业务状态流转仍由节点自身负责。
-    register_guarded_node(
+    add_guarded_logged_node(
         builder,
-        node_name,
-        wrap_graph_node(
-            graph_name=CHAT_GRAPH_NAME,
-            node_name=node_name,
-            node=node,
-        ),
         graph_name=CHAT_GRAPH_NAME,
+        node_name=node_name,
+        node=node,
         source=GUARDED_CHAT_NODES[node_name],
-        metadata={"guard_scope": "chat_graph"},
+        guard_scope="chat_graph",
     )

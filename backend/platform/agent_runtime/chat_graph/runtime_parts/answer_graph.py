@@ -14,7 +14,7 @@ class AnswerGraphMixin:
         prepared: PreparedGraphTurn,
         answer_builder: AnswerBuilder,
         select_agent_mode: Callable[[PreparedGraphTurn], dict[str, Any]] | None = None,
-        build_react_graph_deps: Callable[[PreparedGraphTurn, dict[str, Any]], Any] | None = None,
+        build_react_deps: Callable[[PreparedGraphTurn, dict[str, Any]], Any] | None = None,
         build_plan_graph_deps: Callable[[PreparedGraphTurn, dict[str, Any]], Any] | None = None,
         build_prepared_from_state: Callable[
             [PreparedGraphTurn, dict[str, Any]],
@@ -31,7 +31,7 @@ class AnswerGraphMixin:
                 answer_builder=answer_builder,
                 build_agent_runtime_success_update=self._build_agent_runtime_success_update,
                 select_agent_mode=select_agent_mode,
-                build_react_graph_deps=build_react_graph_deps,
+                build_react_deps=build_react_deps,
                 build_plan_graph_deps=build_plan_graph_deps,
                 build_prepared_from_state=build_prepared_from_state,
                 build_hitl_wait_update=build_hitl_wait_update,
