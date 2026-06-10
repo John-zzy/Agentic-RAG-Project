@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -39,6 +39,7 @@ AnswerBuilder = Callable[[PreparedChatTurn], tuple[str, list[Any]]]
 HistoryLoader = Callable[[PreparedChatTurn], Sequence[BaseMessage]]
 HitlApproveExecutor = Callable[[Mapping[str, Any]], Mapping[str, Any] | None]
 HitlRespondHandler = Callable[[Mapping[str, Any], RuntimeGraphState], Mapping[str, Any] | None]
+HitlPlanToolExecutor = Any
 
 
 class ChatGraphDependencies(Protocol):
@@ -51,7 +52,7 @@ class ChatGraphDependencies(Protocol):
         dict[str, Any],
     ]
     select_agent_mode: Callable[[PreparedChatTurn], dict[str, Any]] | None
-    build_react_graph_deps: Callable[[PreparedChatTurn, RuntimeGraphState], Any] | None
+    build_react_deps: Callable[[PreparedChatTurn, RuntimeGraphState], Any] | None
     build_plan_graph_deps: Callable[[PreparedChatTurn, RuntimeGraphState], Any] | None
     build_prepared_from_state: Callable[
         [PreparedChatTurn, RuntimeGraphState],

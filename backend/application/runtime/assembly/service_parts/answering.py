@@ -4,7 +4,6 @@ from collections.abc import Iterator
 from typing import Any
 
 from langchain_core.messages import BaseMessage
-from langchain_core.runnables.history import RunnableWithMessageHistory
 
 from backend.application.runtime.api.chat.schemas import Citation
 from backend.application.runtime.assembly.service_parts.contracts import (
@@ -14,7 +13,7 @@ from backend.application.runtime.assembly.service_parts.contracts import (
 from backend.platform.workflow.langgraph.state import RuntimeGraphState
 from backend.platform.memory.base.chat_history import SQLiteChatMessageHistory
 from backend.platform.models.base.router import TaskComplexity
-from backend.platform.agent_runtime.graph_logging import log_llm_output
+from backend.platform.agent_runtime.observability.graph_logging import log_llm_output
 
 
 class ChatAnsweringMixin:
@@ -38,7 +37,7 @@ class ChatAnsweringMixin:
             answer_builder=self._generate_answer_direct,
             history_loader=self._load_graph_seed_history,
             select_agent_mode=self._select_agent_mode_for_graph,
-            build_react_graph_deps=self._build_react_graph_deps,
+            build_react_deps=self._build_react_deps,
             build_plan_graph_deps=self._build_plan_graph_deps,
             build_prepared_from_state=self._prepared_from_graph_state,
             build_hitl_wait_update=self._build_hitl_wait_update_for_graph,
@@ -83,7 +82,6 @@ class ChatAnsweringMixin:
             answer = self.model.invoke_runnable(
                 runnable,
                 self._build_answer_variables(prepared),
-                config=self._build_runnable_config(prepared.session_id),
             )
             log_llm_output(
                 source="evidence_answer",
@@ -121,7 +119,6 @@ class ChatAnsweringMixin:
             for chunk in self.model.stream_runnable(
                     runnable,
                     self._build_answer_variables(prepared),
-                    config=self._build_runnable_config(prepared.session_id),
             ):
                 yield str(chunk)
         except ValueError as exc:
@@ -182,8 +179,7 @@ class ChatAnsweringMixin:
             runnable = self._get_direct_answer_runnable(prepared)
             answer = self.model.invoke_runnable(
                 runnable,
-                {"input": prepared.user_message},
-                config=self._build_runnable_config(prepared.session_id),
+                self._build_direct_answer_variables(prepared),
             )
             log_llm_output(
                 source="direct_answer",
@@ -237,6 +233,14 @@ class ChatAnsweringMixin:
         """构造最终回答模板需要的变量。"""
         return {
             "context": self._citation_mapper.build_answer_documents(prepared.documents),
+            "history": self._load_prompt_history(prepared),
+            "input": prepared.user_message,
+        }
+
+    def _build_direct_answer_variables(self, prepared: PreparedChatTurn) -> dict[str, Any]:
+        """构造普通回答模板变量。"""
+        return {
+            "history": self._load_prompt_history(prepared),
             "input": prepared.user_message,
         }
 
@@ -253,45 +257,24 @@ class ChatAnsweringMixin:
         self._answer_base_runnables[complexity] = runnable
         return runnable
 
-    def _get_answer_runnable(self, prepared: PreparedChatTurn) -> RunnableWithMessageHistory:
-        """为当前请求构建带消息历史的回答 runnable。"""
-        base_runnable = self._get_answer_base_runnable(prepared.complexity or "simple")
+    def _get_answer_runnable(self, prepared: PreparedChatTurn) -> Any:
+        """为当前请求解析最终回答 runnable。"""
+        return self._get_answer_base_runnable(prepared.complexity or "simple")
 
-        def history_factory(session_id: str) -> SQLiteChatMessageHistory:
-            return self._get_session_history(
-                session_id,
-                request_id=prepared.request_id,
-                timestamp=prepared.timestamp,
-            )
-
-        runnable = RunnableWithMessageHistory(
-            base_runnable,
-            history_factory,
-            input_messages_key="input",
-            history_messages_key="history",
-        )
-        return runnable
-
-    def _get_direct_answer_runnable(self, prepared: PreparedChatTurn) -> RunnableWithMessageHistory:
-        """为无需知识库的普通回答构建带历史的 runnable。"""
-        base_runnable = self.model.get_runnable(
+    def _get_direct_answer_runnable(self, prepared: PreparedChatTurn) -> Any:
+        """为无需知识库的普通回答构建 runnable。"""
+        return self.model.get_runnable(
             complexity=prepared.complexity or "simple",
             prompt_template=self._direct_answer_template,
         )
 
-        def history_factory(session_id: str) -> SQLiteChatMessageHistory:
-            return self._get_session_history(
-                session_id,
-                request_id=prepared.request_id,
-                timestamp=prepared.timestamp,
-            )
-
-        return RunnableWithMessageHistory(
-            base_runnable,
-            history_factory,
-            input_messages_key="input",
-            history_messages_key="history",
-        )
+    def _load_prompt_history(self, prepared: PreparedChatTurn) -> list[BaseMessage]:
+        """从会话存储读取 prompt 历史，显式传入 LangChain prompt。"""
+        return self._get_session_history(
+            prepared.session_id,
+            request_id=prepared.request_id,
+            timestamp=prepared.timestamp,
+        ).messages
 
     def _get_session_history(
             self,
@@ -309,9 +292,4 @@ class ChatAnsweringMixin:
             message_limit=self.settings.session.window_size * 2,
             message_transform=self.context_builder.trim_messages,
         )
-
-    def _build_runnable_config(self, session_id: str) -> dict[str, Any]:
-        """构造 RunnableWithMessageHistory 所需的 configurable config。"""
-        return {"configurable": {"session_id": session_id}}
-
 

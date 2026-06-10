@@ -1,21 +1,26 @@
-from concurrent.futures import ThreadPoolExecutor
+﻿from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
+import ast
 import json
 from threading import Event, Lock
 from typing import Any
 
 from fastapi.testclient import TestClient
 from langchain_core.documents import Document
+from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_core.messages import AIMessage
 from langchain_core.messages import BaseMessage
+from langchain_core.outputs import ChatGeneration, ChatResult
 from langchain_core.prompt_values import ChatPromptValue
 from langchain_core.runnables import RunnableLambda, RunnableSerializable
 
 from backend.application.runtime.api.app import create_app
 from backend.application.runtime.api.chat.schemas import ChatRequest
 from backend.application.runtime import ChatService, SceneChatService, build_default_scene_registry
-from backend.platform.agent_runtime.contracts import ReActAction, ReActRun, ReActTurn, ToolObservation
-from backend.platform.agent_runtime.rag_tools import AGENTIC_RAG_TOOL_NAME, NATIVE_RAG_TOOL_NAME
-from backend.platform.agent_runtime.tool_executor import ToolExecutor
+from backend.platform.agent_runtime.core.contracts import ReActAction, ReActRun, ReActTurn, ToolObservation
+from backend.platform.agent_runtime.plan.planner import PlanDraft, PlanStepDraft
+from backend.platform.agent_runtime.tooling.rag import AGENTIC_RAG_TOOL_NAME, NATIVE_RAG_TOOL_NAME
+from backend.platform.agent_runtime.tooling.executor import ToolExecutor
 from backend.platform.config.settings import AppSettings
 from backend.platform.knowledge.repositories import VectorStoreFactory
 from backend.platform.memory.base.session_store import SQLiteSessionStore
@@ -157,13 +162,19 @@ class QueryFilteredFakeDocumentRetrievalService(FakeDocumentRetrievalService):
 
 
 class FakeModel:
-    def __init__(self, answer: str = "mock-answer", stream_chunks: list[str] | None = None) -> None:
+    def __init__(
+        self,
+        answer: str = "mock-answer",
+        stream_chunks: list[str] | None = None,
+        plan_draft: PlanDraft | None = None,
+    ) -> None:
         self.answer = answer
         self.get_runnable_calls: list[str] = []
         self.invoke_runnable_calls: list[dict[str, Any]] = []
         self.stream_runnable_calls: list[dict[str, Any]] = []
         self.history_recorder = HistoryRecorder()
         self.stream_chunks = stream_chunks or [answer]
+        self.plan_draft = plan_draft
 
     def get_runnable(
         self,
@@ -228,18 +239,102 @@ class FakeModel:
         self,
         complexity: str = "simple",
     ):
-        raise AssertionError("runtime should use get_runnable instead of build_chat_model_for_complexity")
+        del complexity
+        return _FakeProviderChatModel(answer=self.answer, plan_draft=self.plan_draft)
 
-    def invoke_template(self, prompt_template: Any, variables: dict[str, Any], complexity: str = "simple") -> str:
-        raise AssertionError("runtime should use invoke_runnable instead of invoke_template")
+    def get_chat_model_provider(self) -> Any:
+        return lambda complexity="simple": self.build_chat_model_for_complexity(complexity)
 
-    def stream_template(
+
+class _FakeProviderChatModel(BaseChatModel):
+    answer: str
+    plan_draft: PlanDraft | None = None
+    bound_tool_names: list[str] = []
+    call_count: int = 0
+
+    @property
+    def _llm_type(self) -> str:
+        return "fake-provider-chat-model"
+
+    def bind_tools(
         self,
-        prompt_template: Any,
-        variables: dict[str, Any],
-        complexity: str = "simple",
-    ):
-        raise AssertionError("runtime should use stream_runnable instead of stream_template")
+        tools: Any,
+        *,
+        tool_choice: str | None = None,
+        **kwargs: Any,
+    ) -> BaseChatModel:
+        del tool_choice, kwargs
+        object.__setattr__(
+            self,
+            "bound_tool_names",
+            [str(getattr(tool, "name", tool)) for tool in tools],
+        )
+        return self
+
+    def with_structured_output(self, schema: Any, **kwargs: Any) -> RunnableSerializable[Any, Any]:
+        del kwargs
+        if schema is PlanDraft:
+            return _FakePlanStructuredModel(plan_draft=self.plan_draft)
+        return super().with_structured_output(schema)
+
+    def _generate(
+        self,
+        messages: list[BaseMessage],
+        stop: list[str] | None = None,
+        run_manager: Any = None,
+        **kwargs: Any,
+    ) -> ChatResult:
+        del stop, run_manager, kwargs
+        next_count = self.call_count + 1
+        object.__setattr__(self, "call_count", next_count)
+        if self.bound_tool_names and next_count == 1:
+            message = AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": self.bound_tool_names[0],
+                        "args": {"query": _latest_user_message(messages)},
+                        "id": "call-fake-provider-1",
+                    }
+                ],
+            )
+        else:
+            message = AIMessage(content=self.answer)
+        return ChatResult(generations=[ChatGeneration(message=message)])
+
+
+def _latest_user_message(messages: list[BaseMessage]) -> str:
+    for message in reversed(messages):
+        if message.type == "human":
+            return str(message.content)
+    return "test query"
+
+
+class _FakePlanStructuredModel(RunnableSerializable[Any, PlanDraft]):
+    plan_draft: PlanDraft | None = None
+
+    def invoke(
+        self,
+        input: Any,
+        config: Any | None = None,
+        **kwargs: Any,
+    ) -> PlanDraft:
+        del config, kwargs
+        if self.plan_draft is not None:
+            return self.plan_draft
+        prompt_text = _prompt_text(input)
+        tool_name = _first_plan_allowed_tool(prompt_text)
+        return PlanDraft(
+            steps=[
+                PlanStepDraft(
+                    step_id="step-1",
+                    goal="调用允许的检索工具收集证据。",
+                    tool_name=tool_name,
+                    input=_plan_default_input(prompt_text, tool_name=tool_name),
+                )
+            ],
+            rationale_summary="测试默认计划：选择一个可执行 RAG 工具。",
+        )
 
 
 class FakeRewriteModel:
@@ -420,6 +515,26 @@ class DirectAnswerModel(FakeModel):
             output_parser=output_parser,
         )
 
+    def build_chat_model_for_complexity(
+        self,
+        complexity: str = "simple",
+    ):
+        del complexity
+        return _DirectAnswerChatModel(answer=self.answer)
+
+
+class _DirectAnswerChatModel(_FakeProviderChatModel):
+    def bind_tools(
+        self,
+        tools: Any,
+        *,
+        tool_choice: str | None = None,
+        **kwargs: Any,
+    ) -> BaseChatModel:
+        del tools, tool_choice, kwargs
+        object.__setattr__(self, "bound_tool_names", [])
+        return self
+
 
 def _is_react_selector_prompt(prompt_template: Any | None) -> bool:
     template = str(getattr(prompt_template, "template", "") or "")
@@ -431,7 +546,61 @@ def _prompt_text(input: Any) -> str:
         return "\n".join(str(message.content) for message in input.to_messages())
     if isinstance(input, list) and all(isinstance(message, BaseMessage) for message in input):
         return "\n".join(str(message.content) for message in input)
+    if isinstance(input, list) and all(isinstance(message, dict) for message in input):
+        return "\n".join(str(message.get("content") or "") for message in input)
     return str(input)
+
+
+def _first_plan_allowed_tool(prompt_text: str) -> str:
+    tools = _plan_allowed_tools(prompt_text)
+    for preferred_tool in (AGENTIC_RAG_TOOL_NAME, NATIVE_RAG_TOOL_NAME):
+        if preferred_tool in tools:
+            return preferred_tool
+    return tools[0] if tools else AGENTIC_RAG_TOOL_NAME
+
+
+def _plan_default_input(prompt_text: str, *, tool_name: str) -> dict[str, Any]:
+    for tool in _plan_tool_payloads(prompt_text):
+        if str(tool.get("name") or "") != tool_name:
+            continue
+        default_input = tool.get("default_input")
+        if isinstance(default_input, dict) and default_input:
+            return dict(default_input)
+    return {"query": _plan_user_goal(prompt_text)}
+
+
+def _plan_allowed_tools(prompt_text: str) -> list[str]:
+    return [
+        str(tool.get("name") or "")
+        for tool in _plan_tool_payloads(prompt_text)
+        if tool.get("name")
+    ]
+
+
+def _plan_tool_payloads(prompt_text: str) -> list[dict[str, Any]]:
+    raw_value = _line_after_label(prompt_text, "Allowed tools and default inputs:")
+    if not raw_value:
+        return []
+    try:
+        parsed = ast.literal_eval(raw_value)
+    except (SyntaxError, ValueError):
+        return []
+    if not isinstance(parsed, list):
+        return []
+    return [dict(item) for item in parsed if isinstance(item, dict)]
+
+
+def _plan_user_goal(prompt_text: str) -> str:
+    return _line_after_label(prompt_text, "User goal:") or "test query"
+
+
+def _line_after_label(prompt_text: str, label: str) -> str:
+    start = prompt_text.find(label)
+    if start < 0:
+        return ""
+    start += len(label)
+    lines = prompt_text[start:].splitlines()
+    return lines[0].strip() if lines else ""
 
 
 def _react_previous_turn_count(prompt_text: str) -> int:
@@ -1017,6 +1186,12 @@ def test_chat_api_sse_success_path_returns_structured_events() -> None:
     assert start_payload["agent_mode"] == "react"
     assert start_payload["state"] == "running"
     assert start_payload["state_event"] == "run_start"
+    assert start_payload["observability"]["provider"] == "FakeModel"
+    assert start_payload["observability"]["complexity"] == "simple"
+    assert start_payload["observability"]["retry_count"] == 0
+    assert start_payload["observability"]["tools"] == [
+        {"tool_name": AGENTIC_RAG_TOOL_NAME, "tool_status": "succeeded"}
+    ]
     assert "".join(payload["delta"] for payload in chunk_payloads) == (
         "推荐 P001，续航表现较好。[1]"
     )
@@ -1031,6 +1206,10 @@ def test_chat_api_sse_success_path_returns_structured_events() -> None:
     assert done_payload["retrieval_trace"]["final_decision"] == "answer_with_evidence"
     assert done_payload["retrieval_trace"]["top_k_chunks"][0]["citation_id"] == "chunk-doc-1"
     assert done_payload["retrieval_trace"]["citations"] == done_payload["citations"]
+    assert done_payload["observability"] == start_payload["observability"]
+    assert "prompt" not in json.dumps(done_payload, ensure_ascii=False)
+    assert "full_history" not in json.dumps(done_payload, ensure_ascii=False)
+    assert "tool_args" not in json.dumps(done_payload, ensure_ascii=False)
     saved_turns, total_turns = service.session_store.get_session_detail(
         done_payload["session_id"],
         limit=10,
@@ -1061,6 +1240,70 @@ def test_chat_api_sse_success_path_returns_structured_events() -> None:
     assert model.get_runnable_calls == ["simple"]
     assert len(model.invoke_runnable_calls) == 1
     assert model.stream_runnable_calls == []
+
+
+def test_chat_api_stream_done_matches_non_stream_projection_for_stable_fields() -> None:
+    def _build_service(test_name: str) -> SceneChatService:
+        document_retrieval_service = FakeDocumentRetrievalService(
+            documents=[
+                _result(
+                    doc_id="doc-consistency",
+                    content="AeroPhone X 电池 5000mAh，当前有货。",
+                    score=0.94,
+                    metadata={
+                        "document_id": "doc-consistency",
+                        "source_path": "consistency.md",
+                        "namespace": "documents",
+                        "is_managed_document": True,
+                        "chunk_id": "chunk-consistency",
+                        "chunk_index": 0,
+                    },
+                )
+            ]
+        )
+        return _build_chat_service(
+            test_name,
+            FakeKnowledgeService(),
+            document_retrieval_service,
+            FakeModel(answer="AeroPhone X 当前有货，电池 5000mAh。[1]"),
+        )
+
+    non_stream_app = create_app(
+        chat_service=_build_service("chat-api-non-stream-consistency")
+    )
+    stream_app = create_app(chat_service=_build_service("chat-api-stream-consistency"))
+
+    with TestClient(non_stream_app) as client:
+        non_stream_response = client.post(
+            "/chat",
+            json={"message": "AeroPhone X 续航和库存", "stream": False},
+        )
+    with TestClient(stream_app) as client:
+        stream_response = client.post(
+            "/chat",
+            json={"message": "AeroPhone X 续航和库存", "stream": True},
+        )
+
+    assert non_stream_response.status_code == 200
+    assert stream_response.status_code == 200
+    non_stream_payload = non_stream_response.json()
+    stream_events = _parse_sse_events(stream_response.text)
+    _assert_display_sse_events(stream_events)
+    done_payload = json.loads(stream_events[-1]["data"])
+
+    for field_name in (
+        "answer",
+        "knowledge_used",
+        "state",
+        "final_state",
+        "state_event",
+        "citations",
+    ):
+        assert done_payload[field_name] == non_stream_payload[field_name]
+    assert done_payload["retrieval_trace"] == non_stream_payload["retrieval_trace"]
+    assert done_payload["observability"]["tools"] == [
+        {"tool_name": AGENTIC_RAG_TOOL_NAME, "tool_status": "succeeded"}
+    ]
 
 
 def test_chat_api_sse_plan_request_uses_plan_step_tool_stage() -> None:
@@ -1121,7 +1364,7 @@ def test_chat_api_sse_plan_request_uses_plan_step_tool_stage() -> None:
     assert restored.checkpoint["channel_values"]["current_turn_id"] is None
     assert restored.checkpoint["channel_values"]["tool_observation"]["tool_name"] == "agentic_rag_search"
     planner_metadata = restored.checkpoint["channel_values"]["plan_run"]["metadata"]["planner"]
-    assert planner_metadata["step_source"] == "scene_policy.plan_tools"
+    assert planner_metadata["step_source"] == "llm_structured_output"
 
 
 def test_chat_api_plan_mode_uses_scene_policy_multi_step_plan() -> None:
@@ -1170,7 +1413,27 @@ def test_chat_api_plan_mode_uses_scene_policy_multi_step_plan() -> None:
         ),
         session_store=SQLiteSessionStore(sqlite_path=sqlite_path),
         context_builder=PromptContextBuilder(window_size=3),
-        model=FakeModel(answer="按计划汇总完成。"),
+        model=FakeModel(
+            answer="按计划汇总完成。",
+            plan_draft=PlanDraft(
+                steps=[
+                    PlanStepDraft(
+                        step_id="collect-native",
+                        goal="先做 native 检索",
+                        tool_name=NATIVE_RAG_TOOL_NAME,
+                        input={"query": "第一步"},
+                    ),
+                    PlanStepDraft(
+                        step_id="collect-agentic",
+                        goal="再做 agentic 检索",
+                        tool_name=AGENTIC_RAG_TOOL_NAME,
+                        input={"query": "第二步"},
+                        depends_on=["collect-native"],
+                    ),
+                ],
+                rationale_summary="测试多步计划由 LLM structured output 返回。",
+            ),
+        ),
     )
     app = create_app(chat_service=service)
 
@@ -1201,7 +1464,7 @@ def test_chat_api_plan_mode_uses_scene_policy_multi_step_plan() -> None:
     assert [step["status"] for step in plan_run["steps"]] == ["succeeded", "succeeded"]
     assert plan_run["metadata"]["execution_order"] == ["collect-native", "collect-agentic"]
     assert len(plan_run["observations"]) == 2
-    assert plan_run["metadata"]["planner"]["step_source"] == "scene_policy.plan_steps"
+    assert plan_run["metadata"]["planner"]["step_source"] == "llm_structured_output"
     assert retriever.calls[0]["method"] == "retrieve"
     assert retriever.calls[1]["method"] == "retrieve_with_trace"
 
@@ -1328,9 +1591,9 @@ def test_chat_api_react_aggregation_uses_all_successful_observations(monkeypatch
     )
 
     inner_service = service._get_scene_service("generic_assistant")
-    original_build_react_graph_deps = inner_service._build_react_graph_deps
+    original_build_react_deps = inner_service._build_react_deps
 
-    def _fake_build_react_graph_deps(prepared: Any, state: Any) -> Any:
+    def _fake_build_react_deps(prepared: Any, state: Any) -> Any:
         seeded_run = react_run.model_copy(
             update={
                 "session_id": prepared.session_id,
@@ -1339,11 +1602,11 @@ def test_chat_api_react_aggregation_uses_all_successful_observations(monkeypatch
             }
         )
         return replace(
-            original_build_react_graph_deps(prepared, state),
+            original_build_react_deps(prepared, state),
             initial_run=seeded_run,
         )
 
-    monkeypatch.setattr(inner_service, "_build_react_graph_deps", _fake_build_react_graph_deps)
+    monkeypatch.setattr(inner_service, "_build_react_deps", _fake_build_react_deps)
 
     with TestClient(app) as client:
         response = client.post("/chat", json={"message": "聚合测试"})
@@ -1571,9 +1834,9 @@ def test_chat_api_react_ask_user_without_observation_enters_hitl_wait(monkeypatc
     app = create_app(chat_service=service)
 
     inner_service = service._get_scene_service("generic_assistant")
-    original_build_react_graph_deps = inner_service._build_react_graph_deps
+    original_build_react_deps = inner_service._build_react_deps
 
-    def _fake_build_react_graph_deps(prepared: Any, state: Any) -> Any:
+    def _fake_build_react_deps(prepared: Any, state: Any) -> Any:
         session_id = prepared.session_id
         request_id = prepared.request_id
         message = prepared.user_message
@@ -1609,11 +1872,11 @@ def test_chat_api_react_ask_user_without_observation_enters_hitl_wait(monkeypatc
             },
         )
         return replace(
-            original_build_react_graph_deps(prepared, state),
+            original_build_react_deps(prepared, state),
             initial_run=seeded_run,
         )
 
-    monkeypatch.setattr(inner_service, "_build_react_graph_deps", _fake_build_react_graph_deps)
+    monkeypatch.setattr(inner_service, "_build_react_deps", _fake_build_react_deps)
 
     with TestClient(app) as client:
         response = client.post(
@@ -1665,7 +1928,13 @@ def test_chat_api_sse_hitl_reject_resume_returns_done_cancelled() -> None:
 
     assert wait_response.status_code == 200
     wait_events = _parse_sse_events(wait_response.text)
-    assert [event["event"] for event in wait_events] == ["start", "waiting_user"]
+    _assert_display_sse_events(wait_events, final_event="waiting_user")
+    assert [event["event"] for event in wait_events] == [
+        "start",
+        "thinking",
+        "thinking",
+        "waiting_user",
+    ]
     wait_payload = json.loads(wait_events[-1]["data"])
     assert wait_payload["state"] == "waiting_user"
     assert wait_payload["hitl"]["metadata"]["mode"] == "react"
@@ -1696,6 +1965,51 @@ def test_chat_api_sse_hitl_reject_resume_returns_done_cancelled() -> None:
     assert done_payload["final_state"] == "cancelled"
     assert done_payload["state_event"] == "resume_reject"
     assert done_payload["resume_payload"]["action"] == "reject"
+
+
+def test_chat_api_stream_waiting_user_matches_non_stream_hitl_payload() -> None:
+    def _build_wait_service(test_name: str) -> SceneChatService:
+        return _build_chat_service(
+            test_name,
+            FakeKnowledgeService(),
+            FakeDocumentRetrievalService(documents=[]),
+            FakeModel(answer="unused", stream_chunks=["unused"]),
+        )
+
+    non_stream_app = create_app(
+        chat_service=_build_wait_service("chat-api-non-stream-hitl-consistency")
+    )
+    stream_app = create_app(
+        chat_service=_build_wait_service("chat-api-stream-hitl-consistency")
+    )
+
+    request_json = {
+        "message": "查资料",
+        "hitl_clarification_enabled": True,
+    }
+    with TestClient(non_stream_app) as client:
+        non_stream_response = client.post("/chat", json={**request_json, "stream": False})
+    with TestClient(stream_app) as client:
+        stream_response = client.post("/chat", json={**request_json, "stream": True})
+
+    assert non_stream_response.status_code == 200
+    assert stream_response.status_code == 200
+    non_stream_payload = non_stream_response.json()
+    stream_events = _parse_sse_events(stream_response.text)
+    _assert_display_sse_events(stream_events, final_event="waiting_user")
+    wait_payload = json.loads(stream_events[-1]["data"])
+
+    assert wait_payload["state"] == non_stream_payload["state"] == "waiting_user"
+    assert wait_payload["final_state"] == non_stream_payload["final_state"] == "waiting_user"
+    assert wait_payload["retrieval_trace"] == non_stream_payload["retrieval_trace"]
+    assert wait_payload["hitl"]["pending_action"] == non_stream_payload["hitl"]["pending_action"]
+    assert wait_payload["hitl"]["allowed_actions"] == non_stream_payload["hitl"]["allowed_actions"]
+    assert wait_payload["hitl"]["metadata"]["mode"] == non_stream_payload["hitl"]["metadata"]["mode"]
+    assert wait_payload["hitl"]["interrupt_id"]
+    assert wait_payload["hitl"]["thread_id"] == wait_payload["session_id"]
+    assert wait_payload["observability"]["tools"] == [
+        {"tool_name": AGENTIC_RAG_TOOL_NAME, "tool_status": "waiting_user"}
+    ]
 
 
 def test_chat_api_max_rounds_with_documents_does_not_use_intermediate_citations() -> None:
@@ -1817,60 +2131,6 @@ def test_chat_api_sse_failed_outcome_with_documents_keeps_tool_done_consistent()
     assert model.get_runnable_calls == []
     assert model.stream_runnable_calls == []
     assert model.invoke_runnable_calls == []
-
-
-def test_chat_api_legacy_outcome_without_final_decision_remains_compatible() -> None:
-    model = FakeModel(answer="legacy answer")
-    outcome = _ForcedOutcome(
-        documents=[_forced_document()],
-        success=True,
-        exit_reason="sufficient",
-        include_final_decision=False,
-    )
-    service = _build_forced_outcome_chat_service(
-        "chat-api-legacy-outcome-boundary",
-        outcome=outcome,
-        model=model,
-    )
-    app = create_app(chat_service=service)  # type: ignore[arg-type]
-
-    with TestClient(app) as client:
-        response = client.post("/chat", json={"message": "旧 outcome"})
-
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["knowledge_used"] is True
-    assert len(payload["citations"]) == 1
-    assert payload["retrieval_trace"]["final_decision"] == "answer_with_evidence"
-    assert payload["retrieval_trace"]["success"] is True
-    assert model.get_runnable_calls == ["simple"]
-    assert len(model.invoke_runnable_calls) == 1
-
-
-def test_chat_api_legacy_outcome_without_success_uses_documents_as_success_hint() -> None:
-    model = FakeModel(answer="legacy answer")
-    outcome = _ForcedOutcome(
-        documents=[_forced_document()],
-        success=None,
-        exit_reason="sufficient",
-        include_success=False,
-        include_final_decision=False,
-    )
-    service = _build_forced_outcome_chat_service(
-        "chat-api-legacy-outcome-no-success-boundary",
-        outcome=outcome,
-        model=model,
-    )
-    app = create_app(chat_service=service)  # type: ignore[arg-type]
-
-    with TestClient(app) as client:
-        response = client.post("/chat", json={"message": "更旧 outcome"})
-
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["knowledge_used"] is True
-    assert payload["retrieval_trace"]["final_decision"] == "answer_with_evidence"
-    assert len(model.invoke_runnable_calls) == 1
 
 
 def test_chat_api_no_evidence_decision_uses_fallback_without_citations() -> None:
@@ -3018,61 +3278,6 @@ def test_chat_documents_and_ecommerce_mounts_do_not_force_extension_when_docs_ar
     payload = response.json()
     assert payload["knowledge_used"] is True
     assert {citation["namespace"] for citation in payload["citations"]} == {"documents"}
-
-
-def test_session_detail_normalizes_legacy_retrieval_snippets() -> None:
-    service = _build_chat_service(
-        "chat-api-legacy-retrieval-snippets",
-        FakeKnowledgeService(),
-        FakeDocumentRetrievalService(),
-        FakeModel(),
-    )
-    service.session_store.append_turn(
-        session_id="legacy-session",
-        request_id="req-legacy",
-        user_message="旧问题",
-        assistant_answer="旧回答",
-        retrieval_snippets=[
-            {
-                "citation_id": "legacy-doc",
-                "namespace": "documents",
-                "snippet": "历史文档片段",
-                "score": 0.7,
-            }
-        ],
-        timestamp="2026-04-23T00:00:00+00:00",
-    )
-    app = create_app(chat_service=service)
-
-    with TestClient(app) as client:
-        response = client.get("/sessions/legacy-session")
-
-    assert response.status_code == 200
-    assistant_message = response.json()["messages"][1]
-    assert assistant_message["type"] == "ai"
-    assert assistant_message["knowledge_used"] is True
-    assert assistant_message["citations"] == [
-        {
-            "index": 1,
-            "citation_id": "legacy-doc",
-            "namespace": "documents",
-            "source_kind": "documents",
-            "source_name": "legacy-doc",
-            "source_path": None,
-            "document_id": None,
-            "chunk_id": "legacy-doc",
-            "chunk_index": None,
-            "snippet": "历史文档片段",
-            "score": 0.7,
-            "vector_score": None,
-            "keyword_score": None,
-            "vector_rank": None,
-            "keyword_rank": None,
-            "rerank_score": None,
-            "matched_by": [],
-            "rank": 1,
-        }
-    ]
 
 
 def test_session_detail_returns_message_view_with_assistant_metadata() -> None:

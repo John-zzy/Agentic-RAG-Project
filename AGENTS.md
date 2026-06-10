@@ -1,4 +1,4 @@
-# AI RAG Project Agent Guide
+﻿# AI RAG Project Agent Guide
 
 本文件服务 AI Agent：快速定位改动入口、遵守架构边界、避免高频误改。完整背景和图谱从 [docs/documents/README.md](./docs/documents/README.md) 渐进阅读；排障细节见 [common-pitfalls.md](./docs/documents/operations/common-pitfalls.md)。
 
@@ -30,7 +30,7 @@ backend/
 │  ├─ assembly/                   # runtime/service factory、settings adapter、依赖注入
 │  └─ service.py                  # /chat 主服务编排入口
 ├─ platform/                      # 通用平台能力，不感知具体业务 scene
-│  ├─ agent_runtime/              # ChatGraph、ReAct、Plan、tool executor、RAG tool adapter
+│  ├─ agent_runtime/              # ChatGraph、LangChain ReAct provider、Plan、middleware、core、tooling
 │  ├─ workflow/                   # workflow 状态机、LangGraph lifecycle/checkpoint
 │  ├─ rag/                        # Agentic RAG、query rewrite、document retrieval、rerank 边界
 │  ├─ knowledge/                  # 知识文档管理、发布、处理、底层仓储
@@ -51,7 +51,7 @@ backend/
 常用下钻入口：
 
 - 改 `/chat`：从 `backend/application/runtime/service.py`、`backend/application/runtime/api/chat/`、`backend/application/runtime/assembly/service_parts/` 开始。
-- 改 ChatGraph / ReAct / Plan：从 `backend/platform/agent_runtime/chat_graph/`、`backend/platform/agent_runtime/react/graph/`、`backend/platform/agent_runtime/plan/graph/` 开始。
+- 改 ChatGraph / ReAct / Plan：从 `backend/platform/agent_runtime/chat_graph/`、`backend/platform/agent_runtime/react/`、`backend/platform/agent_runtime/middleware/`、`backend/platform/agent_runtime/plan/graph/` 开始；通用 contracts/projection/validation 在 `core/`，工具执行与 RAG adapter 在 `tooling/`。
 - 改 Workflow / HITL：从 `backend/platform/workflow/state_machine.py`、`backend/platform/workflow/langgraph/`、`backend/platform/agent_runtime/chat_graph/runtime.py` 开始。
 - 改 RAG / Hybrid Search：从 `backend/platform/rag/orchestration/` 和 `backend/platform/rag/retrieval/documents/` 开始。
 - 改知识文档入库：从 `backend/platform/knowledge/documents/` 和 `backend/platform/knowledge/processing/` 开始。
@@ -63,6 +63,7 @@ backend/
 - `application` 放运行时装配、API facade、settings adapter 和具体依赖注入。
 - `scenes` 放场景定义、prompt、scene policy 和业务工具。
 - `platform.agent_runtime.chat_graph` 可放中立 ChatGraph runtime、节点和状态投影。
+- `platform.agent_runtime.react` 承接 ReAct 主路径，必须使用 LangChain `create_agent`、middleware、typed state/context 和项目 runtime projection。
 - 不要把 API schema、scene 业务实现或配置读取塞进 `platform` 或 `__init__.py`。
 - `__init__.py` 保持轻量，避免循环导入。
 

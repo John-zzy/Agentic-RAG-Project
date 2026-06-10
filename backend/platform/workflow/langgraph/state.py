@@ -88,6 +88,19 @@ class RuntimeGraphState(TypedDict):
     tool_observation: NotRequired[dict[str, Any] | None]
 
 
+class RuntimeGraphContext(TypedDict, total=False):
+    """LangGraph 节点只读运行上下文，通过 context_schema 显式声明。"""
+
+    session_id: str
+    request_id: str
+    scene: str | None
+    agent: str | None
+    agent_mode: str | None
+    answer_mode: str | None
+    checkpoint_ns: str
+    metadata: dict[str, Any]
+
+
 def build_runtime_hitl_state(
     *,
     interrupt_id: str,
@@ -122,6 +135,34 @@ def build_runtime_hitl_state(
         ],
         "allow_freeform_response": allow_freeform_response,
         "resume_payload": dict(resume_payload) if resume_payload else None,
+        "metadata": dict(metadata or {}),
+    }
+
+
+def build_runtime_graph_context(
+    *,
+    session_id: str,
+    request_id: str,
+    scene: str | None = None,
+    agent: str | None = None,
+    agent_mode: str | None = None,
+    answer_mode: str | None = None,
+    checkpoint_ns: str,
+    metadata: Mapping[str, Any] | None = None,
+) -> RuntimeGraphContext:
+    """创建 LangGraph context，避免节点从 config 或全局变量读取运行信息。"""
+    if not session_id:
+        raise ValueError("session_id is required for runtime graph context.")
+    if not request_id:
+        raise ValueError("request_id is required for runtime graph context.")
+    return {
+        "session_id": session_id,
+        "request_id": request_id,
+        "scene": scene,
+        "agent": agent,
+        "agent_mode": agent_mode,
+        "answer_mode": answer_mode,
+        "checkpoint_ns": checkpoint_ns,
         "metadata": dict(metadata or {}),
     }
 

@@ -17,31 +17,35 @@ from backend.application.runtime.assembly.service_parts.contracts import (
     RuntimeFinalDecision,
     PreparedChatTurn,
 )
-from backend.platform.agent_runtime.contracts import (
+from backend.platform.agent_runtime.core.contracts import (
     PlanRun,
     ReActRun,
     ToolObservation,
 )
-from backend.platform.agent_runtime.mode_selector import ModeSelection
+from backend.platform.agent_runtime.middleware.context import AgentRuntimeContext
+from backend.platform.agent_runtime.middleware.factory import build_agent_middleware
+from backend.platform.agent_runtime.core.mode_selector import ModeSelection
 from backend.platform.agent_runtime.plan.graph.config import PlanGraphDependencies
-from backend.platform.agent_runtime.plan.planner import MinimalPlanner
-from backend.platform.agent_runtime.projection import (
+from backend.platform.agent_runtime.plan.planner import LangChainPlanPlanner
+from backend.platform.agent_runtime.core.projection import (
     RuntimeRunProjection,
     project_runtime_run,
     raw_retrieval_trace,
 )
-from backend.platform.agent_runtime.rag_tools import (
+from backend.platform.agent_runtime.tooling.rag import (
     AGENTIC_RAG_TOOL_NAME,
     NATIVE_RAG_TOOL_NAME,
     build_rag_tool_adapters,
 )
-from backend.platform.agent_runtime.react import (
-    LLMReActActionSelector,
-    ReActScenePolicy,
+from backend.platform.agent_runtime.react import ReActScenePolicy
+from backend.platform.agent_runtime.react.config import (
+    ReActDependencies,
 )
-from backend.platform.agent_runtime.react.graph.config import ReActGraphDependencies
-from backend.platform.agent_runtime.tool_executor import ToolExecutor
-from backend.platform.agent_runtime.tool_policy import RuntimeToolPolicy
+from backend.platform.agent_runtime.react.factory import (
+    ReActProviderFactory,
+)
+from backend.platform.agent_runtime.tooling.executor import ToolExecutor
+from backend.platform.agent_runtime.tooling.policy import RuntimeToolPolicy
 from backend.platform.knowledge.sources import DEFAULT_MOUNTED_KNOWLEDGE_SOURCES
 from backend.platform.models.base.router import TaskComplexity
 from backend.scenes.base import SceneRetrievalPolicy
@@ -74,41 +78,106 @@ class ChatAgentRuntimeMixin:
             signals=dict(state.get("agent_mode_signals") or prepared.agent_mode_signals or {}),
         )
 
-    def _build_react_graph_deps(
+    def _build_react_deps(
             self,
             prepared: PreparedChatTurn,
             state: Mapping[str, Any],
-    ) -> ReActGraphDependencies:
+    ) -> ReActDependencies:
+        """为 ChatGraph 的 react_branch 节点组装 ReAct 子图运行依赖。"""
+
+        # ReAct 工具是否可用，取决于当前 session 挂载了哪些知识源。
+        # 例如只挂 documents，就只允许使用 documents 相关的检索工具。
         mounted_knowledge_sources = self._mounted_knowledge_sources_for_session(
             prepared.session_id
         )
+
+        # mode_selection 是前面 select_mode/route_mode 的结果。
+        # 这里保留下来，后面 project_result 投影回 ChatGraph 时要一起写回状态。
         mode_selection = self._mode_selection_from_graph_state(prepared, state)
+
+        # ToolExecutor 是 ReAct 真正执行工具的入口。
+        # 它会把 scene 工具、RAG 工具和幂等执行逻辑统一包起来。
         tool_executor = self._build_agent_tool_executor(
             mounted_knowledge_sources=mounted_knowledge_sources,
             request_id=prepared.request_id,
         )
+
+        # 工具策略负责回答“哪些工具可用、哪些工具高风险、默认输入是什么”。
+        # 后面的 middleware 和 runtime 都会基于这份策略限制工具调用。
         tool_policy = self._build_runtime_tool_policy(
             tool_executor=tool_executor,
             message=prepared.user_message,
             mounted_knowledge_sources=mounted_knowledge_sources,
             request_id=prepared.request_id,
         )
+
+        # scene_policy 是 ReAct 在当前场景下的运行约束，比如最多跑几轮。
         scene_policy = self._build_react_scene_policy(
             tool_policy=tool_policy,
         )
-        return ReActGraphDependencies(
+
+        # runtime_context 是跨 middleware、LangChain agent、trace、HITL 共享的上下文。
+        # workflow 里的 thread_id/checkpoint_ns 决定 LangGraph checkpoint 写到哪里。
+        runtime_context = AgentRuntimeContext.build(
+            session_id=prepared.session_id,
+            request_id=prepared.request_id,
+            scene=prepared.scene_metadata.scene,
+            mounted_knowledge_sources=mounted_knowledge_sources,
+            complexity=prepared.complexity or "simple",
+            provider_name="configured_chat_model",
+            workflow={
+                "thread_id": prepared.session_id,
+                "checkpoint_ns": f"react:{prepared.request_id}",
+                "node_name": "chat_graph.react_branch",
+                "status": "running",
+            },
+            scene_metadata={
+                "agent": prepared.scene_metadata.agent,
+                "max_turns": scene_policy.max_turns,
+            },
+        )
+
+        # middleware_bundle 会挂到 LangChain create_agent 上：
+        # 这里集中加入动态 prompt、工具边界、HITL 审核、trace 等横切能力。
+        middleware_bundle = build_agent_middleware(
+            context=runtime_context,
+            allowed_tools=sorted(tool_executor.allowed_tools),
+            high_risk_tools=tool_policy.high_risk_tools,
+            max_calls_per_tool=scene_policy.max_turns,
+        )
+
+        # provider_factory 负责创建实际的 LangChain ReAct agent。
+        # 模型来自当前配置，checkpointer 复用 ChatGraph 的 LangGraph checkpoint。
+        provider_factory = ReActProviderFactory(
+            model_provider=self.model.get_chat_model_provider(),
+            middleware_bundle=middleware_bundle,
+            checkpointer=self.graph_runtime.checkpointer,
+        )
+
+        # react_branch 只认识 ReActDependencies。
+        # 因此这里把 application 层能拿到的模型、工具、策略、投影函数打包交出去。
+        return ReActDependencies(
             tool_executor=tool_executor,
-            action_selector=LLMReActActionSelector(
-                model_client=self.model,
-                model_complexity=prepared.complexity or "simple",
-            ),
+            provider_factory=provider_factory,
+            middleware_bundle=middleware_bundle,
+            runtime_context=runtime_context,
             session_id=prepared.session_id,
             request_id=prepared.request_id,
             user_goal=prepared.user_message,
+            system_prompt=self.scene_definition.system_prompt,
+            complexity=prepared.complexity or "simple",
+            default_tool_inputs=tool_policy.default_inputs,
             react_run_id=f"react-{prepared.request_id}",
-            scene_policy=scene_policy,
-            turn_id_factory=lambda index: f"turn-{index}",
+            initial_run=(
+                # 如果 ChatGraph state 里已经有 react_run，说明可能是 checkpoint 恢复。
+                # 先转回 ReActRun，避免 ReAct runtime 重复执行已经完成的 run。
+                ReActRun.model_validate(state["react_run"])
+                if isinstance(state.get("react_run"), Mapping)
+                else None
+            ),
             max_turns=scene_policy.max_turns,
+            # ReAct runtime 只返回 ReActRun；ChatGraph 还需要 documents/citations/
+            # answer_mode 等字段，所以这里传入投影函数，把子图结果转成顶层状态更新。
             project_result=lambda run: self._project_react_graph_result(
                 run=run,
                 prepared=prepared,
@@ -136,7 +205,7 @@ class ChatAgentRuntimeMixin:
             mounted_knowledge_sources=mounted_knowledge_sources,
             request_id=prepared.request_id,
         )
-        tool_name = self._require_default_retrieval_tool(
+        self._require_default_retrieval_tool(
             tool_policy=tool_policy,
             request_id=prepared.request_id,
         )
@@ -145,17 +214,23 @@ class ChatAgentRuntimeMixin:
         )
         return PlanGraphDependencies(
             tool_executor=tool_executor,
+            planner=LangChainPlanPlanner(
+                model_provider=self.model.get_chat_model_provider(),
+                tool_executor=tool_executor,
+                model_call_guard=None,
+                plan_run_id_factory=lambda: f"plan-{prepared.request_id}",
+                step_id_factory=lambda index: f"step-{index}",
+            ),
             session_id=prepared.session_id,
             request_id=prepared.request_id,
             user_goal=prepared.user_message,
             mounted_knowledge_sources=mounted_knowledge_sources,
             candidate_tools=self._plan_candidate_tools(tool_policy=tool_policy),
             scene_policy=scene_policy,
-            planner=MinimalPlanner(
-                tool_executor=tool_executor,
-                plan_run_id_factory=lambda: f"plan-{prepared.request_id}",
-                step_id_factory=lambda index: f"step-{index}",
-            ),
+            default_tool_inputs=tool_policy.default_inputs,
+            complexity=prepared.complexity or "moderate",
+            max_plan_steps=int(scene_policy.get("max_plan_steps") or 8),
+            checkpointer=self.graph_runtime.checkpointer,
             project_result=lambda run: self._project_plan_graph_result(
                 run=run,
                 prepared=prepared,
@@ -272,6 +347,62 @@ class ChatAgentRuntimeMixin:
             "current_step_id": agent_result.current_step_id,
             "current_tool_call": agent_result.current_tool_call,
             "tool_observation": agent_result.tool_observation,
+            **self._hitl_state_update_from_react_run(agent_result.react_run),
+        }
+
+    def _hitl_state_update_from_react_run(
+            self,
+            react_run: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        if not isinstance(react_run, Mapping):
+            return {}
+        if react_run.get("workflow_status") != "waiting_user":
+            return {}
+        metadata = dict(react_run.get("metadata") or {})
+        hitl_metadata = dict(metadata.get("hitl") or {})
+        langchain_payload = dict(hitl_metadata.get("langchain") or {})
+        action_requests = list(langchain_payload.get("action_requests") or [])
+        review_configs = list(langchain_payload.get("review_configs") or [])
+        action_request = action_requests[0] if action_requests else {}
+        review_config = review_configs[0] if review_configs else {}
+        if not isinstance(action_request, Mapping):
+            action_request = {}
+        if not isinstance(review_config, Mapping):
+            review_config = {}
+        tool_name = str(action_request.get("name") or "")
+        tool_args = dict(action_request.get("args") or {})
+        interrupt_id = str(langchain_payload.get("interrupt_id") or "")
+        if not interrupt_id:
+            interrupt_id = f"hitl:{react_run.get('request_id')}:{tool_name}:1"
+        allowed_actions = [
+            str(action)
+            for action in list(review_config.get("allowed_decisions") or ["approve", "reject"])
+        ]
+        reason = str(
+            action_request.get("description")
+            or react_run.get("result_summary")
+            or "Tool execution requires approval."
+        )
+        return {
+            "status": "waiting_user",
+            "state_event": "interrupt",
+            "hitl": {
+                "interrupt_id": interrupt_id,
+                "thread_id": str(react_run.get("session_id") or ""),
+                "reason": reason,
+                "pending_action": "tool_approval",
+                "allowed_actions": allowed_actions,
+                "proposed_tool_call": {
+                    "tool_name": tool_name,
+                    "tool_call_id": str(action_request.get("id") or ""),
+                    "input_payload": tool_args,
+                },
+                "suggested_responses": [],
+                "allow_freeform_response": "respond" in allowed_actions,
+                "resume_payload": None,
+                "metadata": hitl_metadata,
+            },
+            "answer": reason,
         }
 
     def _build_agent_tool_executor(
@@ -410,12 +541,10 @@ class ChatAgentRuntimeMixin:
             *,
             tool_policy: RuntimeToolPolicy,
     ) -> dict[str, Any]:
-        """读取 scene 暴露的 plan 策略；没有策略时保持保守单工具计划。"""
+        """读取 scene 暴露的 plan 约束，供 LLM planner 参考。"""
         policy = self._agent_runtime_plan_policy()
-        if not self._has_explicit_plan_policy(policy):
-            policy["preferred_plan_tools"] = [tool_policy.require_default_retrieval_tool()]
 
-        # RAG adapter 的输入由 application 统一注入检索策略，scene 可按工具覆盖。
+        # RAG adapter 的输入由 application 统一注入检索策略，scene 只提供 planner 约束。
         plan_tool_inputs = dict(policy.get("plan_tool_inputs") or {})
         for tool_name, tool_input in tool_policy.default_inputs.items():
             plan_tool_inputs.setdefault(tool_name, dict(tool_input))
@@ -437,18 +566,6 @@ class ChatAgentRuntimeMixin:
         plan_policy = metadata.get("plan_policy")
         return dict(plan_policy) if isinstance(plan_policy, Mapping) else {}
 
-    def _has_explicit_plan_policy(self, policy: Mapping[str, Any]) -> bool:
-        return any(
-            key in policy
-            for key in (
-                "plan_steps",
-                "preferred_plan_tools",
-                "default_plan_tools",
-                "plan_tools",
-                "candidate_tools",
-            )
-        )
-
     def _plan_candidate_tools(
             self,
             *,
@@ -460,22 +577,6 @@ class ChatAgentRuntimeMixin:
             selected.append(default_tool_name)
         allowed = set(tool_policy.allowed_tools)
         return tuple(tool_name for tool_name in selected if tool_name in allowed)
-
-    def _policy_step_tool_names(self, value: Any) -> list[str]:
-        if not isinstance(value, list | tuple):
-            return []
-        tool_names: list[str] = []
-        for step in value:
-            if isinstance(step, Mapping) and isinstance(step.get("tool_name"), str):
-                tool_names.append(str(step["tool_name"]))
-        return tool_names
-
-    def _policy_tool_names(self, value: Any) -> list[str]:
-        if isinstance(value, str):
-            return [value]
-        if isinstance(value, list | tuple):
-            return [str(tool_name) for tool_name in value]
-        return []
 
     def _agent_execution_result_from_run(
             self,

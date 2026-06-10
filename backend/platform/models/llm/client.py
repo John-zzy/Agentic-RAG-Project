@@ -74,6 +74,10 @@ class ModelClient:
         """返回可直接给 LangChain Agent 或 LangGraph 使用的聊天模型。"""
         return self.build_chat_model_for_complexity(complexity)
 
+    def get_chat_model_provider(self) -> Callable[[TaskComplexity], BaseChatModel]:
+        """返回按 complexity 解析 LangChain ChatModel 的 provider。"""
+        return self.get_chat_model
+
     def get_runnable(
         self,
         complexity: TaskComplexity = "simple",
@@ -167,54 +171,28 @@ class ModelClient:
         self._chat_model_factory = ChatOpenAI
         return ChatOpenAI
 
-    def invoke_template(
-        self,
-        prompt_template: BasePromptTemplate,
-        variables: dict[str, Any],
-        complexity: TaskComplexity = "simple",
-    ) -> str:
-        """兼容 helper：基于模板执行一次同步文本调用。"""
-        runnable = self.get_runnable(
-            complexity=complexity,
-            prompt_template=prompt_template,
-            output_parser=self._output_parser,
-        )
-        return str(self.invoke_runnable(runnable, variables)).strip()
-
     def invoke(self, prompt: str, complexity: TaskComplexity = "simple") -> str:
         """使用默认模板执行一次非流式文本调用。"""
-        return self.invoke_template(
-            prompt_template=self._prompt_template,
-            variables={"prompt": prompt},
+        runnable = self.get_runnable(
             complexity=complexity,
+            prompt_template=self._prompt_template,
+            output_parser=self._output_parser,
         )
+        return str(self.invoke_runnable(runnable, {"prompt": prompt})).strip()
 
-    def stream_template(
-        self,
-        prompt_template: BasePromptTemplate,
-        variables: dict[str, Any],
-        complexity: TaskComplexity = "simple",
-    ) -> Iterator[str]:
-        """兼容 helper：基于模板执行一次流式文本调用。"""
+    def stream(self, prompt: str, complexity: TaskComplexity = "simple") -> Iterator[str]:
+        """以流式方式输出模型生成的文本片段。"""
         routed_model = get_model_for_task(complexity)
         if not routed_model.supports_streaming:
             raise ValueError(f"Streaming is not supported for model complexity: {routed_model.complexity}")
 
         runnable = self.get_runnable(
             complexity=routed_model.complexity,
-            prompt_template=prompt_template,
+            prompt_template=self._prompt_template,
             output_parser=self._output_parser,
         )
-        for chunk in self.stream_runnable(runnable, variables):
+        for chunk in self.stream_runnable(runnable, {"prompt": prompt}):
             yield str(chunk)
-
-    def stream(self, prompt: str, complexity: TaskComplexity = "simple") -> Iterator[str]:
-        """以流式方式输出模型生成的文本片段。"""
-        yield from self.stream_template(
-            prompt_template=self._prompt_template,
-            variables={"prompt": prompt},
-            complexity=complexity,
-        )
 
     def _build_guard_config(self, *, complexity: TaskComplexity | str) -> ModelGuardConfig:
         return ModelGuardConfig(complexity=str(complexity))
@@ -226,6 +204,11 @@ model_client = ModelClient()
 def get_chat_model(complexity: TaskComplexity = "simple") -> BaseChatModel:
     """模块级快捷入口，返回 LangChain 聊天模型。"""
     return model_client.get_chat_model(complexity)
+
+
+def get_chat_model_provider() -> Callable[[TaskComplexity], BaseChatModel]:
+    """模块级快捷入口，供 LangChain ReAct factory 注入模型 provider。"""
+    return model_client.get_chat_model_provider()
 
 
 def get_runnable(

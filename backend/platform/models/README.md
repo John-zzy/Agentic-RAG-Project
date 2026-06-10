@@ -268,8 +268,6 @@ classDiagram
       +get_runnable(complexity, prompt_template, output_parser) RunnableSerializable
       +invoke_runnable(runnable, input) Any
       +stream_runnable(runnable, input) Iterator~Any~
-      +invoke_template(prompt_template, variables, complexity) str
-      +stream_template(prompt_template, variables, complexity) Iterator~str~
     }
 
     class BaseChatModel
@@ -317,8 +315,8 @@ flowchart TD
 
 - 会话、历史消息、窗口裁剪
   - 在 `backend/platform/memory/` 和 runtime 中处理。
-- `RunnableWithMessageHistory`
-  - 在 `backend/application/runtime/service.py` 中装配。
+- prompt history
+  - 由 ChatGraph checkpoint 与 application 层显式变量传递，不在模型包里装配。
 - scene prompt 和检索策略
   - 在 `backend/scenes/` 和 runtime 中处理。
 - 文档检索、Hybrid Search、Agentic Retrieval
@@ -343,8 +341,8 @@ flowchart TD
   - 用 `get_runnable()`。
 - 想执行链：
   - 用 `invoke_runnable()` 或 `stream_runnable()`。
-- 只是临时兼容旧写法：
-  - 可以用 `invoke()`、`stream()`、`invoke_template()`、`stream_template()`。
+- 想用默认文本 prompt 快速调用：
+  - 用 `invoke()` 或 `stream()`。
 
 优先记住这条主线就够了：
 

@@ -768,7 +768,7 @@ class SQLiteSessionStore:
         return connection
 
     def _parse_retrieval_snippets(self, payload: Any) -> list[dict[str, Any]]:
-        """将 JSON 字符串解析为检索片段列表，并兼容旧版引用结构。"""
+        """将 JSON 字符串解析为当前 citation 存储载荷。"""
         if not isinstance(payload, str) or not payload:
             return []
         try:
@@ -780,19 +780,16 @@ class SQLiteSessionStore:
         return [self._normalize_retrieval_snippet(item, index) for index, item in enumerate(value, start=1)]
 
     def _normalize_retrieval_snippet(self, item: Any, index: int) -> dict[str, Any]:
-        """把历史 retrieval_snippet 规范化为当前 citation 契约。"""
+        """把 citation 存储载荷规范化为当前响应契约。"""
         if not isinstance(item, dict):
             return {}
 
-        namespace = self._coerce_str(item.get("namespace")) or "knowledge"
-        citation_id = self._coerce_str(item.get("citation_id")) or f"{namespace}:{index}"
+        namespace = self._coerce_str(item.get("namespace")) or ""
+        citation_id = self._coerce_str(item.get("citation_id")) or ""
         snippet = self._coerce_str(item.get("snippet")) or ""
         source_kind = self._coerce_str(item.get("source_kind")) or namespace
-        source_name = self._coerce_str(item.get("source_name")) or (
-            self._coerce_str(item.get("source_path"))
-            or self._coerce_str(item.get("document_id"))
-            or citation_id
-        )
+        source_name = self._coerce_str(item.get("source_name")) or citation_id
+        chunk_id = self._coerce_str(item.get("chunk_id")) or citation_id
 
         normalized: dict[str, Any] = {
             "index": self._coerce_int(item.get("index")) or index,
@@ -802,7 +799,7 @@ class SQLiteSessionStore:
             "source_name": source_name,
             "source_path": self._coerce_str(item.get("source_path")),
             "document_id": self._coerce_str(item.get("document_id")),
-            "chunk_id": self._coerce_str(item.get("chunk_id")) or citation_id,
+            "chunk_id": chunk_id,
             "chunk_index": self._coerce_int(item.get("chunk_index")),
             "snippet": snippet,
             "score": self._coerce_float(item.get("score")),

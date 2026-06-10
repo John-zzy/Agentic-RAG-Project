@@ -53,9 +53,9 @@ flowchart TB
 
     subgraph PG["PlanSubGraph | Plan, execute, and recover"]
       direction TB
-      PGS((START)) --> PCREATE["create_plan"]
+      PGS((START)) --> PCREATE["create_plan<br/>LLM structured planner"]
       PCREATE --> PSEL["select_next_step"]
-      PSEL --> PEXEC["execute_step"]
+      PSEL --> PEXEC["execute_step<br/>ToolExecutor"]
       PEXEC --> PRETRY{"handle_retry"}
       PRETRY -->|"retry"| PSEL
       PRETRY -->|"waiting_user"| PWAIT["handle_waiting_user"]

@@ -6,7 +6,7 @@
 
 1. `/chat` 不是“先检索再回答”，而是先组织成一次可执行的 Agent 运行。
 2. 简单任务走 ReAct，复杂任务走 Plan。
-3. RAG 和 Agentic RAG 只是可调用工具，不是顶层入口。
+3. ReAct 主路径由 LangChain `create_agent` provider 承接，Plan 主路径由 LLM structured planner 和 LangGraph 子图承接；RAG 和 Agentic RAG 只是可调用工具，不是顶层入口。
 
 主链路图在这里：
 
@@ -20,9 +20,9 @@
 1. 入口层：`POST /chat` 收到用户问题。
 2. 运行层：`ChatService` 把这次请求整理成一个运行上下文。
 3. 编排层：`ChatGraphRuntime` / `ChatGraph` 选择 ReAct、Plan 或 direct/fallback 分支。
-4. 执行层：ReAct/Plan 子图在各自节点里通过 `ToolExecutor` 真正调用工具，RAG 只是其中一种工具。
+4. 执行层：LangChain ReAct provider / Plan 子图在各自边界里通过 middleware 和 `ToolExecutor` 真正调用工具，RAG 只是其中一种工具。
 
-最后，`ChatGraphRuntime` 把这次运行写入 checkpoint，SSE 或普通 JSON 只是不同的输出方式。同步 `/chat` 的 Agent 执行发生在 ChatGraph 分支内，并继续进入 ReAct / Plan 子图；流式 `/chat` 目前仍保留逐 token SSE 的输出适配。
+最后，`ChatGraphRuntime` 把这次运行写入 checkpoint，SSE 或普通 JSON 只是不同的输出方式。同步 `/chat` 的 Agent 执行发生在 ChatGraph 分支内，ReAct 直接进入 LangChain `create_agent` provider，Plan 继续进入显式 Plan 子图；流式 `/chat` 只输出安全 UI 事件，不透传 LangChain / LangGraph raw event。
 
 ## 主链路图怎么读
 
@@ -32,7 +32,7 @@
 2. `ActiveSceneChatService` 根据会话找到当前 scene。
 3. `ChatService` 准备消息、request id、知识源和运行上下文。
 4. `ChatGraph.select_mode` 调用 `ModeSelector` 判断这次更像 ReAct 还是 Plan。
-5. `react_branch` 或 `plan_branch` 负责进入对应子图，子图节点再通过 `ToolExecutor` 执行工具。
+5. `react_branch` 进入 LangChain ReAct provider，`plan_branch` 进入 Plan 子图；工具调用统一经过 middleware policy、HITL gate、observation normalization 和 `ToolExecutor`。
 6. 如果工具是 RAG，那么 RAG 内部还会继续做 query rewrite、检索、rerank、证据判断。
 7. 最后把工具结果汇总成回答、引用和 trace。
 
@@ -56,14 +56,14 @@
 如果你要看显式的子图拆分，直接读：
 
 - [ChatGraph](</d:/Programs/interview-projects/ai-rag-project/backend/platform/agent_runtime/chat_graph/graph.py:34>)
-- [ReAct Graph](</d:/Programs/interview-projects/ai-rag-project/backend/platform/agent_runtime/react/graph/graph.py:30>)
+- [ReAct Runtime](</d:/Programs/interview-projects/ai-rag-project/backend/platform/agent_runtime/react/runtime.py:24>)
 - [Plan Graph](</d:/Programs/interview-projects/ai-rag-project/backend/platform/agent_runtime/plan/graph/graph.py:25>)
 
 如果你只想先抓主干，先看这三个文件就够了。
 
 ## 先选模式：简单问题用 ReAct，复杂问题用 Plan
 
-模式选择器在 [ModeSelector](</d:/Programs/interview-projects/ai-rag-project/backend/platform/agent_runtime/mode_selector.py:30>)，默认别名是 [MinimalModeSelector](</d:/Programs/interview-projects/ai-rag-project/backend/platform/agent_runtime/mode_selector.py:115>)。
+模式选择器在 [ModeSelector](</d:/Programs/interview-projects/ai-rag-project/backend/platform/agent_runtime/core/mode_selector.py:30>)，默认别名是 [MinimalModeSelector](</d:/Programs/interview-projects/ai-rag-project/backend/platform/agent_runtime/core/mode_selector.py:115>)。
 
 它做的事情很直白：
 
@@ -79,19 +79,19 @@
 
 ## ReAct 怎么跑
 
-ReAct 的主流程在 [ReAct Graph](</d:/Programs/interview-projects/ai-rag-project/backend/platform/agent_runtime/react/graph/graph.py:30>)。子图节点复用 [ReActRuntime](</d:/Programs/interview-projects/ai-rag-project/backend/platform/agent_runtime/react/runtime.py:42>) 的 action 校验、工具执行和汇总原语，下一步怎么选由 [LLMReActActionSelector](</d:/Programs/interview-projects/ai-rag-project/backend/platform/agent_runtime/react/selector.py:161>) 决定。
+ReAct 的主路径在 [react](</d:/Programs/interview-projects/ai-rag-project/backend/platform/agent_runtime/react/runtime.py:24>)。它通过 [ReActProviderFactory](</d:/Programs/interview-projects/ai-rag-project/backend/platform/agent_runtime/react/factory.py:22>) 调用 LangChain `create_agent`，并注入项目 middleware、typed state/context、checkpointer 和由 `ToolExecutor` 生成的 LangChain tools。
 
 它的执行顺序可以直接记成五步：
 
-1. 选择器输出一个结构化 action，比如 `tool_call`、`ask_user`、`final_answer`。
-2. `validate_action` 节点校验 action 是否合理。
-3. `execute_tool` 节点通过 `ToolExecutor` 执行真正的工具调用。
-4. `record_observation` 节点把工具结果写回 `ReActTurn` 和 `ReActRun`。
-5. `loop_or_finish` 决定继续下一轮，还是进入 `final_answer` / `synthesize_result`。
+1. `react_branch` 组装 runtime context、scene prompt、工具范围和 LangChain tools。
+2. `create_agent` 执行模型与工具循环。
+3. `LangChainModelGuardAdapter` 处理模型调用保护、延迟、token metadata 和错误分类。
+4. `LangChainToolBoundaryAdapter` 在工具执行前完成 policy、HITL gate、observation normalization 和 trace。
+5. provider projection 把 LangChain messages、tool calls、tool outputs 和 final output 投影为项目中立的 `ReActRun`。
 
 如果 ReAct 判断当前问题不依赖知识库，可以直接选择 `final_answer`。这类请求会被归一化为 `direct_answer`，不会调用 RAG，也不会返回 citations。
 
-相关数据结构在 [ReActRun](</d:/Programs/interview-projects/ai-rag-project/backend/platform/agent_runtime/contracts.py:141>) 和 [ReActTurn](</d:/Programs/interview-projects/ai-rag-project/backend/platform/agent_runtime/contracts.py:114>)。
+相关数据结构仍是 [ReActRun](</d:/Programs/interview-projects/ai-rag-project/backend/platform/agent_runtime/core/contracts.py:141>) 和 [ReActTurn](</d:/Programs/interview-projects/ai-rag-project/backend/platform/agent_runtime/core/contracts.py:114>)。旧手写 `react/graph` 已删除，ReAct 包只保留 LangChain `create_agent` provider、policy、projection 和 tool adapter。
 
 ReAct 的直觉很简单：
 
@@ -102,19 +102,22 @@ ReAct 的直觉很简单：
 
 ## Plan 怎么跑
 
-Plan 的主流程在 [Plan Graph](</d:/Programs/interview-projects/ai-rag-project/backend/platform/agent_runtime/plan/graph/graph.py:25>)。子图节点复用 [MinimalPlanner](</d:/Programs/interview-projects/ai-rag-project/backend/platform/agent_runtime/plan/planner.py:70>) 创建计划，并复用 [PlanExecutor](</d:/Programs/interview-projects/ai-rag-project/backend/platform/agent_runtime/plan/executor.py:78>) 执行 step。
+Plan 的主流程在 [Plan Graph](</d:/Programs/interview-projects/ai-rag-project/backend/platform/agent_runtime/plan/graph/graph.py:25>)。`create_plan` 节点使用 [LangChainPlanPlanner](</d:/Programs/interview-projects/ai-rag-project/backend/platform/agent_runtime/plan/planner.py:52>) 调用模型的 structured output，得到一组 `PlanStepDraft`，再转换成项目自己的 `PlanStep`。
 
-Plan 先生成计划，再执行计划。它不是边走边想，而是先把任务拆成步骤。
+Plan 先让 LLM 生成计划，再由 LangGraph 节点一步步执行计划。系统不会再用规则 planner 兜底，也不会用一个内部 while-loop 执行器把整条链路跑完。LLM 可以自己决定有多少个 step，平台只用 `max_plan_steps` 做安全上限。
 
-对应的数据结构是 [PlanRun](</d:/Programs/interview-projects/ai-rag-project/backend/platform/agent_runtime/contracts.py:178>) 和 [PlanStep](</d:/Programs/interview-projects/ai-rag-project/backend/platform/agent_runtime/contracts.py:161>)。
+对应的数据结构是 [PlanRun](</d:/Programs/interview-projects/ai-rag-project/backend/platform/agent_runtime/core/contracts.py:178>) 和 [PlanStep](</d:/Programs/interview-projects/ai-rag-project/backend/platform/agent_runtime/core/contracts.py:161>)。
 
 你可以这样理解：
 
-1. `create_plan` 节点根据用户目标、场景策略和可用工具，生成 step 列表。
+1. `create_plan` 节点根据用户目标、场景策略、可用工具和默认工具输入，让 LLM 生成 step 列表。
 2. 每个 step 会带自己的 `goal`、`tool_name`、`input` 和 `depends_on`。
-3. `select_next_step` 只挑选已经满足依赖的 step。
-4. `execute_step` 通过 `PlanExecutor` 执行 step，并把结果沉淀成 observation。
-5. `handle_retry` 决定继续、重试、等待用户，还是进入 `synthesize_plan_result` / `synthesize_result`。
+3. `create_plan` 会校验空计划、step 数量、工具白名单、依赖关系和工具输入；不合法就把 `PlanRun` 标成 failed。
+4. `select_next_step` 只挑选已经满足依赖的 step。
+5. `execute_step` 通过 `ToolExecutor` 执行当前 step，并把结果沉淀成 observation。
+6. `handle_retry` 决定继续、重试、等待用户，还是进入 `synthesize_plan_result` / `synthesize_result`。
+
+Plan 的一些业务判断被拆到 [state_ops](</d:/Programs/interview-projects/ai-rag-project/backend/platform/agent_runtime/plan/state_ops.py:1>)，例如选择下一步、处理 retry、处理依赖阻塞、收集 citations、汇总最终结果。这样图节点保持清楚，通用的工具边界仍然复用 `ToolExecutor`、`core.validation` 和 middleware。
 
 Plan 更适合这类问题：
 
@@ -124,7 +127,7 @@ Plan 更适合这类问题：
 
 ## 为什么所有工具都要先过 ToolExecutor
 
-真正的工具入口是 [ToolExecutor](</d:/Programs/interview-projects/ai-rag-project/backend/platform/agent_runtime/tool_executor.py:24>)。
+真正的工具入口是 [ToolExecutor](</d:/Programs/interview-projects/ai-rag-project/backend/platform/agent_runtime/tooling/executor.py:24>)。
 
 它的作用不是“帮模型想”，而是“帮系统守边界”：
 
@@ -137,7 +140,7 @@ Plan 更适合这类问题：
 
 ## RAG 为什么只是工具
 
-RAG 的顶层工具包装在 [build_rag_tool_adapters](</d:/Programs/interview-projects/ai-rag-project/backend/platform/agent_runtime/rag_tools.py:188>)。
+RAG 的顶层工具包装在 [build_rag_tool_adapters](</d:/Programs/interview-projects/ai-rag-project/backend/platform/agent_runtime/tooling/rag.py:188>)。
 
 如果走的是 Agentic RAG，真正的内部流程在 [AgenticRetriever](</d:/Programs/interview-projects/ai-rag-project/backend/platform/rag/orchestration/agentic.py:54>)，入口是 [retrieve_with_trace](</d:/Programs/interview-projects/ai-rag-project/backend/platform/rag/orchestration/agentic.py:76>)。
 
@@ -173,7 +176,7 @@ RAG 的顶层工具包装在 [build_rag_tool_adapters](</d:/Programs/interview-p
 
 用户 `approve` 或 `respond` 后，会继续同一个 run；`reject` 则会把这次运行收成 `cancelled`。
 
-`ChatGraphRuntime` 负责把这些状态真正写进 checkpoint，见 platform 层 [ChatGraphRuntime](</d:/Programs/interview-projects/ai-rag-project/backend/platform/agent_runtime/chat_graph/runtime.py:24>) 和 [runtime_parts](</d:/Programs/interview-projects/ai-rag-project/backend/platform/agent_runtime/chat_graph/runtime_parts/answer_graph.py:15>)；application 层只保留 settings adapter。
+`ChatGraphRuntime` 负责把这些状态真正写进 checkpoint，见 platform 层 [ChatGraphRuntime](</d:/Programs/interview-projects/ai-rag-project/backend/platform/agent_runtime/chat_graph/runtime.py:24>)、[state_store](</d:/Programs/interview-projects/ai-rag-project/backend/platform/agent_runtime/chat_graph/state_store.py:17>) 和 [hitl](</d:/Programs/interview-projects/ai-rag-project/backend/platform/agent_runtime/chat_graph/hitl.py:42>)；application 层只保留 settings adapter。
 
 ## 两个小例子
 
@@ -184,7 +187,7 @@ RAG 的顶层工具包装在 [build_rag_tool_adapters](</d:/Programs/interview-p
 通常路径是：
 
 1. `ModeSelector` 选 ReAct。
-2. `LLMReActActionSelector` 选择一个 RAG 工具。
+2. LangChain ReAct provider 选择一个 RAG 工具。
 3. `ToolExecutor` 调用 RAG。
 4. RAG 返回证据、引用和 trace。
 5. ReAct 汇总成回答。
@@ -196,7 +199,7 @@ RAG 的顶层工具包装在 [build_rag_tool_adapters](</d:/Programs/interview-p
 通常路径是：
 
 1. `ModeSelector` 选 Plan。
-2. `MinimalPlanner` 拆出多个 step。
+2. `LangChainPlanPlanner` 让 LLM 生成多个 step，并由平台校验工具、输入和依赖。
 3. Plan 子图按依赖顺序执行 step。
 4. 每个 step 的结果写入 observation。
 5. 最后把多个 step 的结果汇总成计划。
@@ -208,10 +211,10 @@ RAG 的顶层工具包装在 [build_rag_tool_adapters](</d:/Programs/interview-p
 3. [ChatService](</d:/Programs/interview-projects/ai-rag-project/backend/application/runtime/service.py:83>)
 4. [ChatGraphRuntime](</d:/Programs/interview-projects/ai-rag-project/backend/platform/agent_runtime/chat_graph/runtime.py:24>)
 5. [ChatGraph](</d:/Programs/interview-projects/ai-rag-project/backend/platform/agent_runtime/chat_graph/graph.py:34>)
-6. [ReAct Graph](</d:/Programs/interview-projects/ai-rag-project/backend/platform/agent_runtime/react/graph/graph.py:30>)
+6. [ReAct Runtime](</d:/Programs/interview-projects/ai-rag-project/backend/platform/agent_runtime/react/runtime.py:24>)
 7. [Plan Graph](</d:/Programs/interview-projects/ai-rag-project/backend/platform/agent_runtime/plan/graph/graph.py:25>)
-8. [ModeSelector](</d:/Programs/interview-projects/ai-rag-project/backend/platform/agent_runtime/mode_selector.py:30>)
-9. [ToolExecutor](</d:/Programs/interview-projects/ai-rag-project/backend/platform/agent_runtime/tool_executor.py:24>)
+8. [Agent Runtime Middleware](</d:/Programs/interview-projects/ai-rag-project/backend/platform/agent_runtime/middleware/factory.py:1>)
+9. [ToolExecutor](</d:/Programs/interview-projects/ai-rag-project/backend/platform/agent_runtime/tooling/executor.py:24>)
 10. [AgenticRetriever](</d:/Programs/interview-projects/ai-rag-project/backend/platform/rag/orchestration/agentic.py:54>)
 
 这样读下来，你会先明白“谁负责分流”，再明白“谁负责执行”，最后明白“RAG 为什么只是工具”。

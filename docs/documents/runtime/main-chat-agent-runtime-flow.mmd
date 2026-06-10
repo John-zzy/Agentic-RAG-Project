@@ -27,9 +27,9 @@ flowchart TD
 
     subgraph PG["PlanGraph 子图"]
         direction TB
-        P1 --> P0["create_plan<br/>MinimalPlanner 生成 PlanRun"]
+        P1 --> P0["create_plan<br/>LLM structured planner 生成 PlanRun"]
         P0 --> P2["select_next_step<br/>选择依赖已满足的 step"]
-        P2 --> P3["execute_step<br/>PlanExecutor 调用 step 工具"]
+        P2 --> P3["execute_step<br/>ToolExecutor 调用 step 工具"]
         P4["handle_retry<br/>继续 / 重试 / waiting_user / all done"]
         P4 -->|continue / retry| P2
         P4 -->|waiting_user| U2["handle_waiting_user<br/>等待用户补充"]

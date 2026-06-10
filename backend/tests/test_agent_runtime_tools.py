@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from typing import Any
 
@@ -7,16 +7,16 @@ from langchain_core.documents import Document
 from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field
 
-from backend.platform.agent_runtime.contracts import ToolObservation
-from backend.platform.agent_runtime.idempotency import (
+from backend.platform.agent_runtime.core.contracts import ToolObservation
+from backend.platform.agent_runtime.tooling.idempotency import (
     SQLiteToolIdempotencyStore,
     ToolExecutionContext,
 )
-from backend.platform.agent_runtime.rag_tools import (
+from backend.platform.agent_runtime.tooling.rag import (
     AgenticRagToolAdapter,
     NativeRagToolAdapter,
 )
-from backend.platform.agent_runtime.tool_executor import ToolExecutor
+from backend.platform.agent_runtime.tooling.executor import ToolExecutor
 from backend.platform.rag.contracts import (
     RetrievalPlan,
     RetrievalResult,

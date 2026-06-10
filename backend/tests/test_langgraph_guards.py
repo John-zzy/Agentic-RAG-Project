@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 from typing import Any
@@ -8,15 +8,14 @@ from langgraph.errors import NodeTimeoutError
 from langgraph.graph import END, START, StateGraph
 from typing_extensions import TypedDict
 
-from backend.platform.agent_runtime.failures import (
+from backend.platform.agent_runtime.quality.failures import (
     FailureCategory,
     build_failure_record,
     failure_record_from_payload,
 )
-from backend.platform.agent_runtime.contracts import PlanRun, ReActRun
+from backend.platform.agent_runtime.core.contracts import PlanRun, ReActRun
 from backend.platform.agent_runtime.chat_graph.graph import graph as chat_graph_module
 from backend.platform.agent_runtime.plan.graph import graph as plan_graph_module
-from backend.platform.agent_runtime.react.graph import graph as react_graph_module
 from backend.platform.rag.orchestration.retrieval_graph import graph as rag_graph_module
 from backend.platform.workflow.langgraph.guards import (
     GuardedNodeFailureError,
@@ -234,14 +233,9 @@ def test_required_graph_nodes_are_guarded_by_builder_helpers() -> None:
     assert set(chat_graph_module.GUARDED_CHAT_NODES) == {
         chat_graph_module.REACT_BRANCH,
         chat_graph_module.PLAN_BRANCH,
+        "self_check_guard",
         "final_synthesis",
         "persist_turn",
-    }
-    assert set(react_graph_module.GUARDED_REACT_NODES) == {
-        "select_action",
-        react_graph_module.EXECUTE_TOOL,
-        "record_observation",
-        "synthesize_result",
     }
     assert set(plan_graph_module.GUARDED_PLAN_NODES) == {
         plan_graph_module.CREATE_PLAN,

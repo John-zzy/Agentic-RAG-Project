@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from collections.abc import Mapping
 from typing import Any
@@ -17,7 +17,7 @@ class ModelFailureClassifier:
         max_attempts: int | None,
         metadata: Mapping[str, Any] | None = None,
     ) -> Any:
-        from backend.platform.agent_runtime.failures import build_failure_record
+        from backend.platform.agent_runtime.quality.failures import build_failure_record
 
         failure_metadata = {
             "call_method": call_method,
@@ -36,7 +36,7 @@ class ModelFailureClassifier:
         )
 
     def _explicit_category(self, exc: BaseException) -> Any:
-        from backend.platform.agent_runtime.failures import FailureCategory
+        from backend.platform.agent_runtime.quality.failures import FailureCategory
 
         if _is_rate_limit_error(exc):
             return FailureCategory.MODEL_RATE_LIMIT

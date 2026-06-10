@@ -1,4 +1,4 @@
-# PRD：LangChain middleware 与 LangGraph 现代化迁移
+﻿# PRD：LangChain middleware 与 LangGraph 现代化迁移
 
 ## 1. 文档信息
 
@@ -43,14 +43,14 @@
 2. 横切能力分散在 `ModelClient`、`ToolExecutor`、ReAct / Plan 节点、ChatService projection 中，不利于统一治理。
 3. LangGraph 最新能力如 typed streaming、`GraphOutput`、`interrupt()` / `Command(resume=...)`、subgraph persistence 尚未形成稳定项目规范。
 4. 大规模迁移存在回归风险，特别是 HITL resume、副作用幂等、citation / retrieval trace 和 SSE UI 协议。
-5. 当前缺少 worktree 双轨开发和 baseline / candidate 并行验证流程，复杂迁移一旦出问题回滚成本偏高。
+5. 当前缺少 worktree 候选开发和 baseline / candidate 并行验证流程，复杂迁移一旦出问题定位成本偏高。
 
 ## 4. 目标
 
 1. 将模型调用、工具调用、动态 prompt、权限、重试、审计、HITL 前置拦截等横切能力迁到 LangChain middleware。
 2. 保留 LangGraph 作为显式业务编排层，尤其保留多分支、Plan、RAG 子图、checkpoint、HITL resume 和状态机语义。
 3. 优先使用 LangGraph v1.2 之后推荐的 `GraphOutput`、typed streaming、`Command(resume=...)`、`interrupt()`、subgraph persistence 等能力。
-4. 通过 feature flag 渐进替换，确保每一阶段可独立验证和回滚。
+4. 在 candidate 分支直接按 LangChain middleware 与现代 LangGraph 新模式重构，每一阶段通过测试对比和 git 历史控制风险。
 5. 使用 Git worktree 方式开发迁移分支，保留 baseline 分支用于并行测试和结果对比。
 6. 在不改变 `/chat`、`/chat/resume`、SSE UI 协议和 eval 样本语义的前提下降低自研 runtime 复杂度。
 
@@ -66,9 +66,9 @@
 ## 6. 用户故事
 
 1. 作为开发者，我希望模型保护、工具策略和审计逻辑以 middleware 形式集中管理，以便新增策略时不需要改多个 graph 节点。
-2. 作为维护者，我希望 ReAct runtime 可以逐步替换成 LangChain agent provider，以便减少自研循环和选择器维护成本。
+2. 作为维护者，我希望 ReAct runtime 可以直接迁移到 LangChain agent provider，以便减少自研循环和选择器维护成本。
 3. 作为 reviewer，我希望迁移分支和 baseline 分支可以并行运行同一批测试，以便快速判断行为是否漂移。
-4. 作为运维者，我希望迁移出问题时可以通过 worktree、feature flag 或分支回退快速恢复。
+4. 作为运维者，我希望迁移出问题时可以通过 worktree 或分支历史快速恢复。
 5. 作为前端或 API 调用方，我希望 `/chat`、`/chat/resume` 和 SSE 事件在迁移期间保持兼容。
 
 ## 7. 成功指标
@@ -80,7 +80,7 @@
 | HITL 安全性 | stale checkpoint、terminal resume、approve 幂等、reject cancel 全部通过测试。 |
 | RAG 可观测性 | `citations`、`retrieval_trace`、`final_decision` 字段不回退。 |
 | 回归测试 | baseline / candidate 两分支核心测试均通过，关键样本输出可解释差异为 0 或已登记。 |
-| 可回滚性 | 每阶段至少支持 feature flag 回滚或 worktree 分支回退。 |
+| 回归控制 | 每阶段至少支持 worktree 对照、测试对比和 git 分支回退。 |
 | 代码维护收益 | 完成 ReAct legacy 清理后，预期净减少 500-1200 行，长期减少 1000-2000 行维护负担。 |
 
 ## 8. 当前实现盘点
@@ -164,27 +164,20 @@ backend/tests/artifacts/migration-diff/
 - candidate 所有失败都有归因。
 - `/chat`、`/chat/resume`、SSE、RAG trace 的关键输出差异有摘要。
 
-### FR-3：所有行为变化必须由 feature flag 控制
+### FR-3：不新增运行时配置切换
 
 需求：
 
-- 新 provider、新 middleware、新 stream mapper 默认不得一次性替代 legacy。
-- 每个阶段至少提供一种快速关闭方式。
-
-建议配置：
-
-```env
-AI_RAG_AGENT_RUNTIME__REACT_PROVIDER=legacy
-AI_RAG_AGENT_RUNTIME__ENABLE_MIDDLEWARE_GUARDS=false
-AI_RAG_LANGGRAPH__STREAM_VERSION=v1
-AI_RAG_LANGGRAPH__GRAPH_OUTPUT_MODE=legacy
-```
+- 不新增 ReAct provider、middleware guard、LangGraph stream version 或 graph output mode 的运行时配置项。
+- candidate 分支直接按 LangChain middleware 与现代 LangGraph 新模式实现。
+- 不提供通过 `.env` 切回 legacy runtime 的路径。
+- 风险控制依赖 worktree、阶段报告、baseline / candidate 对比和 git 历史。
 
 验收：
 
-- 默认配置下行为不变。
-- candidate 可以通过配置切回 legacy。
-- 测试覆盖 legacy 与 candidate provider 的核心路径。
+- `.env.example` 不新增 provider / stream / graph output 切换项。
+- `AppSettings` 不新增仅用于迁移开关的 runtime 配置模型。
+- 测试覆盖新 LangChain provider 的核心路径。
 
 ### FR-4：LangChain middleware 基础设施
 
@@ -220,21 +213,21 @@ backend/platform/agent_runtime/middleware/
 验收：
 
 - middleware 可单测。
-- legacy runtime 可复用 helper，但默认行为不变。
+- 旧 runtime 不作为运行时配置分支保留；可复用 helper 仅作为迁移中的临时实现细节。
 - 工具输出仍可归一化为 `ToolObservation`。
 
-### FR-5：ReAct provider 双轨
+### FR-5：ReAct provider 直接迁移
 
 需求：
 
 - 新增 LangChain agent provider。
-- 保留 legacy ReAct provider。
-- 通过 `AI_RAG_AGENT_RUNTIME__REACT_PROVIDER` 选择 provider。
+- ChatGraph ReAct 分支直接使用 LangChain agent provider。
+- 不新增 legacy / langchain provider 运行时选择配置。
 
 新增目录：
 
 ```text
-backend/platform/agent_runtime/react_langchain/
+backend/platform/agent_runtime/react/
 ├─ __init__.py
 ├─ factory.py
 ├─ runtime.py
@@ -248,13 +241,13 @@ backend/platform/agent_runtime/react_langchain/
 - 使用 `langchain.agents.create_agent` 创建 LangChain agent。
 - agent model 使用 `ModelClient.get_chat_model(complexity)`。
 - tools 来自 scene tools + RAG adapters，但通过 middleware 动态收窄。
-- `react_langchain.runtime` 输出仍投影为项目现有 `ReActRun` 或兼容结构。
+- `react.runtime` 输出仍投影为项目现有 `ReActRun` 或兼容结构。
 
 验收：
 
-- legacy provider 行为不变。
 - langchain provider 可完成基础 RAG 工具问答。
 - 新 provider 输出可投影为 `documents`、`citations`、`retrieval_trace`、`tool_event`、`final_decision`、`answer_mode`。
+- legacy ReAct 相关路径在验证完成后进入删除清理。
 
 ### FR-6：LangGraph 最新特性现代化
 
@@ -321,7 +314,7 @@ backend/platform/agent_runtime/react_langchain/
 改动：
 
 - 建立 candidate worktree。
-- 增加 runtime provider 配置占位，默认 legacy。
+- 明确不新增 runtime provider / stream / graph output 配置占位。
 - 固定 baseline 测试命令和 artifact 目录。
 - 补充 characterization tests。
 
@@ -338,7 +331,7 @@ backend\.venv\Scripts\python.exe -m pytest backend\tests\test_agent_runtime_reac
 
 - 新增 `backend/platform/agent_runtime/middleware/`。
 - 抽出 model guard、tool policy、tool observation、trace helper。
-- legacy runtime 可以选择性复用 helper，但默认行为不变。
+- ReAct 主路径直接接入新 middleware helper；legacy runtime 不作为配置分支保留。
 
 验证：
 
@@ -360,12 +353,12 @@ backend\.venv\Scripts\python.exe -m pytest backend\tests\test_agent_runtime_tool
 backend\.venv\Scripts\python.exe -m pytest backend\tests\test_langgraph_runtime.py backend\tests\test_chat_api.py -q -c backend\tests\pytest.ini
 ```
 
-### 阶段 3：ReAct provider 双轨
+### 阶段 3：ReAct provider 直接迁移
 
 改动：
 
-- 新增 `react_langchain` provider。
-- `react_branch` 按配置选择 legacy 或 langchain provider。
+- 新增 `react` provider。
+- `react_branch` 直接接入 langchain provider。
 - 新增 provider contract tests。
 
 验证：
@@ -446,9 +439,9 @@ backend\.venv\Scripts\python.exe -m pytest backend\tests\test_agent_runtime_plan
 
 验收：
 
-- 默认 provider 切到 `langchain`。
-- legacy provider 保留至少一个短期回滚窗口。
-- 两轮主要 eval 通过后再真正删除 legacy。
+- ReAct 主路径固定使用 `langchain` provider。
+- legacy provider 运行时选择路径已移除。
+- 两轮主要 eval 通过后删除 legacy 候选。
 
 ### 阶段 9：文档、图表和配置清理
 
@@ -525,24 +518,24 @@ RAG trace / citation 差异：
 是否允许进入下一阶段：
 ```
 
-## 12. 回滚策略
+## 12. 回归控制策略
 
-| 层级 | 回滚方式 |
+| 层级 | 控制方式 |
 | --- | --- |
 | worktree | 删除 candidate worktree 或切回 baseline 工作树。 |
 | Git 分支 | 停止合并 `migrate/langchain-middleware`，继续使用 baseline 分支。 |
-| feature flag | `REACT_PROVIDER=legacy`、关闭 middleware guards、回退 stream version。 |
-| runtime provider | 保留 legacy ReAct provider 至少一个短期窗口。 |
+| 阶段提交 | 通过阶段提交或 git 历史回退候选实现。 |
+| runtime provider | 不提供运行时 provider 切换；发现回归时回退候选分支实现。 |
 | checkpoint | 保持业务状态投影兼容，不把 LangChain 内部结构作为唯一恢复依据。 |
 
-每阶段回滚点：
+每阶段控制点：
 
-| 阶段 | 回滚方式 |
+| 阶段 | 控制方式 |
 | --- | --- |
-| 阶段 1 | 关闭 `ENABLE_MIDDLEWARE_GUARDS`，legacy runtime 不使用新 middleware。 |
+| 阶段 1 | middleware helper 保持单测覆盖；发现回归时回退阶段提交。 |
 | 阶段 2 | 回退到 dict-style graph invoke 和当前 stream mapper。 |
-| 阶段 3 | `REACT_PROVIDER=legacy`。 |
-| 阶段 4 | 关闭 ReAct HITL middleware，恢复 legacy ReAct resume graph。 |
+| 阶段 3 | 回退 `react` 接入提交。 |
+| 阶段 4 | 回退 ReAct HITL middleware 接入提交。 |
 | 阶段 6 | Agentic RAG 继续使用当前 `graph.invoke` 和 trace mapper。 |
 | 阶段 7 | Plan 继续使用 `PlanExecutor` 当前工具执行路径。 |
 
@@ -552,7 +545,7 @@ RAG trace / citation 差异：
 2. 内置 `HumanInTheLoopMiddleware` 不能直接替代当前 HITL 安全语义，必须包装项目自己的 `interrupt_id` 和副作用幂等规则。
 3. LangGraph typed streaming / `GraphOutput` 新旧 API 并存期间，测试需要覆盖两种返回格式。
 4. 工具输出从 `ToolObservation` 到 LangChain `ToolMessage` 再回投影，可能丢失 citation / retrieval trace，需要专门测试。
-5. 双轨期代码量会上升，阶段管理和 feature flag 命名必须清晰。
+5. 直接迁移触达面会上升，阶段边界和验证记录必须清晰。
 6. worktree 双分支测试会增加本地环境维护成本，需要统一 `.env`、数据库和 artifact 隔离策略。
 
 ## 14. 预计代码量变化
@@ -569,31 +562,39 @@ RAG trace / citation 差异：
 
 整体预期：
 
-- 迁移中期代码会先增加约 1500-2500 行，因为会存在双轨和 adapter。
+- 迁移中期代码会先增加约 1000-2000 行，因为会存在新 provider、middleware 和 adapter。
 - 完成 ReAct legacy 清理后，预计净减少约 500-1200 行。
 - 如果后续 Plan 的工具执行和模型 guard 也充分复用 middleware，长期可减少约 1000-2000 行维护负担。
 
 ## 15. 最终验收清单
 
-- [ ] 已使用 Git worktree 建立 candidate 工作树。
-- [ ] baseline / candidate 两分支可并行运行核心测试。
-- [ ] 每阶段有测试对比报告。
-- [ ] 默认 runtime 使用 LangChain middleware 化 ReAct provider。
-- [ ] `ChatGraph`、`Plan`、`Agentic RAG` 仍由 LangGraph 显式编排。
-- [ ] `/chat` 和 `/chat/resume` API schema 无破坏性变化。
-- [ ] SSE UI 协议无破坏性变化。
-- [ ] HITL stale checkpoint、terminal resume、approve 幂等、reject cancel 全部通过测试。
-- [ ] RAG citation 和 retrieval trace 字段无回退。
-- [ ] LangGraph `GraphOutput` / typed stream / `Command(resume=...)` 路径有测试覆盖。
-- [ ] README、AGENTS、runtime 文档、API 文档、图表均同步。
+- [x] 已使用 Git worktree 建立 candidate 工作树。
+- [x] baseline / candidate 两分支可并行运行核心测试。
+- [x] 每阶段有测试对比报告。
+- [x] 默认 runtime 使用 LangChain middleware 化 ReAct provider。
+- [x] `ChatGraph`、`Plan`、`Agentic RAG` 仍由 LangGraph 显式编排。
+- [x] `/chat` 和 `/chat/resume` API schema 无破坏性变化。
+- [x] SSE UI 协议无破坏性变化。
+- [x] HITL stale checkpoint、terminal resume、approve 幂等、reject cancel 全部通过测试。
+- [x] RAG citation 和 retrieval trace 字段无回退。
+- [x] LangGraph typed state/context、typed stream、`interrupt()` / `Command(resume=...)` 路径有测试覆盖。
+- [x] README、AGENTS、runtime 文档、API 文档、data model 文档均同步；图表源语义未发生必须重绘的结构性变化。
+
+最终阶段证据：
+
+- Final phase report：`docs/plan/langchain-middleware-langgraph-phase-final-report.md`
+- Diff classification：`backend/tests/artifacts/langchain-middleware-langgraph/diff/final-diff-classification.md`
+- Candidate full pytest：`480 passed, 3 skipped, 4 deselected in 80.45s`
+- Compile validation：`backend\.venv\Scripts\python.exe -m compileall -q backend\platform\agent_runtime\react backend\platform\agent_runtime\middleware backend\platform\memory\base\session_store.py`
+- OpenSpec validation：`openspec validate modernize-langchain-middleware-langgraph`
 
 ## 16. 第一批任务
 
 1. 创建 `migrate/langchain-middleware` 分支和 candidate worktree。
 2. 固化 baseline / candidate 测试矩阵与 artifact 输出目录。
-3. 新增 agent runtime 配置项与默认 legacy provider。
+3. 明确不新增 agent runtime 迁移配置项，候选分支直接按新模式重构。
 4. 新增 `backend/platform/agent_runtime/middleware/` 包和 middleware 单测。
 5. 把 `ModelClient` 的 guard 能力抽成可被 middleware 复用的 adapter。
 6. 为 `ToolExecutor` 增加 LangChain tool list 导出或 adapter，不改变现有执行路径。
-7. 在 `ChatGraphRuntime.invoke` 中兼容 `GraphOutput.value` / `.interrupts`，但默认行为不变。
-8. 增加一组 ReAct provider contract tests，为双轨迁移做准备。
+7. 在 `ChatGraphRuntime.invoke` 中兼容 `GraphOutput.value` / `.interrupts`。
+8. 增加一组 ReAct provider contract tests，为直接迁移做准备。

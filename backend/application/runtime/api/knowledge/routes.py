@@ -304,7 +304,7 @@ def _raise_document_http_error(exc: Exception) -> None:
 
 
 def _to_response_data(payload: object) -> object:
-    """兼容 Pydantic 模型与普通字典响应。"""
+    """把 service response 转换为 FastAPI 可序列化数据。"""
     if hasattr(payload, "model_dump"):
         return payload.model_dump()  # type: ignore[attr-defined]
     return payload

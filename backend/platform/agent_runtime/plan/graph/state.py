@@ -1,8 +1,8 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from typing import Any, NotRequired, TypedDict
 
-from backend.platform.agent_runtime.contracts import PlanRun, PlanStep
+from backend.platform.agent_runtime.core.contracts import PlanRun, PlanStep
 
 
 class PlanGraphState(TypedDict, total=False):
@@ -26,6 +26,7 @@ class PlanGraphState(TypedDict, total=False):
     answer: NotRequired[str]
     status: NotRequired[str]
     resume_payload: NotRequired[dict[str, Any]]
+    resume_command: NotRequired[Any]
     proposed_tool_call: NotRequired[dict[str, Any] | None]
     accepted_state: NotRequired[dict[str, Any] | None]
     response_result: NotRequired[dict[str, Any]]

@@ -1,9 +1,16 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from typing import Any
 
-from backend.platform.rag.orchestration.retrieval_graph.config import AgenticRagGraphDependencies
+from langchain_core.runnables import RunnableConfig
+from langgraph.runtime import Runtime
+
 from backend.platform.rag.contracts import RetrievalContext
+from backend.platform.rag.orchestration.retrieval_graph.config import (
+    AgenticRagGraphDependencies,
+    resolve_agentic_rag_graph_dependencies,
+    resolve_agentic_rag_runtime_context,
+)
 from backend.platform.rag.orchestration.retrieval_graph.state import (
     AgenticRagGraphState,
     build_decision_log_entry,
@@ -14,9 +21,12 @@ from backend.platform.rag.orchestration.retrieval_graph.state import (
 def build_query_rewrite_node(dependencies: AgenticRagGraphDependencies):
     """执行一次查询改写，并把当前轮次收口进审计轨迹。"""
 
-    retriever = dependencies.retriever
-
-    def query_rewrite(state: AgenticRagGraphState) -> dict[str, Any]:
+    def query_rewrite(
+        state: AgenticRagGraphState,
+        runtime: Runtime | RunnableConfig | None = None,
+    ) -> dict[str, Any]:
+        runtime_dependencies = _dependencies(runtime, dependencies)
+        retriever = runtime_dependencies.retriever
         plan = state["plan"]
         decision = state["current_decision"]
         if decision is None:
@@ -41,13 +51,15 @@ def build_query_rewrite_node(dependencies: AgenticRagGraphDependencies):
                 "decision_log": [*state["decision_log"], decision_log_entry],
             }
 
-        rewrite = retriever._rewrite_query(
-            RetrievalContext(
-                plan=plan,
-                results=list(state["results"]),
-                documents=list(state["documents"]),
-            ),
-            dependencies.run_manager,
+        retrieval_context = RetrievalContext(
+            plan=plan,
+            results=list(state["results"]),
+            documents=list(state["documents"]),
+        )
+        rewrite = _invoke_rewriter(
+            dependencies=runtime_dependencies,
+            context=retrieval_context,
+            runtime=runtime,
         )
         next_plan = plan.create_followup(
             active_query=rewrite.query,
@@ -84,3 +96,31 @@ def build_query_rewrite_node(dependencies: AgenticRagGraphDependencies):
 
     return query_rewrite
 
+
+def _invoke_rewriter(
+    *,
+    dependencies: AgenticRagGraphDependencies,
+    context: RetrievalContext,
+    runtime: Runtime | RunnableConfig | None,
+):
+    runtime_context = resolve_agentic_rag_runtime_context(runtime)
+    if dependencies.model_call_guard is None or runtime_context is None:
+        return dependencies.retriever._rewrite_query(context, dependencies.run_manager)
+    return dependencies.model_call_guard.invoke(
+        lambda: dependencies.retriever._rewrite_query(context, dependencies.run_manager),
+        context=runtime_context,
+        metadata={
+            "operation": "agentic_rag.query_rewrite",
+            "tool_name": context.plan.selected_tool,
+            "round_index": context.plan.round_index,
+        },
+    )
+
+
+def _dependencies(
+    config: Runtime | RunnableConfig | None,
+    fallback: AgenticRagGraphDependencies,
+) -> AgenticRagGraphDependencies:
+    if config is None:
+        return fallback
+    return resolve_agentic_rag_graph_dependencies(config)

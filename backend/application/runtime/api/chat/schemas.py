@@ -216,7 +216,7 @@ class RetrievalTrace(BaseModel):
     tool_call_count: int = Field(ge=0, description="实际 retrieval tool 调用次数。")
     candidate_tools: list[str] = Field(default_factory=list, description="本轮候选 retrieval tools。")
     exit_reason: str | None = Field(default=None, description="Agentic RAG 退出原因。")
-    # 以下字段是向后兼容的观测字段，避免改变现有 `/chat` 必填响应契约。
+    # 以下字段是当前 `/chat` 可观测契约，供调试与评测读取。
     final_decision: str | None = Field(
         default=None,
         description=(
@@ -300,7 +300,7 @@ class SessionTurnResponse(BaseModel):
     assistant_answer: str = Field(description="助手回答。")
     retrieval_snippets: list[dict[str, Any]] = Field(
         default_factory=list,
-        description="该轮保存的引用片段列表，与 citations 契约兼容。",
+        description="该轮保存的 citation 存储载荷。",
     )
     timestamp: str = Field(description="该轮写入时间。")
 

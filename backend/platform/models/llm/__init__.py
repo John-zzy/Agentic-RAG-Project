@@ -1,6 +1,7 @@
 from backend.platform.models.llm.client import (
     ModelClient,
     get_chat_model,
+    get_chat_model_provider,
     get_runnable,
     invoke_runnable,
     model_client,
@@ -22,6 +23,7 @@ __all__ = [
     "ModelClient",
     "RerankWrapperFactory",
     "get_chat_model",
+    "get_chat_model_provider",
     "get_embedding_strategy",
     "get_rerank_wrapper",
     "get_runnable",

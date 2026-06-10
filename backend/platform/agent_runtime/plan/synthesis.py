@@ -1,11 +1,11 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from typing import Any, Protocol
 
 from pydantic import Field
 
-from backend.platform.agent_runtime.contracts import (
+from backend.platform.agent_runtime.core.contracts import (
     AgentRuntimeModel,
     PlanStep,
     ToolObservation,
@@ -28,7 +28,7 @@ class PlanSynthesisContext(AgentRuntimeModel):
 
 
 class PlanSynthesisResult(AgentRuntimeModel):
-    """PlanExecutor 写回 PlanRun 的最终汇总结果。"""
+    """Plan 图写回 PlanRun 的最终汇总结果。"""
 
     final_answer: str
     result_summary: str = ""
