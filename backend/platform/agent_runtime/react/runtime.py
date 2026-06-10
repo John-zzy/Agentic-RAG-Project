@@ -72,6 +72,8 @@ class ReActRuntime:
             "max_turns": self.max_turns,
             "metadata": dict(metadata or {}),
         }
+
+        # 执行 ReAct Agent
         output = agent.invoke(
             input_payload,
             context=ReActContext(
@@ -83,6 +85,8 @@ class ReActRuntime:
             ),
             config=checkpoint_config,
         )
+
+        # 把 LangChain 输出投影成 ReActRun
         projection = project_react_agent_output(
             output=output,
             session_id=session_id,

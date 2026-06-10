@@ -26,7 +26,7 @@ from backend.platform.agent_runtime.middleware.context import AgentRuntimeContex
 from backend.platform.agent_runtime.middleware.factory import build_agent_middleware
 from backend.platform.agent_runtime.core.mode_selector import ModeSelection
 from backend.platform.agent_runtime.plan.graph.config import PlanGraphDependencies
-from backend.platform.agent_runtime.plan.planner import MinimalPlanner
+from backend.platform.agent_runtime.plan.planner import LangChainPlanPlanner
 from backend.platform.agent_runtime.core.projection import (
     RuntimeRunProjection,
     project_runtime_run,
@@ -83,23 +83,41 @@ class ChatAgentRuntimeMixin:
             prepared: PreparedChatTurn,
             state: Mapping[str, Any],
     ) -> ReActDependencies:
+        """为 ChatGraph 的 react_branch 节点组装 ReAct 子图运行依赖。"""
+
+        # ReAct 工具是否可用，取决于当前 session 挂载了哪些知识源。
+        # 例如只挂 documents，就只允许使用 documents 相关的检索工具。
         mounted_knowledge_sources = self._mounted_knowledge_sources_for_session(
             prepared.session_id
         )
+
+        # mode_selection 是前面 select_mode/route_mode 的结果。
+        # 这里保留下来，后面 project_result 投影回 ChatGraph 时要一起写回状态。
         mode_selection = self._mode_selection_from_graph_state(prepared, state)
+
+        # ToolExecutor 是 ReAct 真正执行工具的入口。
+        # 它会把 scene 工具、RAG 工具和幂等执行逻辑统一包起来。
         tool_executor = self._build_agent_tool_executor(
             mounted_knowledge_sources=mounted_knowledge_sources,
             request_id=prepared.request_id,
         )
+
+        # 工具策略负责回答“哪些工具可用、哪些工具高风险、默认输入是什么”。
+        # 后面的 middleware 和 runtime 都会基于这份策略限制工具调用。
         tool_policy = self._build_runtime_tool_policy(
             tool_executor=tool_executor,
             message=prepared.user_message,
             mounted_knowledge_sources=mounted_knowledge_sources,
             request_id=prepared.request_id,
         )
+
+        # scene_policy 是 ReAct 在当前场景下的运行约束，比如最多跑几轮。
         scene_policy = self._build_react_scene_policy(
             tool_policy=tool_policy,
         )
+
+        # runtime_context 是跨 middleware、LangChain agent、trace、HITL 共享的上下文。
+        # workflow 里的 thread_id/checkpoint_ns 决定 LangGraph checkpoint 写到哪里。
         runtime_context = AgentRuntimeContext.build(
             session_id=prepared.session_id,
             request_id=prepared.request_id,
@@ -118,17 +136,26 @@ class ChatAgentRuntimeMixin:
                 "max_turns": scene_policy.max_turns,
             },
         )
+
+        # middleware_bundle 会挂到 LangChain create_agent 上：
+        # 这里集中加入动态 prompt、工具边界、HITL 审核、trace 等横切能力。
         middleware_bundle = build_agent_middleware(
             context=runtime_context,
             allowed_tools=sorted(tool_executor.allowed_tools),
             high_risk_tools=tool_policy.high_risk_tools,
             max_calls_per_tool=scene_policy.max_turns,
         )
+
+        # provider_factory 负责创建实际的 LangChain ReAct agent。
+        # 模型来自当前配置，checkpointer 复用 ChatGraph 的 LangGraph checkpoint。
         provider_factory = ReActProviderFactory(
             model_provider=self.model.get_chat_model_provider(),
             middleware_bundle=middleware_bundle,
             checkpointer=self.graph_runtime.checkpointer,
         )
+
+        # react_branch 只认识 ReActDependencies。
+        # 因此这里把 application 层能拿到的模型、工具、策略、投影函数打包交出去。
         return ReActDependencies(
             tool_executor=tool_executor,
             provider_factory=provider_factory,
@@ -142,11 +169,15 @@ class ChatAgentRuntimeMixin:
             default_tool_inputs=tool_policy.default_inputs,
             react_run_id=f"react-{prepared.request_id}",
             initial_run=(
+                # 如果 ChatGraph state 里已经有 react_run，说明可能是 checkpoint 恢复。
+                # 先转回 ReActRun，避免 ReAct runtime 重复执行已经完成的 run。
                 ReActRun.model_validate(state["react_run"])
                 if isinstance(state.get("react_run"), Mapping)
                 else None
             ),
             max_turns=scene_policy.max_turns,
+            # ReAct runtime 只返回 ReActRun；ChatGraph 还需要 documents/citations/
+            # answer_mode 等字段，所以这里传入投影函数，把子图结果转成顶层状态更新。
             project_result=lambda run: self._project_react_graph_result(
                 run=run,
                 prepared=prepared,
@@ -174,7 +205,7 @@ class ChatAgentRuntimeMixin:
             mounted_knowledge_sources=mounted_knowledge_sources,
             request_id=prepared.request_id,
         )
-        tool_name = self._require_default_retrieval_tool(
+        self._require_default_retrieval_tool(
             tool_policy=tool_policy,
             request_id=prepared.request_id,
         )
@@ -183,17 +214,23 @@ class ChatAgentRuntimeMixin:
         )
         return PlanGraphDependencies(
             tool_executor=tool_executor,
+            planner=LangChainPlanPlanner(
+                model_provider=self.model.get_chat_model_provider(),
+                tool_executor=tool_executor,
+                model_call_guard=None,
+                plan_run_id_factory=lambda: f"plan-{prepared.request_id}",
+                step_id_factory=lambda index: f"step-{index}",
+            ),
             session_id=prepared.session_id,
             request_id=prepared.request_id,
             user_goal=prepared.user_message,
             mounted_knowledge_sources=mounted_knowledge_sources,
             candidate_tools=self._plan_candidate_tools(tool_policy=tool_policy),
             scene_policy=scene_policy,
-            planner=MinimalPlanner(
-                tool_executor=tool_executor,
-                plan_run_id_factory=lambda: f"plan-{prepared.request_id}",
-                step_id_factory=lambda index: f"step-{index}",
-            ),
+            default_tool_inputs=tool_policy.default_inputs,
+            complexity=prepared.complexity or "moderate",
+            max_plan_steps=int(scene_policy.get("max_plan_steps") or 8),
+            checkpointer=self.graph_runtime.checkpointer,
             project_result=lambda run: self._project_plan_graph_result(
                 run=run,
                 prepared=prepared,
@@ -504,12 +541,10 @@ class ChatAgentRuntimeMixin:
             *,
             tool_policy: RuntimeToolPolicy,
     ) -> dict[str, Any]:
-        """读取 scene 暴露的 plan 策略；没有策略时保持保守单工具计划。"""
+        """读取 scene 暴露的 plan 约束，供 LLM planner 参考。"""
         policy = self._agent_runtime_plan_policy()
-        if not self._has_explicit_plan_policy(policy):
-            policy["preferred_plan_tools"] = [tool_policy.require_default_retrieval_tool()]
 
-        # RAG adapter 的输入由 application 统一注入检索策略，scene 可按工具覆盖。
+        # RAG adapter 的输入由 application 统一注入检索策略，scene 只提供 planner 约束。
         plan_tool_inputs = dict(policy.get("plan_tool_inputs") or {})
         for tool_name, tool_input in tool_policy.default_inputs.items():
             plan_tool_inputs.setdefault(tool_name, dict(tool_input))
@@ -531,18 +566,6 @@ class ChatAgentRuntimeMixin:
         plan_policy = metadata.get("plan_policy")
         return dict(plan_policy) if isinstance(plan_policy, Mapping) else {}
 
-    def _has_explicit_plan_policy(self, policy: Mapping[str, Any]) -> bool:
-        return any(
-            key in policy
-            for key in (
-                "plan_steps",
-                "preferred_plan_tools",
-                "default_plan_tools",
-                "plan_tools",
-                "candidate_tools",
-            )
-        )
-
     def _plan_candidate_tools(
             self,
             *,
@@ -554,22 +577,6 @@ class ChatAgentRuntimeMixin:
             selected.append(default_tool_name)
         allowed = set(tool_policy.allowed_tools)
         return tuple(tool_name for tool_name in selected if tool_name in allowed)
-
-    def _policy_step_tool_names(self, value: Any) -> list[str]:
-        if not isinstance(value, list | tuple):
-            return []
-        tool_names: list[str] = []
-        for step in value:
-            if isinstance(step, Mapping) and isinstance(step.get("tool_name"), str):
-                tool_names.append(str(step["tool_name"]))
-        return tool_names
-
-    def _policy_tool_names(self, value: Any) -> list[str]:
-        if isinstance(value, str):
-            return [value]
-        if isinstance(value, list | tuple):
-            return [str(tool_name) for tool_name in value]
-        return []
 
     def _agent_execution_result_from_run(
             self,

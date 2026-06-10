@@ -28,7 +28,7 @@ class PlanSynthesisContext(AgentRuntimeModel):
 
 
 class PlanSynthesisResult(AgentRuntimeModel):
-    """PlanExecutor 写回 PlanRun 的最终汇总结果。"""
+    """Plan 图写回 PlanRun 的最终汇总结果。"""
 
     final_answer: str
     result_summary: str = ""

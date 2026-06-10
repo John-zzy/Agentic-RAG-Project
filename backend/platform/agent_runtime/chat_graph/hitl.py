@@ -7,7 +7,7 @@ from typing import Any
 
 from langchain_core.messages import AIMessage, HumanMessage
 
-from backend.platform.agent_runtime.chat_graph.runtime_parts.agent_state import (
+from backend.platform.agent_runtime.chat_graph.state_ops import (
     _coerce_optional_agent_mode,
 )
 from backend.platform.agent_runtime.chat_graph.contracts import (
@@ -32,11 +32,12 @@ from backend.platform.agent_runtime.tooling.idempotency import (
     build_input_hash,
     build_tool_idempotency_key,
 )
-from backend.platform.agent_runtime.plan.executor import PlanExecutor
 from backend.platform.agent_runtime.plan.graph import (
     PlanHitlResumeGraphDependencies,
     build_plan_hitl_resume_graph,
 )
+from backend.platform.agent_runtime.plan.graph.config import PlanGraphDependencies
+from backend.platform.agent_runtime.tooling.executor import ToolExecutor
 from backend.platform.workflow.langgraph.config import build_runtime_graph_config
 from backend.platform.workflow.langgraph.resume import build_validated_resume_command
 from backend.platform.workflow.langgraph.state import RuntimeGraphState, RuntimeHitlState, build_runtime_hitl_state
@@ -149,7 +150,7 @@ class HitlRuntimeMixin:
         resume: HitlResumeInput,
         approve_executor: HitlApproveExecutor | None = None,
         respond_handler: HitlRespondHandler | None = None,
-        plan_executor: PlanExecutor | None = None,
+        plan_tool_executor: ToolExecutor | None = None,
     ) -> HitlRuntimeResult:
         """处理用户的 approve、reject、respond 动作，并更新当前会话状态。"""
         with self._resume_lock:
@@ -157,7 +158,7 @@ class HitlRuntimeMixin:
                 resume=resume,
                 approve_executor=approve_executor,
                 respond_handler=respond_handler,
-                plan_executor=plan_executor,
+                plan_tool_executor=plan_tool_executor,
             )
 
     def _resume_hitl_locked(
@@ -166,7 +167,7 @@ class HitlRuntimeMixin:
         resume: HitlResumeInput,
         approve_executor: HitlApproveExecutor | None,
         respond_handler: HitlRespondHandler | None,
-        plan_executor: PlanExecutor | None,
+        plan_tool_executor: ToolExecutor | None,
     ) -> HitlRuntimeResult:
         """真正执行 resume；外层已加锁，避免同一等待点被同时处理两次。"""
         config = build_runtime_graph_config(
@@ -201,6 +202,8 @@ class HitlRuntimeMixin:
                 dict(hitl.get("metadata") or {}).get("mode")
             )
             agent_resume_update: dict[str, Any] = {}
+            if orchestration_mode == "plan":
+                self._require_plan_tool_executor(plan_tool_executor)
 
             if orchestration_mode is not None:
                 use_agent_graph_resume = (
@@ -227,7 +230,7 @@ class HitlRuntimeMixin:
                         resume_payload=resume_payload,
                         approve_executor=approve_executor,
                         respond_handler=respond_handler,
-                        plan_executor=plan_executor,
+                        plan_tool_executor=plan_tool_executor,
                     )
                     tool_result = graph_result.tool_result
                     response_result = graph_result.response_result
@@ -376,7 +379,7 @@ class HitlRuntimeMixin:
         resume_payload: Mapping[str, Any],
         approve_executor: HitlApproveExecutor | None,
         respond_handler: HitlRespondHandler | None,
-        plan_executor: PlanExecutor | None,
+        plan_tool_executor: ToolExecutor | None,
     ) -> _AgentGraphResumeResult:
         """Route accepted orchestration HITL resume through the owning Agent graph."""
         proposed_tool_call = (
@@ -403,9 +406,17 @@ class HitlRuntimeMixin:
         plan_run = state.get("plan_run")
         if not isinstance(plan_run, Mapping):
             raise HitlResumeError("plan_run checkpoint is required for Plan HITL resume.")
+        resolved_tool_executor = self._require_plan_tool_executor(plan_tool_executor)
+        build_deps = getattr(self, "_build_plan_graph_deps", None)
+        graph_deps = (
+            build_deps(_prepared_turn_from_state(state), accepted_state)
+            if build_deps is not None
+            else PlanGraphDependencies(tool_executor=resolved_tool_executor)
+        )
         graph = build_plan_hitl_resume_graph(
             PlanHitlResumeGraphDependencies(
-                executor=self._require_plan_resume_executor(plan_executor),
+                graph_dependencies=graph_deps,
+                tool_executor=resolved_tool_executor,
             )
         )
         resume_command = build_validated_resume_command(
@@ -445,14 +456,14 @@ class HitlRuntimeMixin:
             },
         )
 
-    def _require_plan_resume_executor(
+    def _require_plan_tool_executor(
         self,
-        plan_executor: PlanExecutor | None,
-    ) -> PlanExecutor:
-        """Plan HITL resume 必须通过 PlanExecutor 回到图内执行边界。"""
-        if plan_executor is None:
-            raise HitlResumeError("plan_executor is required for Plan HITL resume.")
-        return plan_executor
+        plan_tool_executor: ToolExecutor | None,
+    ) -> ToolExecutor:
+        """Plan HITL resume 只需要平台工具执行边界。"""
+        if plan_tool_executor is None:
+            raise HitlResumeError("plan_tool_executor is required for Plan HITL resume.")
+        return plan_tool_executor
 
     def _resume_react_agent(
         self,

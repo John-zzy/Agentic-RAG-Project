@@ -16,6 +16,7 @@ def build_synthesize_result_node(dependencies: PlanGraphDependencies):
         )
         return {
             "plan_run": plan_run,
+            "status": plan_run.workflow_status,
             "current_step_id": plan_run.current_step_id,
             "current_tool_call": (
                 plan_run.current_tool_call.model_dump()

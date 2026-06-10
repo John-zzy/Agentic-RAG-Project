@@ -5,10 +5,6 @@ from dataclasses import dataclass
 
 from backend.platform.agent_runtime.middleware.context import AgentRuntimeContext
 from backend.platform.agent_runtime.middleware.dynamic_prompt import DynamicPromptMiddleware
-from backend.platform.agent_runtime.middleware.hitl_gate import (
-    HitlGateMiddleware,
-    HitlGatePolicy,
-)
 from backend.platform.agent_runtime.middleware.model_guard import (
     ModelGuardMiddleware,
     ModelGuardPolicy,
@@ -31,7 +27,6 @@ class AgentMiddlewareBundle:
     model_guard: ModelGuardMiddleware
     tool_policy: ToolPolicyMiddleware
     tool_observation: ToolObservationMiddleware
-    hitl_gate: HitlGateMiddleware
     trace: RuntimeTraceMiddleware
     hitl_interrupts: dict[str, dict[str, object]]
 
@@ -42,7 +37,6 @@ class AgentMiddlewareBundle:
             self.model_guard,
             self.tool_policy,
             self.tool_observation,
-            self.hitl_gate,
             self.trace,
         )
 
@@ -56,12 +50,9 @@ def build_agent_middleware(
     risk_by_tool: Mapping[str, ToolRiskLevel] | None = None,
     max_calls_per_tool: int | None = None,
     model_policy: ModelGuardPolicy | None = None,
-    hitl_policy: HitlGatePolicy | None = None,
 ) -> AgentMiddlewareBundle:
     tool_observation = ToolObservationMiddleware()
     approval_required_tools = set(high_risk_tools)
-    if hitl_policy is not None:
-        approval_required_tools.update(hitl_policy.approval_required_tools)
     return AgentMiddlewareBundle(
         context=context,
         dynamic_prompt=DynamicPromptMiddleware(),
@@ -76,10 +67,6 @@ def build_agent_middleware(
             )
         ),
         tool_observation=tool_observation,
-        hitl_gate=HitlGateMiddleware(
-            policy=hitl_policy,
-            observation_middleware=tool_observation,
-        ),
         trace=RuntimeTraceMiddleware(),
         hitl_interrupts={
             tool_name: {"allowed_decisions": ["approve", "reject", "respond"]}

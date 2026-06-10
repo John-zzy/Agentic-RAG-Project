@@ -39,6 +39,7 @@ AnswerBuilder = Callable[[PreparedChatTurn], tuple[str, list[Any]]]
 HistoryLoader = Callable[[PreparedChatTurn], Sequence[BaseMessage]]
 HitlApproveExecutor = Callable[[Mapping[str, Any]], Mapping[str, Any] | None]
 HitlRespondHandler = Callable[[Mapping[str, Any], RuntimeGraphState], Mapping[str, Any] | None]
+HitlPlanToolExecutor = Any
 
 
 class ChatGraphDependencies(Protocol):

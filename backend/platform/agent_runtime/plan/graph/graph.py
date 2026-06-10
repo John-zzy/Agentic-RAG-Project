@@ -60,7 +60,16 @@ def build_plan_graph(
     _add_logged_node(builder, "synthesize_result", build_synthesize_result_node(dependencies))
 
     builder.add_edge(START, CREATE_PLAN)
-    builder.add_edge(CREATE_PLAN, SELECT_NEXT_STEP)
+    builder.add_conditional_edges(
+        CREATE_PLAN,
+        wrap_graph_route(
+            graph_name=PLAN_GRAPH_NAME,
+            route_name=CREATE_PLAN,
+            route=lambda state: "synthesize_result"
+            if state["plan_run"].workflow_status in {"waiting_user", "failed", "cancelled"}
+            else SELECT_NEXT_STEP,
+        ),
+    )
     builder.add_edge(SELECT_NEXT_STEP, EXECUTE_STEP)
     builder.add_edge(EXECUTE_STEP, HANDLE_RETRY)
     builder.add_conditional_edges(

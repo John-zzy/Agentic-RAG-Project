@@ -22,7 +22,6 @@ from backend.platform.agent_runtime.chat_graph.contracts import (
     HitlWaitInput,
 )
 from backend.platform.agent_runtime.core.contracts import ReActAction, ReActRun, ReActTurn
-from backend.platform.agent_runtime.plan.executor import PlanExecutor
 from backend.platform.agent_runtime.tooling.executor import ToolExecutor
 from backend.platform.workflow.langgraph.state import RuntimeGraphState
 from backend.scenes.generic_assistant.hitl import (
@@ -267,7 +266,7 @@ class ChatHitlMixin:
                 ),
                 approve_executor=self._execute_approved_scene_tool,
                 respond_handler=self._handle_clarification_response,
-                plan_executor=self._build_plan_hitl_resume_executor(
+                plan_tool_executor=self._build_plan_hitl_resume_tool_executor(
                     session_id=payload.session_id,
                     request_id=request_id,
                 ),
@@ -297,24 +296,22 @@ class ChatHitlMixin:
         observation = executor.execute(tool_name=tool_name, input_payload=dict(args))
         return observation.model_dump()
 
-    def _build_plan_hitl_resume_executor(
+    def _build_plan_hitl_resume_tool_executor(
             self,
             *,
             session_id: str,
             request_id: str,
-    ) -> PlanExecutor:
-        """为 Plan HITL resume 组装平台执行器，具体 continuation 仍由 PlanExecutor 负责。"""
+    ) -> ToolExecutor:
+        """为 Plan HITL resume 组装平台工具执行边界。"""
         session = self.session_store.get_session(session_id)
         mounted_knowledge_sources = (
             tuple(session.mounted_knowledge_sources)
             if session is not None
             else tuple()
         )
-        return PlanExecutor(
-            tool_executor=self._build_agent_tool_executor(
-                mounted_knowledge_sources=mounted_knowledge_sources,
-                request_id=request_id,
-            )
+        return self._build_agent_tool_executor(
+            mounted_knowledge_sources=mounted_knowledge_sources,
+            request_id=request_id,
         )
 
     def _handle_clarification_response(

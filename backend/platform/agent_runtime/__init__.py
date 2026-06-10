@@ -47,30 +47,32 @@ _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
     "ModeSelection": ("backend.platform.agent_runtime.core.mode_selector", "ModeSelection"),
     "ModeSelectionContext": ("backend.platform.agent_runtime.core.mode_selector", "ModeSelectionContext"),
     "ModeSelector": ("backend.platform.agent_runtime.core.mode_selector", "ModeSelector"),
-    "PlanExecutor": ("backend.platform.agent_runtime.plan.executor", "PlanExecutor"),
+    "LangChainPlanPlanner": (
+        "backend.platform.agent_runtime.plan.planner",
+        "LangChainPlanPlanner",
+    ),
+    "PlanDraft": ("backend.platform.agent_runtime.plan.planner", "PlanDraft"),
     "PlanFinalSynthesizer": (
-        "backend.platform.agent_runtime.plan.executor",
+        "backend.platform.agent_runtime.plan.synthesis",
         "PlanFinalSynthesizer",
     ),
+    "PlanPlannerContext": (
+        "backend.platform.agent_runtime.plan.planner",
+        "PlanPlannerContext",
+    ),
+    "PlanStepDraft": ("backend.platform.agent_runtime.plan.planner", "PlanStepDraft"),
     "PlanSynthesisContext": (
-        "backend.platform.agent_runtime.plan.executor",
+        "backend.platform.agent_runtime.plan.synthesis",
         "PlanSynthesisContext",
     ),
     "PlanSynthesisResult": (
-        "backend.platform.agent_runtime.plan.executor",
+        "backend.platform.agent_runtime.plan.synthesis",
         "PlanSynthesisResult",
     ),
     "StepSummarySynthesizer": (
-        "backend.platform.agent_runtime.plan.executor",
+        "backend.platform.agent_runtime.plan.synthesis",
         "StepSummarySynthesizer",
     ),
-    "MinimalPlanStepSelector": (
-        "backend.platform.agent_runtime.plan.planner",
-        "MinimalPlanStepSelector",
-    ),
-    "MinimalPlanner": ("backend.platform.agent_runtime.plan.planner", "MinimalPlanner"),
-    "PlanStepSelector": ("backend.platform.agent_runtime.plan.planner", "PlanStepSelector"),
-    "PlannerContext": ("backend.platform.agent_runtime.plan.planner", "PlannerContext"),
     "AGENTIC_RAG_TOOL_NAME": (
         "backend.platform.agent_runtime.tooling.rag",
         "AGENTIC_RAG_TOOL_NAME",
@@ -112,8 +114,6 @@ _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
 }
 
 _ALIASES: dict[str, str] = {
-    "Planner": "MinimalPlanner",
-    "PlanContext": "PlannerContext",
     "PlanSummarySynthesizer": "StepSummarySynthesizer",
 }
 
@@ -143,25 +143,22 @@ __all__ = [
     "NATIVE_RAG_TOOL_NAME",
     "NativeRAGToolAdapter",
     "NativeRagToolAdapter",
-    "MinimalPlanStepSelector",
-    "MinimalPlanner",
+    "LangChainPlanPlanner",
     "MinimalModeSelector",
     "ModeSelection",
     "ModeSelectionContext",
     "ModeSelector",
     "PlanDependencyValidationError",
-    "PlanContext",
-    "PlanExecutor",
+    "PlanDraft",
     "PlanFinalSynthesizer",
+    "PlanPlannerContext",
     "PlanRun",
     "PlanStep",
-    "PlanStepSelector",
+    "PlanStepDraft",
     "PlanStepStatus",
     "PlanSummarySynthesizer",
     "PlanSynthesisContext",
     "PlanSynthesisResult",
-    "Planner",
-    "PlannerContext",
     "RAGToolAdapter",
     "RAGToolInput",
     "ReActAction",

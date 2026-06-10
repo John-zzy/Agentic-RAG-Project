@@ -16,7 +16,7 @@ class AgentRuntimeStateProjectionMixin:
         *,
         state: RuntimeGraphState,
         answer: str,
-            citations: Sequence[Any],
+        citations: Sequence[Any],
         knowledge_used: bool,
     ) -> dict[str, Any]:
         """把既有检索回答归档为顶层 Agent Runtime 审计结构。"""

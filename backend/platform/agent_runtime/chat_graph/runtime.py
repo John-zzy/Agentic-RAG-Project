@@ -1,6 +1,7 @@
 ﻿from __future__ import annotations
 
 from threading import Lock
+from collections.abc import Callable
 from typing import Any
 
 from backend.platform.agent_runtime.chat_graph.contracts import (
@@ -9,23 +10,22 @@ from backend.platform.agent_runtime.chat_graph.contracts import (
     PreparedGraphTurn,
     RuntimeGraphResult,
 )
+from backend.platform.agent_runtime.chat_graph.graph import build_chat_graph
+from backend.platform.agent_runtime.chat_graph.graph.config import ChatGraphDependencies
+from backend.platform.agent_runtime.chat_graph.hitl import HitlRuntimeMixin
 from backend.platform.agent_runtime.chat_graph.projection import (
     project_runtime_graph_state,
 )
-from backend.platform.agent_runtime.chat_graph.runtime_parts.agent_state import (
-    AgentRuntimeStateProjectionMixin,
-)
-from backend.platform.agent_runtime.chat_graph.runtime_parts.answer_graph import (
-    AnswerGraphMixin,
-)
-from backend.platform.agent_runtime.chat_graph.runtime_parts.hitl import HitlRuntimeMixin
-from backend.platform.agent_runtime.chat_graph.runtime_parts.recovery import (
+from backend.platform.agent_runtime.chat_graph.recovery import (
     RuntimeRecoveryMixin,
 )
-from backend.platform.agent_runtime.tooling.idempotency import ToolIdempotencyStore
-from backend.platform.agent_runtime.chat_graph.runtime_parts.state_store import (
+from backend.platform.agent_runtime.chat_graph.state_ops import (
+    AgentRuntimeStateProjectionMixin,
+)
+from backend.platform.agent_runtime.chat_graph.state_store import (
     RuntimeStateStoreMixin,
 )
+from backend.platform.agent_runtime.tooling.idempotency import ToolIdempotencyStore
 from backend.platform.agent_runtime.observability.graph_logging import (
     log_graph_invoke_end,
     log_graph_invoke_error,
@@ -38,7 +38,6 @@ from backend.platform.workflow.langgraph.lifecycle import GraphRunLifecycleRecor
 
 class ChatGraphRuntime(
     RuntimeStateStoreMixin,
-    AnswerGraphMixin,
     HitlRuntimeMixin,
     RuntimeRecoveryMixin,
     AgentRuntimeStateProjectionMixin,
@@ -136,6 +135,37 @@ class ChatGraphRuntime(
             state=projection.state,
             config=config,
             run_id=run.run_id,
+        )
+
+    def _compile_answer_graph(
+        self,
+        *,
+        prepared: PreparedGraphTurn,
+        answer_builder: AnswerBuilder,
+        select_agent_mode: Callable[[PreparedGraphTurn], dict[str, Any]] | None = None,
+        build_react_deps: Callable[[PreparedGraphTurn, dict[str, Any]], Any] | None = None,
+        build_plan_graph_deps: Callable[[PreparedGraphTurn, dict[str, Any]], Any] | None = None,
+        build_prepared_from_state: Callable[
+            [PreparedGraphTurn, dict[str, Any]],
+            PreparedGraphTurn,
+        ] | None = None,
+        build_hitl_wait_update: Callable[
+            [PreparedGraphTurn, dict[str, Any]],
+            dict[str, Any],
+        ] | None = None,
+    ) -> Any:
+        return build_chat_graph(
+            ChatGraphDependencies(
+                prepared=prepared,
+                answer_builder=answer_builder,
+                build_agent_runtime_success_update=self._build_agent_runtime_success_update,
+                select_agent_mode=select_agent_mode,
+                build_react_deps=build_react_deps,
+                build_plan_graph_deps=build_plan_graph_deps,
+                build_prepared_from_state=build_prepared_from_state,
+                build_hitl_wait_update=build_hitl_wait_update,
+            ),
+            checkpointer=self.checkpointer,
         )
 
 

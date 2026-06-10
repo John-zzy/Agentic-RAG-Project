@@ -6,7 +6,7 @@
 
 1. `/chat` 不是“先检索再回答”，而是先组织成一次可执行的 Agent 运行。
 2. 简单任务走 ReAct，复杂任务走 Plan。
-3. ReAct 主路径由 LangChain `create_agent` provider 承接，RAG 和 Agentic RAG 只是可调用工具，不是顶层入口。
+3. ReAct 主路径由 LangChain `create_agent` provider 承接，Plan 主路径由 LLM structured planner 和 LangGraph 子图承接；RAG 和 Agentic RAG 只是可调用工具，不是顶层入口。
 
 主链路图在这里：
 
@@ -102,19 +102,22 @@ ReAct 的直觉很简单：
 
 ## Plan 怎么跑
 
-Plan 的主流程在 [Plan Graph](</d:/Programs/interview-projects/ai-rag-project/backend/platform/agent_runtime/plan/graph/graph.py:25>)。子图节点复用 [MinimalPlanner](</d:/Programs/interview-projects/ai-rag-project/backend/platform/agent_runtime/plan/planner.py:70>) 创建计划，并复用 [PlanExecutor](</d:/Programs/interview-projects/ai-rag-project/backend/platform/agent_runtime/plan/executor.py:78>) 执行 step。
+Plan 的主流程在 [Plan Graph](</d:/Programs/interview-projects/ai-rag-project/backend/platform/agent_runtime/plan/graph/graph.py:25>)。`create_plan` 节点使用 [LangChainPlanPlanner](</d:/Programs/interview-projects/ai-rag-project/backend/platform/agent_runtime/plan/planner.py:52>) 调用模型的 structured output，得到一组 `PlanStepDraft`，再转换成项目自己的 `PlanStep`。
 
-Plan 先生成计划，再执行计划。它不是边走边想，而是先把任务拆成步骤。
+Plan 先让 LLM 生成计划，再由 LangGraph 节点一步步执行计划。系统不会再用规则 planner 兜底，也不会用一个内部 while-loop 执行器把整条链路跑完。LLM 可以自己决定有多少个 step，平台只用 `max_plan_steps` 做安全上限。
 
 对应的数据结构是 [PlanRun](</d:/Programs/interview-projects/ai-rag-project/backend/platform/agent_runtime/core/contracts.py:178>) 和 [PlanStep](</d:/Programs/interview-projects/ai-rag-project/backend/platform/agent_runtime/core/contracts.py:161>)。
 
 你可以这样理解：
 
-1. `create_plan` 节点根据用户目标、场景策略和可用工具，生成 step 列表。
+1. `create_plan` 节点根据用户目标、场景策略、可用工具和默认工具输入，让 LLM 生成 step 列表。
 2. 每个 step 会带自己的 `goal`、`tool_name`、`input` 和 `depends_on`。
-3. `select_next_step` 只挑选已经满足依赖的 step。
-4. `execute_step` 通过 `PlanExecutor` 执行 step，并把结果沉淀成 observation。
-5. `handle_retry` 决定继续、重试、等待用户，还是进入 `synthesize_plan_result` / `synthesize_result`。
+3. `create_plan` 会校验空计划、step 数量、工具白名单、依赖关系和工具输入；不合法就把 `PlanRun` 标成 failed。
+4. `select_next_step` 只挑选已经满足依赖的 step。
+5. `execute_step` 通过 `ToolExecutor` 执行当前 step，并把结果沉淀成 observation。
+6. `handle_retry` 决定继续、重试、等待用户，还是进入 `synthesize_plan_result` / `synthesize_result`。
+
+Plan 的一些业务判断被拆到 [state_ops](</d:/Programs/interview-projects/ai-rag-project/backend/platform/agent_runtime/plan/state_ops.py:1>)，例如选择下一步、处理 retry、处理依赖阻塞、收集 citations、汇总最终结果。这样图节点保持清楚，通用的工具边界仍然复用 `ToolExecutor`、`core.validation` 和 middleware。
 
 Plan 更适合这类问题：
 
@@ -173,7 +176,7 @@ RAG 的顶层工具包装在 [build_rag_tool_adapters](</d:/Programs/interview-p
 
 用户 `approve` 或 `respond` 后，会继续同一个 run；`reject` 则会把这次运行收成 `cancelled`。
 
-`ChatGraphRuntime` 负责把这些状态真正写进 checkpoint，见 platform 层 [ChatGraphRuntime](</d:/Programs/interview-projects/ai-rag-project/backend/platform/agent_runtime/chat_graph/runtime.py:24>) 和 [runtime_parts](</d:/Programs/interview-projects/ai-rag-project/backend/platform/agent_runtime/chat_graph/runtime_parts/answer_graph.py:15>)；application 层只保留 settings adapter。
+`ChatGraphRuntime` 负责把这些状态真正写进 checkpoint，见 platform 层 [ChatGraphRuntime](</d:/Programs/interview-projects/ai-rag-project/backend/platform/agent_runtime/chat_graph/runtime.py:24>)、[state_store](</d:/Programs/interview-projects/ai-rag-project/backend/platform/agent_runtime/chat_graph/state_store.py:17>) 和 [hitl](</d:/Programs/interview-projects/ai-rag-project/backend/platform/agent_runtime/chat_graph/hitl.py:42>)；application 层只保留 settings adapter。
 
 ## 两个小例子
 
@@ -196,7 +199,7 @@ RAG 的顶层工具包装在 [build_rag_tool_adapters](</d:/Programs/interview-p
 通常路径是：
 
 1. `ModeSelector` 选 Plan。
-2. `MinimalPlanner` 拆出多个 step。
+2. `LangChainPlanPlanner` 让 LLM 生成多个 step，并由平台校验工具、输入和依赖。
 3. Plan 子图按依赖顺序执行 step。
 4. 每个 step 的结果写入 observation。
 5. 最后把多个 step 的结果汇总成计划。

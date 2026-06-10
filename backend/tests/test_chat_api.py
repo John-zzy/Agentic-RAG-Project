@@ -1,5 +1,6 @@
 ﻿from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
+import ast
 import json
 from threading import Event, Lock
 from typing import Any
@@ -17,6 +18,7 @@ from backend.application.runtime.api.app import create_app
 from backend.application.runtime.api.chat.schemas import ChatRequest
 from backend.application.runtime import ChatService, SceneChatService, build_default_scene_registry
 from backend.platform.agent_runtime.core.contracts import ReActAction, ReActRun, ReActTurn, ToolObservation
+from backend.platform.agent_runtime.plan.planner import PlanDraft, PlanStepDraft
 from backend.platform.agent_runtime.tooling.rag import AGENTIC_RAG_TOOL_NAME, NATIVE_RAG_TOOL_NAME
 from backend.platform.agent_runtime.tooling.executor import ToolExecutor
 from backend.platform.config.settings import AppSettings
@@ -160,13 +162,19 @@ class QueryFilteredFakeDocumentRetrievalService(FakeDocumentRetrievalService):
 
 
 class FakeModel:
-    def __init__(self, answer: str = "mock-answer", stream_chunks: list[str] | None = None) -> None:
+    def __init__(
+        self,
+        answer: str = "mock-answer",
+        stream_chunks: list[str] | None = None,
+        plan_draft: PlanDraft | None = None,
+    ) -> None:
         self.answer = answer
         self.get_runnable_calls: list[str] = []
         self.invoke_runnable_calls: list[dict[str, Any]] = []
         self.stream_runnable_calls: list[dict[str, Any]] = []
         self.history_recorder = HistoryRecorder()
         self.stream_chunks = stream_chunks or [answer]
+        self.plan_draft = plan_draft
 
     def get_runnable(
         self,
@@ -232,7 +240,7 @@ class FakeModel:
         complexity: str = "simple",
     ):
         del complexity
-        return _FakeProviderChatModel(answer=self.answer)
+        return _FakeProviderChatModel(answer=self.answer, plan_draft=self.plan_draft)
 
     def get_chat_model_provider(self) -> Any:
         return lambda complexity="simple": self.build_chat_model_for_complexity(complexity)
@@ -240,6 +248,7 @@ class FakeModel:
 
 class _FakeProviderChatModel(BaseChatModel):
     answer: str
+    plan_draft: PlanDraft | None = None
     bound_tool_names: list[str] = []
     call_count: int = 0
 
@@ -261,6 +270,12 @@ class _FakeProviderChatModel(BaseChatModel):
             [str(getattr(tool, "name", tool)) for tool in tools],
         )
         return self
+
+    def with_structured_output(self, schema: Any, **kwargs: Any) -> RunnableSerializable[Any, Any]:
+        del kwargs
+        if schema is PlanDraft:
+            return _FakePlanStructuredModel(plan_draft=self.plan_draft)
+        return super().with_structured_output(schema)
 
     def _generate(
         self,
@@ -293,6 +308,34 @@ def _latest_user_message(messages: list[BaseMessage]) -> str:
         if message.type == "human":
             return str(message.content)
     return "test query"
+
+
+class _FakePlanStructuredModel(RunnableSerializable[Any, PlanDraft]):
+    plan_draft: PlanDraft | None = None
+
+    def invoke(
+        self,
+        input: Any,
+        config: Any | None = None,
+        **kwargs: Any,
+    ) -> PlanDraft:
+        del config, kwargs
+        if self.plan_draft is not None:
+            return self.plan_draft
+        prompt_text = _prompt_text(input)
+        tool_name = _first_plan_allowed_tool(prompt_text)
+        return PlanDraft(
+            steps=[
+                PlanStepDraft(
+                    step_id="step-1",
+                    goal="调用允许的检索工具收集证据。",
+                    tool_name=tool_name,
+                    input=_plan_default_input(prompt_text, tool_name=tool_name),
+                )
+            ],
+            rationale_summary="测试默认计划：选择一个可执行 RAG 工具。",
+        )
+
 
 class FakeRewriteModel:
     def __init__(self, output: str) -> None:
@@ -503,7 +546,61 @@ def _prompt_text(input: Any) -> str:
         return "\n".join(str(message.content) for message in input.to_messages())
     if isinstance(input, list) and all(isinstance(message, BaseMessage) for message in input):
         return "\n".join(str(message.content) for message in input)
+    if isinstance(input, list) and all(isinstance(message, dict) for message in input):
+        return "\n".join(str(message.get("content") or "") for message in input)
     return str(input)
+
+
+def _first_plan_allowed_tool(prompt_text: str) -> str:
+    tools = _plan_allowed_tools(prompt_text)
+    for preferred_tool in (AGENTIC_RAG_TOOL_NAME, NATIVE_RAG_TOOL_NAME):
+        if preferred_tool in tools:
+            return preferred_tool
+    return tools[0] if tools else AGENTIC_RAG_TOOL_NAME
+
+
+def _plan_default_input(prompt_text: str, *, tool_name: str) -> dict[str, Any]:
+    for tool in _plan_tool_payloads(prompt_text):
+        if str(tool.get("name") or "") != tool_name:
+            continue
+        default_input = tool.get("default_input")
+        if isinstance(default_input, dict) and default_input:
+            return dict(default_input)
+    return {"query": _plan_user_goal(prompt_text)}
+
+
+def _plan_allowed_tools(prompt_text: str) -> list[str]:
+    return [
+        str(tool.get("name") or "")
+        for tool in _plan_tool_payloads(prompt_text)
+        if tool.get("name")
+    ]
+
+
+def _plan_tool_payloads(prompt_text: str) -> list[dict[str, Any]]:
+    raw_value = _line_after_label(prompt_text, "Allowed tools and default inputs:")
+    if not raw_value:
+        return []
+    try:
+        parsed = ast.literal_eval(raw_value)
+    except (SyntaxError, ValueError):
+        return []
+    if not isinstance(parsed, list):
+        return []
+    return [dict(item) for item in parsed if isinstance(item, dict)]
+
+
+def _plan_user_goal(prompt_text: str) -> str:
+    return _line_after_label(prompt_text, "User goal:") or "test query"
+
+
+def _line_after_label(prompt_text: str, label: str) -> str:
+    start = prompt_text.find(label)
+    if start < 0:
+        return ""
+    start += len(label)
+    lines = prompt_text[start:].splitlines()
+    return lines[0].strip() if lines else ""
 
 
 def _react_previous_turn_count(prompt_text: str) -> int:
@@ -1267,7 +1364,7 @@ def test_chat_api_sse_plan_request_uses_plan_step_tool_stage() -> None:
     assert restored.checkpoint["channel_values"]["current_turn_id"] is None
     assert restored.checkpoint["channel_values"]["tool_observation"]["tool_name"] == "agentic_rag_search"
     planner_metadata = restored.checkpoint["channel_values"]["plan_run"]["metadata"]["planner"]
-    assert planner_metadata["step_source"] == "scene_policy.plan_tools"
+    assert planner_metadata["step_source"] == "llm_structured_output"
 
 
 def test_chat_api_plan_mode_uses_scene_policy_multi_step_plan() -> None:
@@ -1316,7 +1413,27 @@ def test_chat_api_plan_mode_uses_scene_policy_multi_step_plan() -> None:
         ),
         session_store=SQLiteSessionStore(sqlite_path=sqlite_path),
         context_builder=PromptContextBuilder(window_size=3),
-        model=FakeModel(answer="按计划汇总完成。"),
+        model=FakeModel(
+            answer="按计划汇总完成。",
+            plan_draft=PlanDraft(
+                steps=[
+                    PlanStepDraft(
+                        step_id="collect-native",
+                        goal="先做 native 检索",
+                        tool_name=NATIVE_RAG_TOOL_NAME,
+                        input={"query": "第一步"},
+                    ),
+                    PlanStepDraft(
+                        step_id="collect-agentic",
+                        goal="再做 agentic 检索",
+                        tool_name=AGENTIC_RAG_TOOL_NAME,
+                        input={"query": "第二步"},
+                        depends_on=["collect-native"],
+                    ),
+                ],
+                rationale_summary="测试多步计划由 LLM structured output 返回。",
+            ),
+        ),
     )
     app = create_app(chat_service=service)
 
@@ -1347,7 +1464,7 @@ def test_chat_api_plan_mode_uses_scene_policy_multi_step_plan() -> None:
     assert [step["status"] for step in plan_run["steps"]] == ["succeeded", "succeeded"]
     assert plan_run["metadata"]["execution_order"] == ["collect-native", "collect-agentic"]
     assert len(plan_run["observations"]) == 2
-    assert plan_run["metadata"]["planner"]["step_source"] == "scene_policy.plan_steps"
+    assert plan_run["metadata"]["planner"]["step_source"] == "llm_structured_output"
     assert retriever.calls[0]["method"] == "retrieve"
     assert retriever.calls[1]["method"] == "retrieve_with_trace"
 

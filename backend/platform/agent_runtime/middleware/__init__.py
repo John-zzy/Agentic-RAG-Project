@@ -12,11 +12,6 @@ from backend.platform.agent_runtime.middleware.factory import (
     AgentMiddlewareBundle,
     build_agent_middleware,
 )
-from backend.platform.agent_runtime.middleware.hitl_gate import (
-    HitlGateDecision,
-    HitlGateMiddleware,
-    HitlGatePolicy,
-)
 from backend.platform.agent_runtime.middleware.model_guard import (
     GuardedModelResult,
     ModelCallMetadata,
@@ -53,9 +48,6 @@ __all__ = [
     "DynamicPromptResult",
     "GuardedModelResult",
     "GuardedModelCallError",
-    "HitlGateDecision",
-    "HitlGateMiddleware",
-    "HitlGatePolicy",
     "ModelCallMetadata",
     "ModelGuardMiddleware",
     "ModelGuardPolicy",

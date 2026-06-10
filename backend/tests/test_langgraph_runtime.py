@@ -33,7 +33,6 @@ from backend.platform.agent_runtime.chat_graph.contracts import (
     HitlResumeInput,
     HitlWaitInput,
 )
-from backend.platform.agent_runtime.plan.executor import PlanExecutor
 from backend.platform.agent_runtime.core.contracts import ToolObservation
 from backend.platform.agent_runtime.tooling.idempotency import (
     SQLiteToolIdempotencyStore,
@@ -1212,7 +1211,7 @@ def test_chat_graph_runtime_plan_reject_cancels_waiting_step() -> None:
             interrupt_id="interrupt-plan-reject",
             action="reject",
         ),
-        plan_executor=_plan_resume_executor(
+        plan_tool_executor=_plan_resume_tool_executor(
             tool_name="native_rag_search",
             calls=plan_tool_calls,
         ),
@@ -1288,7 +1287,7 @@ def test_chat_graph_runtime_creates_plan_approval_wait_metadata_and_approve_resu
             interrupt_id="interrupt-plan-hitl",
             action="approve",
         ),
-        plan_executor=_plan_resume_executor(
+        plan_tool_executor=_plan_resume_tool_executor(
             tool_name="generic_write",
             calls=plan_tool_calls,
         ),
@@ -1299,7 +1298,7 @@ def test_chat_graph_runtime_creates_plan_approval_wait_metadata_and_approve_resu
     assert result.state["plan_run"]["workflow_status"] == "succeeded"
     assert result.state["plan_run"]["steps"][0]["status"] == "succeeded"
     assert result.state["plan_run"]["final_answer"] == "generic_write succeeded."
-    assert result.state["plan_run"]["result_summary"] == "generic_write succeeded."
+    assert result.state["plan_run"]["result_summary"] == "Synthesized 1 successful plan step(s)."
     assert result.state["hitl_resume"]["metadata"]["mode"] == "plan"
     assert result.tool_result["tool_name"] == "generic_write"
 
@@ -1334,7 +1333,7 @@ def test_chat_graph_runtime_plan_respond_settles_nested_run_result() -> None:
             action="respond",
             payload={"response": "补充范围", "source": "freeform"},
         ),
-        plan_executor=_plan_resume_executor(
+        plan_tool_executor=_plan_resume_tool_executor(
             tool_name="native_rag_search",
             calls=plan_tool_calls,
         ),
@@ -1735,7 +1734,7 @@ def test_chat_graph_runtime_resume_consumes_wait_before_tool_side_effect() -> No
     assert executed_calls == [{"tool_name": "generic_external_webhook_call"}]
 
 
-def test_chat_graph_runtime_reject_stays_cancelled_after_graph_failure() -> None:
+def test_chat_graph_runtime_plan_resume_requires_tool_executor() -> None:
     runtime = _build_chat_graph_runtime("runtime-graph-hitl-reject-graph-failure")
     runtime.create_hitl_wait(
         wait=HitlWaitInput(
@@ -1754,11 +1753,7 @@ def test_chat_graph_runtime_reject_stays_cancelled_after_graph_failure() -> None
         interrupt_id="interrupt-reject-failure",
     )
 
-    class _FailingPlanExecutor:
-        def continue_after_reject(self, **_: Any) -> None:
-            raise RuntimeError("nested reject graph failed")
-
-    with pytest.raises(RuntimeError, match="nested reject graph failed"):
+    with pytest.raises(HitlResumeError, match="plan_tool_executor"):
         runtime.resume_hitl(
             resume=HitlResumeInput(
                 session_id="session-hitl-reject-failure",
@@ -1766,7 +1761,6 @@ def test_chat_graph_runtime_reject_stays_cancelled_after_graph_failure() -> None
                 interrupt_id="interrupt-reject-failure",
                 action="reject",
             ),
-            plan_executor=_FailingPlanExecutor(),  # type: ignore[arg-type]
         )
 
     restored = runtime.checkpointer.get_tuple(
@@ -1779,11 +1773,10 @@ def test_chat_graph_runtime_reject_stays_cancelled_after_graph_failure() -> None
     )
     assert restored is not None
     values = restored.checkpoint["channel_values"]
-    assert values["status"] == "cancelled"
-    assert values["state_event"] == "resume_reject"
-    assert values["final_state"] == "cancelled"
-    assert values["hitl"] is None
-    assert values["hitl_resume"]["action"] == "reject"
+    assert values["status"] == "waiting_user"
+    assert values["state_event"] == "interrupt"
+    assert values["final_state"] is None
+    assert values["hitl"]["interrupt_id"] == "interrupt-reject-failure"
 
     statuses = tuple(
         event.status
@@ -1791,7 +1784,7 @@ def test_chat_graph_runtime_reject_stays_cancelled_after_graph_failure() -> None
             thread_id="session-hitl-reject-failure"
         )
     )
-    assert statuses[-1] == "cancelled"
+    assert statuses[-1] == "failed"
 
 
 def test_chat_graph_runtime_reuses_approved_side_effect_after_checkpoint_failure() -> None:
@@ -2383,13 +2376,11 @@ def _tool_execution_context_for_test(
     )
 
 
-def _plan_resume_executor(*, tool_name: str, calls: list[dict[str, Any]]) -> PlanExecutor:
+def _plan_resume_tool_executor(*, tool_name: str, calls: list[dict[str, Any]]) -> ToolExecutor:
     tool = _RecordingPlanTool(name=tool_name, calls=calls)
-    return PlanExecutor(
-        tool_executor=ToolExecutor(
-            tools={tool_name: tool},
-            allowed_tools={tool_name},
-        )
+    return ToolExecutor(
+        tools={tool_name: tool},
+        allowed_tools={tool_name},
     )
 
 

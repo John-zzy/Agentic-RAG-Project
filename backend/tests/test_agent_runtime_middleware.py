@@ -5,8 +5,6 @@ from pydantic import BaseModel, Field
 from backend.platform.agent_runtime.core.contracts import ToolExecutionMetadata, ToolObservation
 from backend.platform.agent_runtime.middleware import (
     AgentRuntimeContext,
-    HitlGateMiddleware,
-    HitlGatePolicy,
     SharedModelCallGuard,
     ModelGuardMiddleware,
     ModelGuardPolicy,
@@ -85,9 +83,21 @@ def test_factory_returns_ordered_middleware_with_shared_context() -> None:
         "ModelGuardMiddleware",
         "ToolPolicyMiddleware",
         "ToolObservationMiddleware",
-        "HitlGateMiddleware",
         "RuntimeTraceMiddleware",
     ]
+    assert bundle.hitl_interrupts == {}
+
+
+def test_factory_builds_langchain_hitl_interrupts_for_high_risk_tools() -> None:
+    bundle = build_agent_middleware(
+        context=_context(),
+        allowed_tools=("knowledge_document_search", "write_record"),
+        high_risk_tools=("write_record",),
+    )
+
+    assert bundle.hitl_interrupts == {
+        "write_record": {"allowed_decisions": ["approve", "reject", "respond"]}
+    }
 
 
 def test_dynamic_prompt_composes_scene_owned_prompt_and_filters_resume_payload() -> None:
@@ -236,82 +246,6 @@ def test_tool_policy_accepts_allowed_tool_and_applies_call_limit() -> None:
     assert accepted.input_payload == {"query": "order", "limit": 1}
     assert limited.allowed is False
     assert "limit exceeded" in str(limited.reason)
-
-
-def test_hitl_gate_creates_wait_state_without_running_side_effect() -> None:
-    called = False
-    context = _context()
-    policy = ToolPolicyMiddleware(
-        build_tool_policy_config(
-            allowed_tools=("write_record",),
-            high_risk_tools=("write_record",),
-        )
-    )
-    tool_decision = policy.validate(
-        tool_name="write_record",
-        input_payload={"query": "order"},
-        context=context,
-        args_schema=_LookupArgs,
-    )
-    gate = HitlGateMiddleware(
-        policy=HitlGatePolicy(approval_required_tools={"write_record"})
-    )
-
-    def _mark_called() -> ToolObservation:
-        nonlocal called
-        called = True
-        return ToolObservation(tool_name="write_record", success=True)
-
-    decision, result = gate.run_or_wait(
-        context=context,
-        decision=tool_decision,
-        input_payload={"query": "order"},
-        tool_call_id="call-1",
-        invoke=lambda: _mark_called(),
-    )
-
-    assert decision.status == "waiting_user"
-    assert result is None
-    assert called is False
-    assert decision.wait_state is not None
-    assert decision.wait_state["interrupt_id"] == "interrupt-1"
-    assert decision.wait_state["pending_action"] == "tool_approval"
-    assert decision.wait_state["allowed_actions"] == ["approve", "reject"]
-    assert decision.wait_state["proposed_tool_call"]["tool_name"] == "write_record"
-
-
-def test_hitl_gate_runs_approved_side_effect_once_after_resume() -> None:
-    called = 0
-    context = _context()
-    policy_decision = ToolPolicyMiddleware(
-        build_tool_policy_config(
-            allowed_tools=("write_record",),
-            high_risk_tools=("write_record",),
-        )
-    ).validate(
-        tool_name="write_record",
-        input_payload={"query": "order"},
-        context=context,
-        args_schema=_LookupArgs,
-    )
-
-    def invoke() -> ToolObservation:
-        nonlocal called
-        called += 1
-        return ToolObservation(tool_name="write_record", success=True)
-
-    decision, result = HitlGateMiddleware().run_or_wait(
-        context=context,
-        decision=policy_decision,
-        invoke=invoke,
-        tool_call_id="call-1",
-        resume_accepted=True,
-    )
-
-    assert decision.status == "execute"
-    assert called == 1
-    assert isinstance(result, ToolObservation)
-    assert result.success is True
 
 
 def test_tool_observation_normalizes_tool_result_and_status() -> None:

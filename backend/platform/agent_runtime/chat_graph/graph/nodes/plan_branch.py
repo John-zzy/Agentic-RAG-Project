@@ -20,7 +20,7 @@ def build_plan_branch_node(dependencies: ChatGraphDependencies):
             return {}
 
         graph_deps = dependencies.build_plan_graph_deps(prepared, state)
-        graph = build_plan_graph(graph_deps)
+        graph = build_plan_graph(graph_deps, checkpointer=getattr(graph_deps, "checkpointer", None))
         result = graph.invoke(_plan_graph_input(prepared=prepared, state=state))
         plan_run = result.get("plan_run")
         return {
